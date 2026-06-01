@@ -37,6 +37,8 @@ this checkout, so this roadmap starts from the current Newton solver structure.
 
 ## Phase 0: Reference Assets
 
+Plan: `docs/superpowers/plans/2026-06-01-wheeled-vehicle-phase-0-assets.md`
+
 Goal: load and inspect representative assets before tuning the vehicle model.
 
 Tasks:
