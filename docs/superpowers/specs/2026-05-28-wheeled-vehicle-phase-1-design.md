@@ -9,7 +9,8 @@ application path before adding tire, steering, drive, or terrain complexity.
 
 ## Non-Goals
 
-- Do not implement Pacejka or lateral/longitudinal tire forces.
+- Do not implement any dedicated tire model, including Pacejka, Brush, or
+  Fiala, or lateral/longitudinal tire forces.
 - Do not implement raycast terrain.
 - Do not implement Ackermann, skid-steer, motor curves, or differentials.
 - Do not add required or optional dependencies.
@@ -193,6 +194,6 @@ When public symbols are added:
 - keep examples and docs on public imports only
 
 The next implementation plan should cover only phase 1. It should not include
-drive modes, tire forces, raycasts, or reference asset work except for minimal
-test fixtures.
+drive modes, tire-model interfaces, tire forces, raycasts, or reference asset
+work except for minimal test fixtures.
 

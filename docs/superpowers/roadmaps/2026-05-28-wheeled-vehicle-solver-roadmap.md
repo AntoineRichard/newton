@@ -20,6 +20,9 @@ articulation constraints, and ordinary body collisions to the wrapped solver.
 - Avoid adding required or optional dependencies.
 - Keep wheel collision/friction separate from Newton rigid contacts until the
   interaction model is validated.
+- Keep tire models pluggable. Pacejka, Brush, Fiala, and simpler empirical
+  models should be implementation choices behind a shared interface, not baked
+  into the solver architecture.
 
 ## Current Work
 
@@ -66,7 +69,7 @@ Scope:
 Out of scope:
 
 - Raycast terrain.
-- Pacejka tire forces.
+- Any dedicated tire model, including Pacejka, Brush, or Fiala.
 - Steering or drive modes.
 - Motor power curves and differentials.
 - USD schema polish.
@@ -133,14 +136,17 @@ Exit criteria:
 - Contact normal and material data feed the tire model.
 - Performance remains suitable for thousands of vehicles.
 
-## Phase 5: Tire And Powertrain Models
+## Phase 5: Tire Model Interface And Powertrain Models
 
-Goal: move from simple traction to realistic vehicle behavior.
+Goal: move from simple traction to realistic vehicle behavior without making a
+specific tire formulation exclusive.
 
 Scope:
 
-- Add lateral tire forces.
-- Evaluate Pacejka or a simpler brush model as the first tire model.
+- Define a modular tire-model interface for normal, longitudinal, and lateral
+  contact state.
+- Implement one first tire model behind that interface.
+- Evaluate Pacejka, Brush, Fiala, and simpler empirical models as candidates.
 - Add configurable motor curves.
 - Add differential modules and AWD/FWD/RWD variants.
 - Add aerodynamic drag.
@@ -148,6 +154,7 @@ Scope:
 Exit criteria:
 
 - RC-car and AGV reference scenarios produce plausible motion.
+- Tire-model choice is configurable without changing the solver wrapper.
 - Tire and drive modules can be tested independently.
 
 ## Phase 6: Public API, Examples, And Docs
@@ -175,7 +182,7 @@ Exit criteria:
 - For vehicles with explicit suspension, should support forces continue to act
   on wheel bodies only or split across wheel and chassis bodies?
 - How should suspension joints and analytical wheel contact share damping?
-- Which material fields should seed tire friction parameters?
+- Which material fields should seed shared tire-model parameters?
 - When raycasts arrive, should terrain shape filtering reuse Newton collision
   groups or a separate `wheeled:*` mask?
 
