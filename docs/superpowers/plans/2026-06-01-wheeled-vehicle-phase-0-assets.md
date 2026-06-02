@@ -94,14 +94,13 @@ Use these initial RC/F1TENTH-inspired default dimensions and mass:
 | vehicle mass | `4.0` kg | F1TENTH-style car with autonomy payload, intentionally approximate |
 | wheel radius | `0.055` m | close to Traxxas Slash/F1TENTH tire diameter `109.5` mm |
 | wheel width | `0.045` m | simple tire-width approximation |
-| wheelbase | `0.40` m | intentionally simple starting value from the design note |
-| track width | `0.20` m | intentionally simple starting value from the design note |
+| wheelbase | `0.324` m | Traxxas Slash/F1TENTH-style reference spacing |
+| track width | `0.296` m | Traxxas Slash/F1TENTH-style reference spacing |
 | chassis size | `0.45 x 0.14 x 0.06` m | simplified box, not a vendor mesh |
 
-Record in the manifest source notes that public Traxxas Slash/F1TENTH references
-are closer to `0.324` m wheelbase and `0.296` m track width. Keep the simplified
-`0.40` m / `0.20` m spacing unless fixture stability or realism requires a later
-revision.
+Record in the manifest source notes that the fixture uses Traxxas Slash/F1TENTH-style
+spacing (`0.324` m wheelbase and `0.296` m track width), replacing the rough
+initial design note values of `0.40` m wheelbase and `0.20` m track width.
 
 - [ ] **Step 4: Verify USDA files are non-empty and text-readable**
 
@@ -234,9 +233,9 @@ Task 00 creates the asset directory and USDA fixtures. Create
         "mass_kg": 4.0,
         "wheel_radius_m": 0.055,
         "wheel_width_m": 0.045,
-        "wheelbase_m": 0.40,
-        "track_width_m": 0.20,
-        "source_note": "F1TENTH-inspired simplified fixture; Traxxas Slash references are about 0.324 m wheelbase and 0.296 m track."
+        "wheelbase_m": 0.324,
+        "track_width_m": 0.296,
+        "source_note": "F1TENTH-inspired simplified fixture using Traxxas Slash-style spacing: about 0.324 m wheelbase and 0.296 m track; replaces rough initial 0.40 m / 0.20 m design-note spacing."
       },
       "wheel_body_labels": ["rc_front_left_wheel", "rc_rear_left_wheel", "rc_front_right_wheel", "rc_rear_right_wheel"],
       "wheel_shape_labels": ["rc_front_left_wheel", "rc_rear_left_wheel", "rc_front_right_wheel", "rc_rear_right_wheel"],

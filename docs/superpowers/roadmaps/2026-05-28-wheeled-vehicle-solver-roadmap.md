@@ -59,10 +59,10 @@ Tasks:
 - Create `newton/examples/assets/wheeled/rc_car.usda` as a box chassis with four
   wheels, simple suspension joints on all wheels, and front steering joints.
 - Use F1TENTH/RC-inspired starting values for the RC-car fixture: mass `4.0` kg,
-  wheel radius `0.055` m, wheel width `0.045` m, wheelbase `0.40` m, and track
-  width `0.20` m. Record in the manifest that Traxxas Slash/F1TENTH references
-  are closer to `0.324` m wheelbase and `0.296` m track width, so spacing can be
-  revised if the simplified fixture is too narrow or long.
+  wheel radius `0.055` m, wheel width `0.045` m, wheelbase `0.324` m, and track
+  width `0.296` m. Record in the manifest that these spacing values follow
+  Traxxas Slash/F1TENTH-style references rather than the rough initial design
+  note values of `0.40` m wheelbase and `0.20` m track width.
 - Give all bodies, wheel collision shapes, suspension joints, and steering
   joints stable labels that the Phase 0 manifest can reference.
 
