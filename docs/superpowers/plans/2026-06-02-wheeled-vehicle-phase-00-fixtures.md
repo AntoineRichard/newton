@@ -38,9 +38,12 @@ Use these fixture dimensions:
 | RC car | suspension travel | `0.05` m | simplified approximate wheel travel for the fixture, not a vendor spec |
 | RC car | suspension drive stiffness | `800.0` N/m | gives roughly `9-12` mm static sag for `0.74-1.0` kg per corner |
 | RC car | suspension drive damping | `30.0` N*s/m | about half critical damping for a `1.0` kg corner with `800.0` N/m stiffness |
-| RC car | steering drive stiffness | `3.0` N*m/rad | modest centering servo stiffness for front steering links |
-| RC car | steering drive damping | `0.2` N*m*s/rad | damped steering response without making the joint rigid |
-| RC car | steering drive torque limit | `2.0` N*m | enough to reach the `35` deg steering limit at the chosen stiffness |
+| RC car | steering drive stiffness | `16.0` N*m/rad | reaches about `9.8` N*m at the `35` deg steering limit |
+| RC car | steering drive damping | `1.0` N*m*s/rad | damped servo-like steering response without making the joint rigid |
+| RC car | steering drive torque limit | `9.8` N*m | approximately `100` kgf*cm, a high-torque RC servo reference |
+| RC car | steering velocity limit | `4.19` rad/s | `240` deg/s, equivalent to about `0.25` s per `60` deg |
+| RC car | steering center-to-limit time | `0.146` s | `35` deg from center at the authored velocity limit |
+| RC car | steering lock-to-lock time | `0.292` s | `70` deg total travel at the authored velocity limit |
 | RC car | chassis size | `0.45 x 0.14 x 0.06` m | simplified box, not a vendor mesh |
 
 ## Authoring Conventions
@@ -55,7 +58,7 @@ Use these fixture dimensions:
 - Give all collision primitives `PhysicsCollisionAPI`. Use `PhysicsMeshCollisionAPI` only for `Cube` primitives, matching existing simple USDA assets in this repo.
 - Use wheel cylinders with `axis = "Y"`, radius equal to wheel radius, and height equal to wheel width.
 - Add wheel axle joints even when the vehicle has no steering or suspension. Otherwise imported wheels can become free bodies instead of constrained wheels.
-- Add passive linear spring/damper drives on RC-car suspension joints and passive angular centering drives on front steering joints. Do not add axle drives, rear steering joints, motors, tire parameters, custom `wheeled:*` attributes, or ground-contact material fields in Phase 00.
+- Add passive linear spring/damper drives on RC-car suspension joints and passive angular centering drives with servo-like velocity limits on front steering joints. Do not add axle drives, rear steering joints, motors, tire parameters, custom `wheeled:*` attributes, or ground-contact material fields in Phase 00.
 
 ## Task Steps
 
@@ -150,7 +153,7 @@ Use these body and joint rules:
 - Suspension and steering links are rigid bodies with mass properties but no collision geometry.
 - Assign mass as `2.96` kg on the chassis, `0.18` kg on each wheel, `0.07` kg on each suspension link, and `0.02` kg on each front steering link so the total is `4.0` kg.
 - Add one `PhysicsPrismaticJoint` suspension per wheel, body0=`rc_car_chassis`, body1=the matching suspension link, axis=`Z`, lower limit `-0.025` m, upper limit `0.025` m, and `PhysicsDriveAPI:linear` with `stiffness = 800.0` N/m, `damping = 30.0` N*s/m, `targetPosition = 0.0`, `targetVelocity = 0.0`, `maxForce = inf`, and `type = "force"`.
-- Add front-only `PhysicsRevoluteJoint` steering joints, body0=front suspension link, body1=front steering link, axis=`Z`, lower limit `-35` deg, upper limit `35` deg, and `PhysicsDriveAPI:angular` with imported Newton targets `stiffness = 3.0` N*m/rad and `damping = 0.2` N*m*s/rad. Author the USDA angular gains as `0.0523599` and `0.00349066` respectively because the importer converts angular drive gains from per-degree USD units to per-radian Newton units. Use `targetPosition = 0.0`, `targetVelocity = 0.0`, `maxForce = 2.0` N*m, and `type = "force"`.
+- Add front-only `PhysicsRevoluteJoint` steering joints, body0=front suspension link, body1=front steering link, axis=`Z`, lower limit `-35` deg, upper limit `35` deg, and `PhysicsDriveAPI:angular` with imported Newton targets `stiffness = 16.0` N*m/rad and `damping = 1.0` N*m*s/rad. Author the USDA angular gains as `0.27925268` and `0.01745329` respectively because the importer converts angular drive gains from per-degree USD units to per-radian Newton units. Use `targetPosition = 0.0`, `targetVelocity = 0.0`, `maxForce = 9.8` N*m, `type = "force"`, and `physxJoint:maxJointVelocity = 240.0` deg/s so the imported Newton velocity limit is `4.19` rad/s. This velocity cap makes a `35` deg center-to-limit steering sweep take about `0.146` s and the `70` deg lock-to-lock sweep take about `0.292` s, matching the usual `0.2-0.3` s per `60` deg RC-servo range. Without the velocity limit, the simplified fixture inertia would let the same torque cap hit the steering limits in only a few milliseconds.
 - Add one `PhysicsRevoluteJoint` axle per wheel, axis=`Y`. Front axle body0 is the matching steering link; rear axle body0 is the matching suspension link; body1 is the wheel body.
 - Do not add rear steering joints, axle drives, motors, differential state, or tire parameters.
 
@@ -186,6 +189,7 @@ from pathlib import Path
 
 import newton
 from newton.tests.unittest_utils import USD_AVAILABLE
+from newton.usd import SchemaResolverPhysx
 
 if not USD_AVAILABLE:
     print('USD unavailable; skipped add_usd fixture load check')
@@ -198,7 +202,12 @@ checks = {
 asset_dir = Path('newton/examples/assets/wheeled')
 for filename, expected in checks.items():
     builder = newton.ModelBuilder()
-    builder.add_usd(str(asset_dir / filename), floating=False, enable_self_collisions=False)
+    builder.add_usd(
+        str(asset_dir / filename),
+        floating=False,
+        enable_self_collisions=False,
+        schema_resolvers=[SchemaResolverPhysx()],
+    )
     model = builder.finalize()
     assert model.body_count >= expected['min_bodies'], (filename, model.body_count)
     assert model.joint_count >= expected['min_joints'], (filename, model.joint_count)
@@ -206,15 +215,21 @@ for filename, expected in checks.items():
     print(filename, model.body_count, model.joint_count, model.shape_count)
 
 builder = newton.ModelBuilder()
-builder.add_usd(str(asset_dir / 'rc_car.usda'), floating=False, enable_self_collisions=False)
+builder.add_usd(
+    str(asset_dir / 'rc_car.usda'),
+    floating=False,
+    enable_self_collisions=False,
+    schema_resolvers=[SchemaResolverPhysx()],
+)
 expected_gains = {
     '/rc_car/Joints/rc_front_left_suspension': (800.0, 30.0),
     '/rc_car/Joints/rc_rear_left_suspension': (800.0, 30.0),
     '/rc_car/Joints/rc_front_right_suspension': (800.0, 30.0),
     '/rc_car/Joints/rc_rear_right_suspension': (800.0, 30.0),
-    '/rc_car/Joints/rc_front_left_steering': (3.0, 0.2),
-    '/rc_car/Joints/rc_front_right_steering': (3.0, 0.2),
+    '/rc_car/Joints/rc_front_left_steering': (16.0, 1.0),
+    '/rc_car/Joints/rc_front_right_steering': (16.0, 1.0),
 }
+expected_velocity_limit = 240.0 * 3.141592653589793 / 180.0
 seen = set()
 for joint_index, label in enumerate(builder.joint_label):
     if label in expected_gains:
@@ -222,13 +237,18 @@ for joint_index, label in enumerate(builder.joint_label):
         expected_ke, expected_kd = expected_gains[label]
         assert abs(builder.joint_target_ke[dof] - expected_ke) < 1.0e-5, (label, builder.joint_target_ke[dof])
         assert abs(builder.joint_target_kd[dof] - expected_kd) < 1.0e-5, (label, builder.joint_target_kd[dof])
+        if label.endswith('_steering'):
+            assert abs(builder.joint_velocity_limit[dof] - expected_velocity_limit) < 1.0e-5, (
+                label,
+                builder.joint_velocity_limit[dof],
+            )
         seen.add(label)
 assert seen == set(expected_gains), seen
 print('rc_car suspension and steering drive gains verified:', len(seen), 'joints')
 PY
 ```
 
-Expected: both files import; all four RC suspension joints report `800.0` N/m target stiffness and `30.0` N*s/m target damping; and both front steering joints report `3.0` N*m/rad target stiffness and `0.2` N*m*s/rad target damping. If USD support is unavailable, the text-readability check remains the Phase 00 verification and Phase 0 tests must mark USD-dependent checks as skipped.
+Expected: both files import; all four RC suspension joints report `800.0` N/m target stiffness and `30.0` N*s/m target damping; and both front steering joints report `16.0` N*m/rad target stiffness, `1.0` N*m*s/rad target damping, and `4.19` rad/s velocity limits. If USD support is unavailable, the text-readability check remains the Phase 00 verification and Phase 0 tests must mark USD-dependent checks as skipped.
 
 - [ ] **Step 6: Commit the simplified fixture assets**
 

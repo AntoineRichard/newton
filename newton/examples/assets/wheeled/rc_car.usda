@@ -354,12 +354,13 @@ def Xform "rc_car" (
             prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         )
         {
-            float drive:angular:physics:damping = 0.00349066
-            float drive:angular:physics:maxForce = 2
-            float drive:angular:physics:stiffness = 0.0523599
+            float drive:angular:physics:damping = 0.01745329
+            float drive:angular:physics:maxForce = 9.8
+            float drive:angular:physics:stiffness = 0.27925268
             float drive:angular:physics:targetPosition = 0
             float drive:angular:physics:targetVelocity = 0
             uniform token drive:angular:physics:type = "force"
+            float physxJoint:maxJointVelocity = 240
             uniform token physics:axis = "Z"
             rel physics:body0 = </rc_car/RigidBodies/rc_front_left_suspension_link>
             rel physics:body1 = </rc_car/RigidBodies/rc_front_left_steering_link>
@@ -374,12 +375,13 @@ def Xform "rc_car" (
             prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         )
         {
-            float drive:angular:physics:damping = 0.00349066
-            float drive:angular:physics:maxForce = 2
-            float drive:angular:physics:stiffness = 0.0523599
+            float drive:angular:physics:damping = 0.01745329
+            float drive:angular:physics:maxForce = 9.8
+            float drive:angular:physics:stiffness = 0.27925268
             float drive:angular:physics:targetPosition = 0
             float drive:angular:physics:targetVelocity = 0
             uniform token drive:angular:physics:type = "force"
+            float physxJoint:maxJointVelocity = 240
             uniform token physics:axis = "Z"
             rel physics:body0 = </rc_car/RigidBodies/rc_front_right_suspension_link>
             rel physics:body1 = </rc_car/RigidBodies/rc_front_right_steering_link>
