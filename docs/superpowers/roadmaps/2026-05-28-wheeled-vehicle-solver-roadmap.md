@@ -43,7 +43,7 @@ this checkout, so this roadmap starts from the current Newton solver structure.
 
 ## Phase 00: Simplified USDA Fixtures
 
-Plan: `docs/superpowers/plans/2026-06-01-wheeled-vehicle-phase-0-assets.md`
+Plan: Task 00 in `docs/superpowers/plans/2026-06-01-wheeled-vehicle-phase-0-assets.md`
 
 Goal: create simple, deterministic USDA reference vehicles before relying on
 real robot assets.
@@ -60,11 +60,13 @@ Tasks:
   wheels, simple suspension joints on all wheels, and front steering joints.
 - Use F1TENTH/RC-inspired starting values for the RC-car fixture: mass `4.0` kg,
   wheel radius `0.055` m, wheel width `0.045` m, wheelbase `0.324` m, and track
-  width `0.296` m. Record in the manifest that these spacing values follow
+  width `0.296` m. Use `0.047` m center ground clearance from Traxxas Slash 4X4
+  Ultimate-style specs, plus `0.05` m approximate suspension travel for the
+  simplified fixture. Record in the manifest that these spacing values follow
   Traxxas Slash/F1TENTH-style references rather than the rough initial design
   note values of `0.40` m wheelbase and `0.20` m track width.
 - Give all bodies, wheel collision shapes, suspension joints, and steering
-  joints stable labels that the Phase 0 manifest can reference.
+  joints stable labels for the Phase 0 manifest/intake step.
 
 Exit criteria:
 
@@ -74,9 +76,9 @@ Exit criteria:
 
 ## Phase 0: Fixture Intake And Inspection
 
-Plan: `docs/superpowers/plans/2026-06-01-wheeled-vehicle-phase-0-assets.md`
+Plan: remaining tasks in `docs/superpowers/plans/2026-06-01-wheeled-vehicle-phase-0-assets.md`
 
-Goal: load and inspect the simplified reference fixtures before tuning the
+Goal: load and inspect the Phase 00 reference fixtures before tuning the
 vehicle model.
 
 Tasks:

@@ -1,10 +1,10 @@
-# Wheeled Vehicle Phase 0 Assets Implementation Plan
+# Wheeled Vehicle Phase 00 Fixtures And Phase 0 Asset Intake Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add generated simplified USDA wheeled-vehicle fixtures, inspection tooling, tests, and an asset report needed before implementing the wheeled solver wrapper.
+**Goal:** Add Phase 00 generated simplified USDA wheeled-vehicle fixtures, then add Phase 0 inspection tooling, tests, and an asset report needed before implementing the wheeled solver wrapper.
 
-**Architecture:** Phase 0 stays out of solver runtime code. Task 00 creates deterministic low-poly USDA fixtures for an Ackermann RC car and a skid-steer Husky-like AGV. Later tasks add canonical asset locations, a manifest that records the reference vehicles and identified labels, an internal inspection helper plus CLI, and tests that prove the assets load through `ModelBuilder.add_usd()` and expose enough labels for Phase 1 wheel metadata mapping.
+**Architecture:** Phase 00 creates deterministic low-poly USDA fixtures for an Ackermann RC car and a skid-steer Husky-like AGV. Phase 0 stays out of solver runtime code and follows with canonical asset locations, a manifest that records the reference vehicles and identified labels, an internal inspection helper plus CLI, and tests that prove the assets load through `ModelBuilder.add_usd()` and expose enough labels for Phase 1 wheel metadata mapping.
 
 **Tech Stack:** Python stdlib, `unittest`, Newton `ModelBuilder.add_usd()`, Warp-backed Newton model finalization, optional USD support guarded by existing `USD_AVAILABLE` test utility.
 
@@ -12,7 +12,7 @@
 
 ## Scope
 
-Phase 0 produces generated fixture and asset-intake artifacts only. It does not add `SolverWheeledVehicle`, wheel contact kernels, tire models, drive modes, raycasts, examples, or public API symbols.
+Phase 00 produces generated fixture artifacts. Phase 0 produces asset-intake artifacts only. Neither phase adds `SolverWheeledVehicle`, wheel contact kernels, tire models, drive modes, raycasts, examples, or public API symbols.
 
 The implementation creates two simple USDA files under canonical names inside the repo:
 
@@ -32,9 +32,9 @@ Do not wait for real robot assets and do not import high-poly vendor meshes. The
 | `scripts/inspect_wheeled_assets.py` | Create | CLI that loads the manifest assets and emits JSON/Markdown reports |
 | `newton/tests/test_wheeled_vehicle_assets.py` | Create | Manifest, inspection-helper, and reference-asset load tests |
 | `docs/superpowers/reports/2026-06-01-wheeled-vehicle-phase-0-assets.md` | Create | Human-readable asset inspection report and metadata-gap log |
-| `docs/superpowers/roadmaps/2026-05-28-wheeled-vehicle-solver-roadmap.md` | Modify | Link the Phase 0 plan and report |
+| `docs/superpowers/roadmaps/2026-05-28-wheeled-vehicle-solver-roadmap.md` | Modify | Link the Phase 00/0 plan and Phase 0 report |
 
-## Task 00: Simplified USDA Fixtures
+## Task 00: Phase 00 Simplified USDA Fixtures
 
 **Files:**
 - Create: `newton/examples/assets/wheeled/rc_car.usda`
@@ -49,7 +49,7 @@ Reference checks for fixture dimensions:
 - Clearpath Husky A300 manual: https://docs.clearpathrobotics.com/docs_robots/outdoor_robots/husky/a300/user_manual_husky/
 - Clearpath Husky A300/A200 comparison: https://clearpathrobotics.com/husky-spec-comparison/
 - F1TENTH build docs: https://f1tenth.readthedocs.io/en/stable/getting_started/build_car/index.html
-- Traxxas Slash 4x4-style dimensions: https://www.ridezillaalbany.com/inventory/v1/Current/Traxxas/Short-Course-Trucks-4WD/Slash-4x4-VXL
+- Traxxas Slash 4X4 Ultimate specs: https://traxxas.com/slash-4x4-vxl-ultimate-68277-4
 
 - [ ] **Step 2: Create the simplified Husky-like skid-steer fixture**
 
@@ -96,11 +96,14 @@ Use these initial RC/F1TENTH-inspired default dimensions and mass:
 | wheel width | `0.045` m | simple tire-width approximation |
 | wheelbase | `0.324` m | Traxxas Slash/F1TENTH-style reference spacing |
 | track width | `0.296` m | Traxxas Slash/F1TENTH-style reference spacing |
+| center ground clearance | `0.047` m | Traxxas Slash 4X4 Ultimate-style spec, `47` mm |
+| suspension travel | `0.05` m | simplified approximate wheel travel for the fixture, not a vendor spec |
 | chassis size | `0.45 x 0.14 x 0.06` m | simplified box, not a vendor mesh |
 
 Record in the manifest source notes that the fixture uses Traxxas Slash/F1TENTH-style
-spacing (`0.324` m wheelbase and `0.296` m track width), replacing the rough
-initial design note values of `0.40` m wheelbase and `0.20` m track width.
+spacing (`0.324` m wheelbase and `0.296` m track width) and `0.047` m center
+ground clearance, replacing the rough initial design note values of `0.40` m
+wheelbase and `0.20` m track width.
 
 - [ ] **Step 4: Verify USDA files are non-empty and text-readable**
 
@@ -235,7 +238,9 @@ Task 00 creates the asset directory and USDA fixtures. Create
         "wheel_width_m": 0.045,
         "wheelbase_m": 0.324,
         "track_width_m": 0.296,
-        "source_note": "F1TENTH-inspired simplified fixture using Traxxas Slash-style spacing: about 0.324 m wheelbase and 0.296 m track; replaces rough initial 0.40 m / 0.20 m design-note spacing."
+        "center_ground_clearance_m": 0.047,
+        "suspension_travel_m": 0.05,
+        "source_note": "F1TENTH-inspired simplified fixture using Traxxas Slash-style dimensions: about 0.324 m wheelbase, 0.296 m track, and 0.047 m center ground clearance; replaces rough initial 0.40 m / 0.20 m design-note spacing. Suspension travel is an approximate fixture value, not a vendor spec."
       },
       "wheel_body_labels": ["rc_front_left_wheel", "rc_rear_left_wheel", "rc_front_right_wheel", "rc_rear_right_wheel"],
       "wheel_shape_labels": ["rc_front_left_wheel", "rc_rear_left_wheel", "rc_front_right_wheel", "rc_rear_right_wheel"],
@@ -754,7 +759,7 @@ Append this section to `docs/superpowers/reports/2026-06-01-wheeled-vehicle-phas
 
 - [ ] **Step 3: Link the report from the roadmap**
 
-In `docs/superpowers/roadmaps/2026-05-28-wheeled-vehicle-solver-roadmap.md`, keep the existing Phase 0 plan link and add this report link immediately below it:
+In `docs/superpowers/roadmaps/2026-05-28-wheeled-vehicle-solver-roadmap.md`, keep the Phase 00 Task 00 link in the fixture section, keep the Phase 0 plan link in the intake section, and add this report link immediately below the Phase 0 plan link:
 
 ```markdown
 Report: `docs/superpowers/reports/2026-06-01-wheeled-vehicle-phase-0-assets.md`
@@ -773,7 +778,7 @@ rg -n "Phase 1 Metadata Decisions" docs/superpowers/reports/2026-06-01-wheeled-v
 Expected:
 
 - `newton.tests` reports all `test_wheeled_vehicle_assets` tests passing, with USD-dependent tests skipped only when `usd-core` is unavailable.
-- The first `rg` command prints the plan and report links.
+- The first `rg` command prints the shared Phase 00/0 plan link and the Phase 0 report link.
 - The second `rg` command prints the report section heading.
 
 - [ ] **Step 5: Commit the report and roadmap update**
@@ -789,9 +794,9 @@ git commit -m "Document wheeled phase 0 asset findings"
 Commit body:
 
 ```text
-Add the generated reference asset inspection report and link the Phase 0 plan
-and report from the wheeled vehicle roadmap. The report records the labels and
-metadata decisions needed before Phase 1 solver work.
+Add the generated reference asset inspection report and link the shared Phase
+00/0 plan plus the Phase 0 report from the wheeled vehicle roadmap. The report
+records the labels and metadata decisions needed before Phase 1 solver work.
 ```
 
 ## Final Verification
