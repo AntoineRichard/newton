@@ -41,22 +41,54 @@ The local files
 `newton/_src/solvers/car` implementation. That implementation is not present in
 this checkout, so this roadmap starts from the current Newton solver structure.
 
-## Phase 0: Reference Assets
+## Phase 00: Simplified USDA Fixtures
 
 Plan: `docs/superpowers/plans/2026-06-01-wheeled-vehicle-phase-0-assets.md`
 
-Goal: load and inspect representative assets before tuning the vehicle model.
+Goal: create simple, deterministic USDA reference vehicles before relying on
+real robot assets.
 
 Tasks:
 
-- Add or document an Ackermann RC-car USD asset.
-- Add or document a skid-steer AGV USD asset.
-- Identify body, wheel, suspension, and steering joints in each asset.
-- Decide how asset-authored metadata maps to Newton custom attributes.
+- Create `newton/examples/assets/wheeled/husky.usda` as a box chassis with four
+  cylinder wheels, two per side, no suspension, and no steering.
+- Use Clearpath Husky A300-inspired values for the default Husky fixture:
+  mass `80.0` kg, wheelbase `0.512` m, track width `0.566` m, wheel radius
+  `0.1625` m, and approximate wheel width `0.13` m. Note that legacy Husky A200
+  is lighter at `50.0` kg if a smaller fixture is needed later.
+- Create `newton/examples/assets/wheeled/rc_car.usda` as a box chassis with four
+  wheels, simple suspension joints on all wheels, and front steering joints.
+- Use F1TENTH/RC-inspired starting values for the RC-car fixture: mass `4.0` kg,
+  wheel radius `0.055` m, wheel width `0.045` m, wheelbase `0.40` m, and track
+  width `0.20` m. Record in the manifest that Traxxas Slash/F1TENTH references
+  are closer to `0.324` m wheelbase and `0.296` m track width, so spacing can be
+  revised if the simplified fixture is too narrow or long.
+- Give all bodies, wheel collision shapes, suspension joints, and steering
+  joints stable labels that the Phase 0 manifest can reference.
 
 Exit criteria:
 
-- The assets can be loaded into `ModelBuilder`.
+- Both generated USDA files can be loaded into `ModelBuilder`.
+- The fixtures expose wheel body, wheel shape, suspension, and steering labels
+  without using high-poly meshes or real-robot asset dependencies.
+
+## Phase 0: Fixture Intake And Inspection
+
+Plan: `docs/superpowers/plans/2026-06-01-wheeled-vehicle-phase-0-assets.md`
+
+Goal: load and inspect the simplified reference fixtures before tuning the
+vehicle model.
+
+Tasks:
+
+- Add a manifest for the generated Ackermann RC-car and skid-steer Husky
+  fixtures.
+- Identify body, wheel, suspension, and steering labels in each fixture.
+- Decide how fixture-authored metadata maps to Newton custom attributes.
+
+Exit criteria:
+
+- The generated assets can be loaded into `ModelBuilder`.
 - Wheel bodies and relevant joints can be identified without hard-coded Python
   object references in the runtime path.
 

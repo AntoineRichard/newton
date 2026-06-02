@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add the reference wheeled-vehicle asset intake path, inspection tooling, tests, and asset report needed before implementing the wheeled solver wrapper.
+**Goal:** Add generated simplified USDA wheeled-vehicle fixtures, inspection tooling, tests, and an asset report needed before implementing the wheeled solver wrapper.
 
-**Architecture:** Phase 0 stays out of solver runtime code. It adds canonical asset locations, a manifest that records the reference vehicles and identified labels, an internal inspection helper plus CLI, and tests that prove the assets load through `ModelBuilder.add_usd()` and expose enough labels for Phase 1 wheel metadata mapping.
+**Architecture:** Phase 0 stays out of solver runtime code. Task 00 creates deterministic low-poly USDA fixtures for an Ackermann RC car and a skid-steer Husky-like AGV. Later tasks add canonical asset locations, a manifest that records the reference vehicles and identified labels, an internal inspection helper plus CLI, and tests that prove the assets load through `ModelBuilder.add_usd()` and expose enough labels for Phase 1 wheel metadata mapping.
 
 **Tech Stack:** Python stdlib, `unittest`, Newton `ModelBuilder.add_usd()`, Warp-backed Newton model finalization, optional USD support guarded by existing `USD_AVAILABLE` test utility.
 
@@ -12,27 +12,131 @@
 
 ## Scope
 
-Phase 0 produces asset intake artifacts only. It does not add `SolverWheeledVehicle`, wheel contact kernels, tire models, drive modes, raycasts, examples, or public API symbols.
+Phase 0 produces generated fixture and asset-intake artifacts only. It does not add `SolverWheeledVehicle`, wheel contact kernels, tire models, drive modes, raycasts, examples, or public API symbols.
 
-The implementation requires two user-provided USD files. Store them under canonical names inside the repo:
+The implementation creates two simple USDA files under canonical names inside the repo:
 
 - `newton/examples/assets/wheeled/rc_car.usda`
 - `newton/examples/assets/wheeled/husky.usda`
 
-If the files are not available when execution reaches the asset-copy step, stop at that step and ask the user to provide them. Do not substitute unrelated assets.
+Do not wait for real robot assets and do not import high-poly vendor meshes. These fixtures should be hand-authored or generated from deterministic text so future tests have stable topology, dimensions, and labels.
 
 ## File Structure
 
 | File | Action | Responsibility |
 | --- | --- | --- |
-| `newton/examples/assets/wheeled/rc_car.usda` | Create | Ackermann RC-car reference asset supplied by the user |
-| `newton/examples/assets/wheeled/husky.usda` | Create | Skid-steer AGV reference asset supplied by the user |
-| `newton/examples/assets/wheeled/manifest.json` | Create | Canonical reference asset manifest and identified Phase 1 labels |
+| `newton/examples/assets/wheeled/rc_car.usda` | Create | Simplified Ackermann RC-car USDA fixture |
+| `newton/examples/assets/wheeled/husky.usda` | Create | Simplified skid-steer Husky-like USDA fixture |
+| `newton/examples/assets/wheeled/manifest.json` | Create | Canonical fixture manifest, dimensions, source notes, and identified Phase 1 labels |
 | `newton/_src/utils/wheeled_asset_inspection.py` | Create | Internal asset inspection helpers used by tests and script |
 | `scripts/inspect_wheeled_assets.py` | Create | CLI that loads the manifest assets and emits JSON/Markdown reports |
 | `newton/tests/test_wheeled_vehicle_assets.py` | Create | Manifest, inspection-helper, and reference-asset load tests |
 | `docs/superpowers/reports/2026-06-01-wheeled-vehicle-phase-0-assets.md` | Create | Human-readable asset inspection report and metadata-gap log |
 | `docs/superpowers/roadmaps/2026-05-28-wheeled-vehicle-solver-roadmap.md` | Modify | Link the Phase 0 plan and report |
+
+## Task 00: Simplified USDA Fixtures
+
+**Files:**
+- Create: `newton/examples/assets/wheeled/rc_car.usda`
+- Create: `newton/examples/assets/wheeled/husky.usda`
+
+- [ ] **Step 1: Create the wheeled asset directory**
+
+Create `newton/examples/assets/wheeled/`.
+
+Reference checks for fixture dimensions:
+
+- Clearpath Husky A300 manual: https://docs.clearpathrobotics.com/docs_robots/outdoor_robots/husky/a300/user_manual_husky/
+- Clearpath Husky A300/A200 comparison: https://clearpathrobotics.com/husky-spec-comparison/
+- F1TENTH build docs: https://f1tenth.readthedocs.io/en/stable/getting_started/build_car/index.html
+- Traxxas Slash 4x4-style dimensions: https://www.ridezillaalbany.com/inventory/v1/Current/Traxxas/Short-Course-Trucks-4WD/Slash-4x4-VXL
+
+- [ ] **Step 2: Create the simplified Husky-like skid-steer fixture**
+
+Create `newton/examples/assets/wheeled/husky.usda` as a low-poly fixture with:
+
+- one box chassis body labeled `husky_chassis`
+- four cylinder wheel bodies/shapes labeled `husky_front_left_wheel`,
+  `husky_rear_left_wheel`, `husky_front_right_wheel`, and
+  `husky_rear_right_wheel`
+- no suspension joints
+- no steering joints
+- left/right wheels positioned for skid-steer drive, two wheels per side
+
+Use these source-informed default dimensions and mass:
+
+| Quantity | Value | Note |
+| --- | ---: | --- |
+| vehicle mass | `80.0` kg | Clearpath Husky A300 reference; legacy A200 is `50.0` kg |
+| wheelbase | `0.512` m | front/rear wheel center spacing |
+| track width | `0.566` m | left/right wheel center spacing |
+| wheel radius | `0.1625` m | Clearpath A300 effective tire radius |
+| wheel width | `0.13` m | simple fixture approximation from external width vs track |
+| chassis size | `0.99 x 0.55 x 0.25` m | simplified box, not a vendor mesh |
+
+- [ ] **Step 3: Create the simplified RC-car Ackermann fixture**
+
+Create `newton/examples/assets/wheeled/rc_car.usda` as a low-poly fixture with:
+
+- one box chassis body labeled `rc_car_chassis`
+- four cylinder wheel bodies/shapes labeled `rc_front_left_wheel`,
+  `rc_rear_left_wheel`, `rc_front_right_wheel`, and `rc_rear_right_wheel`
+- one simple suspension joint per wheel, labeled with the wheel name plus
+  `_suspension`
+- front steering joints only, labeled `rc_front_left_steering` and
+  `rc_front_right_steering`
+- rear wheels with no steering joints
+
+Use these initial RC/F1TENTH-inspired default dimensions and mass:
+
+| Quantity | Value | Note |
+| --- | ---: | --- |
+| vehicle mass | `4.0` kg | F1TENTH-style car with autonomy payload, intentionally approximate |
+| wheel radius | `0.055` m | close to Traxxas Slash/F1TENTH tire diameter `109.5` mm |
+| wheel width | `0.045` m | simple tire-width approximation |
+| wheelbase | `0.40` m | intentionally simple starting value from the design note |
+| track width | `0.20` m | intentionally simple starting value from the design note |
+| chassis size | `0.45 x 0.14 x 0.06` m | simplified box, not a vendor mesh |
+
+Record in the manifest source notes that public Traxxas Slash/F1TENTH references
+are closer to `0.324` m wheelbase and `0.296` m track width. Keep the simplified
+`0.40` m / `0.20` m spacing unless fixture stability or realism requires a later
+revision.
+
+- [ ] **Step 4: Verify USDA files are non-empty and text-readable**
+
+Run:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+for p in [Path('newton/examples/assets/wheeled/rc_car.usda'), Path('newton/examples/assets/wheeled/husky.usda')]:
+    assert p.exists(), p
+    text = p.read_text()
+    assert len(text) > 0, p
+    assert '#usda' in text[:100], p
+PY
+```
+
+- [ ] **Step 5: Commit the simplified fixture assets**
+
+Run:
+
+```bash
+git add newton/examples/assets/wheeled/rc_car.usda \
+  newton/examples/assets/wheeled/husky.usda
+git commit -m "Add simplified wheeled USDA fixtures"
+```
+
+Commit body:
+
+```text
+Add deterministic low-poly USDA fixtures for the wheeled vehicle roadmap. The
+Husky-like fixture provides four skid-steer wheels without suspension or
+steering, while the RC-car fixture provides four suspended wheels with front
+steering. These fixtures replace the earlier dependency on user-provided real
+robot assets.
+```
 
 ## Task 1: Manifest Contract
 
@@ -111,16 +215,10 @@ uv run --extra dev -m newton.tests -k test_wheeled_vehicle_assets
 
 Expected: failure from `test_manifest_exists` because `newton/examples/assets/wheeled/manifest.json` does not exist.
 
-- [ ] **Step 3: Add the asset directory, supplied assets, and initial manifest**
+- [ ] **Step 3: Add the initial manifest for the generated fixtures**
 
-Create `newton/examples/assets/wheeled/`. Copy the user-provided assets into these exact paths:
-
-```text
-newton/examples/assets/wheeled/rc_car.usda
-newton/examples/assets/wheeled/husky.usda
-```
-
-Create `newton/examples/assets/wheeled/manifest.json` with this content:
+Task 00 creates the asset directory and USDA fixtures. Create
+`newton/examples/assets/wheeled/manifest.json` with this content:
 
 ```json
 {
@@ -131,19 +229,35 @@ Create `newton/examples/assets/wheeled/manifest.json` with this content:
       "name": "rc_car",
       "file": "rc_car.usda",
       "vehicle_type": "ackermann",
-      "description": "Reference Ackermann RC car asset for wheeled-vehicle solver development.",
-      "wheel_body_labels": [],
-      "wheel_shape_labels": [],
-      "suspension_joint_labels": [],
-      "steering_joint_labels": []
+      "description": "Simplified Ackermann RC car fixture for wheeled-vehicle solver development.",
+      "reference_dimensions": {
+        "mass_kg": 4.0,
+        "wheel_radius_m": 0.055,
+        "wheel_width_m": 0.045,
+        "wheelbase_m": 0.40,
+        "track_width_m": 0.20,
+        "source_note": "F1TENTH-inspired simplified fixture; Traxxas Slash references are about 0.324 m wheelbase and 0.296 m track."
+      },
+      "wheel_body_labels": ["rc_front_left_wheel", "rc_rear_left_wheel", "rc_front_right_wheel", "rc_rear_right_wheel"],
+      "wheel_shape_labels": ["rc_front_left_wheel", "rc_rear_left_wheel", "rc_front_right_wheel", "rc_rear_right_wheel"],
+      "suspension_joint_labels": ["rc_front_left_suspension", "rc_rear_left_suspension", "rc_front_right_suspension", "rc_rear_right_suspension"],
+      "steering_joint_labels": ["rc_front_left_steering", "rc_front_right_steering"]
     },
     {
       "name": "husky",
       "file": "husky.usda",
       "vehicle_type": "skid_steer",
-      "description": "Reference skid-steer AGV asset for wheeled-vehicle solver development.",
-      "wheel_body_labels": [],
-      "wheel_shape_labels": [],
+      "description": "Simplified skid-steer Husky-like fixture for wheeled-vehicle solver development.",
+      "reference_dimensions": {
+        "mass_kg": 80.0,
+        "wheel_radius_m": 0.1625,
+        "wheel_width_m": 0.13,
+        "wheelbase_m": 0.512,
+        "track_width_m": 0.566,
+        "source_note": "Clearpath Husky A300-inspired fixture; legacy A200 reference mass is 50 kg."
+      },
+      "wheel_body_labels": ["husky_front_left_wheel", "husky_rear_left_wheel", "husky_front_right_wheel", "husky_rear_right_wheel"],
+      "wheel_shape_labels": ["husky_front_left_wheel", "husky_rear_left_wheel", "husky_front_right_wheel", "husky_rear_right_wheel"],
       "suspension_joint_labels": [],
       "steering_joint_labels": []
     }
@@ -170,15 +284,15 @@ git add newton/tests/test_wheeled_vehicle_assets.py \
   newton/examples/assets/wheeled/manifest.json \
   newton/examples/assets/wheeled/rc_car.usda \
   newton/examples/assets/wheeled/husky.usda
-git commit -m "Add wheeled vehicle reference assets"
+git commit -m "Add wheeled vehicle fixture manifest"
 ```
 
 Commit body:
 
 ```text
-Add canonical reference asset locations and a manifest for the Ackermann RC car
-and skid-steer AGV assets. These files are the Phase 0 inputs for inspecting
-wheel, suspension, and steering labels before solver implementation.
+Add a manifest for the generated Ackermann RC-car and skid-steer Husky-like
+fixtures. The manifest records the fixture labels, source-informed dimensions,
+and source notes needed before solver implementation.
 ```
 
 ## Task 2: Asset Inspection Helper
