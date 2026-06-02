@@ -79,6 +79,8 @@ Exit criteria:
 
 Plan: `docs/superpowers/plans/2026-06-01-wheeled-vehicle-phase-0-assets.md`
 
+Report: `docs/superpowers/reports/2026-06-01-wheeled-vehicle-phase-0-assets.md`
+
 Goal: load and inspect the Phase 00 reference fixtures before tuning the
 vehicle model.
 
