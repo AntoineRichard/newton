@@ -6,7 +6,7 @@
 
 **Done when:** `newton/examples/assets/wheeled/husky.usda` and `newton/examples/assets/wheeled/rc_car.usda` exist, are text-readable USDA files, and can be loaded by `newton.ModelBuilder.add_usd()` when USD support is available.
 
-**Scope:** Phase 00 creates fixture assets only. It does not create the Phase 0 manifest, inspection helper, tests, report, solver wrapper, contact kernels, tire models, drive controls, examples, or public API symbols.
+**Scope:** Phase 00 creates fixture assets only. It does not create the Phase 0 manifest, inspection helper, tests, report, solver wrapper, contact kernels, tire models, commanded drive controls, examples, or public API symbols.
 
 ---
 
@@ -38,6 +38,9 @@ Use these fixture dimensions:
 | RC car | suspension travel | `0.05` m | simplified approximate wheel travel for the fixture, not a vendor spec |
 | RC car | suspension drive stiffness | `800.0` N/m | gives roughly `9-12` mm static sag for `0.74-1.0` kg per corner |
 | RC car | suspension drive damping | `30.0` N*s/m | about half critical damping for a `1.0` kg corner with `800.0` N/m stiffness |
+| RC car | steering drive stiffness | `3.0` N*m/rad | modest centering servo stiffness for front steering links |
+| RC car | steering drive damping | `0.2` N*m*s/rad | damped steering response without making the joint rigid |
+| RC car | steering drive torque limit | `2.0` N*m | enough to reach the `35` deg steering limit at the chosen stiffness |
 | RC car | chassis size | `0.45 x 0.14 x 0.06` m | simplified box, not a vendor mesh |
 
 ## Authoring Conventions
@@ -52,7 +55,7 @@ Use these fixture dimensions:
 - Give all collision primitives `PhysicsCollisionAPI`. Use `PhysicsMeshCollisionAPI` only for `Cube` primitives, matching existing simple USDA assets in this repo.
 - Use wheel cylinders with `axis = "Y"`, radius equal to wheel radius, and height equal to wheel width.
 - Add wheel axle joints even when the vehicle has no steering or suspension. Otherwise imported wheels can become free bodies instead of constrained wheels.
-- Add passive linear spring/damper drives only on RC-car suspension joints. Do not add axle drives, steering drives, motors, tire parameters, custom `wheeled:*` attributes, or ground-contact material fields in Phase 00.
+- Add passive linear spring/damper drives on RC-car suspension joints and passive angular centering drives on front steering joints. Do not add axle drives, rear steering joints, motors, tire parameters, custom `wheeled:*` attributes, or ground-contact material fields in Phase 00.
 
 ## Task Steps
 
@@ -147,9 +150,9 @@ Use these body and joint rules:
 - Suspension and steering links are rigid bodies with mass properties but no collision geometry.
 - Assign mass as `2.96` kg on the chassis, `0.18` kg on each wheel, `0.07` kg on each suspension link, and `0.02` kg on each front steering link so the total is `4.0` kg.
 - Add one `PhysicsPrismaticJoint` suspension per wheel, body0=`rc_car_chassis`, body1=the matching suspension link, axis=`Z`, lower limit `-0.025` m, upper limit `0.025` m, and `PhysicsDriveAPI:linear` with `stiffness = 800.0` N/m, `damping = 30.0` N*s/m, `targetPosition = 0.0`, `targetVelocity = 0.0`, `maxForce = inf`, and `type = "force"`.
-- Add front-only `PhysicsRevoluteJoint` steering joints, body0=front suspension link, body1=front steering link, axis=`Z`, lower limit `-35` deg, upper limit `35` deg.
+- Add front-only `PhysicsRevoluteJoint` steering joints, body0=front suspension link, body1=front steering link, axis=`Z`, lower limit `-35` deg, upper limit `35` deg, and `PhysicsDriveAPI:angular` with imported Newton targets `stiffness = 3.0` N*m/rad and `damping = 0.2` N*m*s/rad. Author the USDA angular gains as `0.0523599` and `0.00349066` respectively because the importer converts angular drive gains from per-degree USD units to per-radian Newton units. Use `targetPosition = 0.0`, `targetVelocity = 0.0`, `maxForce = 2.0` N*m, and `type = "force"`.
 - Add one `PhysicsRevoluteJoint` axle per wheel, axis=`Y`. Front axle body0 is the matching steering link; rear axle body0 is the matching suspension link; body1 is the wheel body.
-- Do not add rear steering joints, steering drives, axle drives, motors, differential state, or tire parameters.
+- Do not add rear steering joints, axle drives, motors, differential state, or tire parameters.
 
 - [ ] **Step 4: Verify USDA files are non-empty and text-readable**
 
@@ -204,25 +207,28 @@ for filename, expected in checks.items():
 
 builder = newton.ModelBuilder()
 builder.add_usd(str(asset_dir / 'rc_car.usda'), floating=False, enable_self_collisions=False)
-suspension_labels = {
-    '/rc_car/Joints/rc_front_left_suspension',
-    '/rc_car/Joints/rc_rear_left_suspension',
-    '/rc_car/Joints/rc_front_right_suspension',
-    '/rc_car/Joints/rc_rear_right_suspension',
+expected_gains = {
+    '/rc_car/Joints/rc_front_left_suspension': (800.0, 30.0),
+    '/rc_car/Joints/rc_rear_left_suspension': (800.0, 30.0),
+    '/rc_car/Joints/rc_front_right_suspension': (800.0, 30.0),
+    '/rc_car/Joints/rc_rear_right_suspension': (800.0, 30.0),
+    '/rc_car/Joints/rc_front_left_steering': (3.0, 0.2),
+    '/rc_car/Joints/rc_front_right_steering': (3.0, 0.2),
 }
 seen = set()
 for joint_index, label in enumerate(builder.joint_label):
-    if label in suspension_labels:
+    if label in expected_gains:
         dof = builder.joint_qd_start[joint_index]
-        assert builder.joint_target_ke[dof] == 800.0, (label, builder.joint_target_ke[dof])
-        assert builder.joint_target_kd[dof] == 30.0, (label, builder.joint_target_kd[dof])
+        expected_ke, expected_kd = expected_gains[label]
+        assert abs(builder.joint_target_ke[dof] - expected_ke) < 1.0e-5, (label, builder.joint_target_ke[dof])
+        assert abs(builder.joint_target_kd[dof] - expected_kd) < 1.0e-5, (label, builder.joint_target_kd[dof])
         seen.add(label)
-assert seen == suspension_labels, seen
-print('rc_car suspension drive gains verified:', len(seen), 'joints')
+assert seen == set(expected_gains), seen
+print('rc_car suspension and steering drive gains verified:', len(seen), 'joints')
 PY
 ```
 
-Expected: both files import, and all four RC suspension joints report `800.0` N/m target stiffness and `30.0` N*s/m target damping. If USD support is unavailable, the text-readability check remains the Phase 00 verification and Phase 0 tests must mark USD-dependent checks as skipped.
+Expected: both files import; all four RC suspension joints report `800.0` N/m target stiffness and `30.0` N*s/m target damping; and both front steering joints report `3.0` N*m/rad target stiffness and `0.2` N*m*s/rad target damping. If USD support is unavailable, the text-readability check remains the Phase 00 verification and Phase 0 tests must mark USD-dependent checks as skipped.
 
 - [ ] **Step 6: Commit the simplified fixture assets**
 
@@ -240,8 +246,8 @@ Commit body:
 Add deterministic low-poly USDA fixtures for the wheeled vehicle roadmap. The
 Husky-like fixture provides constrained axle wheels without suspension or
 steering, while the RC-car fixture provides spring-damper suspended wheels with
-front steering and axle joints. These fixtures replace the earlier
-dependency on user-provided real robot assets.
+front steering centering drives and axle joints. These fixtures replace the
+earlier dependency on user-provided real robot assets.
 ```
 
 ## Handoff To Phase 0

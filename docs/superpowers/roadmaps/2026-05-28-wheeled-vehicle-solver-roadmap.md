@@ -58,7 +58,7 @@ Tasks:
   is lighter at `50.0` kg if a smaller fixture is needed later.
 - Create `newton/examples/assets/wheeled/rc_car.usda` as a box chassis with four
   wheels, passive spring/damper suspension joints on all wheels, and front
-  steering joints.
+  steering joints with centering drives.
 - Use F1TENTH/RC-inspired starting values for the RC-car fixture: mass `4.0` kg,
   wheel radius `0.055` m, wheel width `0.045` m, wheelbase `0.324` m, and track
   width `0.296` m. Use `0.047` m center ground clearance from Traxxas Slash 4X4
