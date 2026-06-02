@@ -7,9 +7,10 @@ vehicles in parallel without Python, NumPy, Torch, or per-vehicle runtime loops.
 The first users are RC cars and small AGVs such as Clearpath Husky or Jackal.
 
 The solver should be a thin layer over existing rigid-body solvers. It should
-own wheel-ground force generation, drive-mode logic, motor and differential
-models, and terrain sampling, while leaving rigid-body integration,
-articulation constraints, and ordinary body collisions to the wrapped solver.
+own wheel-contact interpretation, tire and drive force generation, drive-mode
+logic, motor and differential models, and diagnostics, while leaving rigid-body
+integration, articulation constraints, collision detection, and ordinary body
+collisions to Newton and the wrapped solver.
 
 ## Constraints
 
@@ -18,8 +19,12 @@ articulation constraints, and ordinary body collisions to the wrapped solver.
 - Expose user-facing APIs only through public modules.
 - Start with MuJoCo Warp as the wrapped rigid solver.
 - Avoid adding required or optional dependencies.
-- Keep wheel collision/friction separate from Newton rigid contacts until the
-  interaction model is validated.
+- Use Newton's collision pipeline as the primary source of wheel-ground contact
+  geometry. Do not build a raycast-based wheel-contact path in this roadmap.
+- Keep normal-contact support and tire-friction ownership explicit. The rigid
+  solver may own normal support, while the wheeled layer should be able to own
+  wheel-specific longitudinal and lateral friction without double-counting
+  solver friction.
 - Keep tire models pluggable. Pacejka, Brush, Fiala, and simpler empirical
   models should be implementation choices behind a shared interface, not baked
   into the solver architecture.
@@ -54,50 +59,68 @@ Exit criteria:
 - Wheel bodies and relevant joints can be identified without hard-coded Python
   object references in the runtime path.
 
-## Phase 1: Plane Wheel Contact Wrapper
+## Phase 1: Newton Contact Patch Wrapper
 
-Goal: prove the wrapper architecture and wheel support forces on a flat plane.
+Goal: prove that the wheeled layer can identify wheel-ground contacts from
+Newton's collision pipeline and estimate per-wheel contact state on a flat
+reference scene.
 
 Scope:
 
 - Add a public wheeled-vehicle solver wrapper over a rigid solver.
 - Register `wheeled:*` custom attributes for wheel metadata.
 - Build flat wheel arrays at solver initialization.
-- Disable or ignore wheel shape collision for wheel-ground support.
-- Compute vertical plane contact forces in Warp kernels.
-- Accumulate per-body spatial wrenches and delegate to `SolverMuJoCo`.
+- Keep wheel collision enabled for wheel-ground contact generation.
+- Start with `SolverMuJoCo` using Newton-generated contacts
+  (`use_mujoco_contacts=False`) so the contact geometry comes from Newton.
+- Group active Newton contacts by wheel shape and counterpart terrain shape.
+- Estimate per-wheel contact location, normal, patch extents, and patch area
+  from the contact cloud.
+- Read terrain shape and material fields, including friction coefficients, as
+  seeds for later wheel friction models.
+- Delegate normal support to the wrapped rigid solver; do not add a separate
+  analytical plane-support kernel.
 - Test single-world and multi-world behavior.
 
 Out of scope:
 
-- Raycast terrain.
+- Raycast terrain or raycast wheel contact.
 - Any dedicated tire model, including Pacejka, Brush, or Fiala.
 - Steering or drive modes.
 - Motor power curves and differentials.
+- Hydroelastic tire-ground contacts.
 - USD schema polish.
 
 Exit criteria:
 
-- A simple multi-wheel vehicle remains supported above an XY plane under
-  gravity.
-- The runtime step path contains no Python loops over wheels or vehicles.
+- A wheel-ground fixture produces stable contact location, normal, terrain
+  shape, material, and patch-area diagnostics from Newton contacts.
+- A simple wheeled body remains supported by the wrapped rigid solver using
+  Newton-generated contacts.
+- The runtime contact grouping and patch estimation path contains no Python
+  loops over wheels, vehicles, or contacts.
 - Tests fail before implementation and pass after implementation.
 
 ## Phase 2: Basic Wheel Drive And Braking
 
-Goal: add minimal longitudinal behavior while keeping the tire model simple.
+Goal: add minimal longitudinal behavior using the Phase 1 contact patch state.
 
 Scope:
 
 - Add per-wheel torque or target angular-speed control inputs.
 - Track wheel angular velocity if it is not already represented by joints.
-- Apply longitudinal traction and braking forces at the contact point.
+- Estimate normal load from reported solver contact forces when available, with
+  a penetration/stiffness fallback when a solver cannot report forces.
+- Apply longitudinal traction and braking forces at the estimated contact patch
+  center.
 - Use simple friction limits derived from wheel normal force and material
   friction coefficients.
+- Make wheel-pair solver friction handling explicit so the solver and wheeled
+  layer do not both apply the same tire friction.
 
 Exit criteria:
 
-- A vehicle accelerates forward and brakes on the plane.
+- A vehicle accelerates forward and brakes on the flat reference scene.
 - A skid-steer vehicle can rotate in place from opposite wheel commands.
 - Forces remain batched and device-side.
 
@@ -120,25 +143,54 @@ Exit criteria:
 - Heterogeneous vehicles can run in one model without host-side branching in
   the runtime loop.
 
-## Phase 4: Raycast Terrain Contact
+## Phase 4: Newton Collision Terrain Contact
 
-Goal: replace the plane-only contact query with terrain queries.
+Goal: validate the contact patch estimator on non-flat terrain using Newton's
+collision pipeline.
 
 Scope:
 
-- Use Newton raycast utilities for shape and terrain intersection.
-- Store hit distance, normal, and shape/material data per wheel.
-- Support mesh, heightfield, and primitive terrain where feasible.
-- Compare direct raycast contact against possible Newton collision-pipeline
-  alternatives for jitter, stability, and performance.
+- Use Newton collision contacts for mesh, heightfield, and primitive terrain
+  where feasible.
+- Store per-wheel contact shape, normal, point cloud, patch extents, area
+  estimate, and material data.
+- Study contact reduction, contact matching, deterministic sorting, and solver
+  force reporting for wheel-terrain pairs.
+- Compare Newton-generated contacts converted into MuJoCo Warp against
+  MuJoCo-native contacts only as an observability and stability study.
+- Identify jitter, sparse-contact, and performance limits before adding more
+  tire-model complexity.
 
 Exit criteria:
 
-- Wheel contact works on non-planar terrain.
-- Contact normal and material data feed the tire model.
+- Wheel contact state works on representative non-planar terrain without
+  raycasts.
+- Contact normal, patch estimate, and material data feed the wheel model.
 - Performance remains suitable for thousands of vehicles.
 
-## Phase 5: Tire Model Interface And Powertrain Models
+## Phase 5: Hydroelastic Contact Patch Study
+
+Goal: evaluate hydroelastic contacts as a higher-quality patch source for
+non-flat terrain and compliant tire-ground pairs.
+
+Scope:
+
+- Study Newton hydroelastic/SDF contact surfaces and their area-weighted
+  internal data.
+- Compare rigid contact-cloud area estimates against hydroelastic contact
+  surfaces on slopes, uneven terrain, and curved wheel surfaces.
+- Decide whether tire-ground pairs should opt into hydroelastic geometry, keep a
+  rigid-contact estimator, or support both behind one wheel-contact interface.
+- Keep the study optional and dependency-free.
+
+Exit criteria:
+
+- The roadmap records whether hydroelastic contacts improve wheel patch quality
+  enough to justify the added setup cost.
+- Any follow-up implementation plan keeps hydroelastic support optional and
+  compatible with the rigid contact path.
+
+## Phase 6: Tire Model Interface And Powertrain Models
 
 Goal: move from simple traction to realistic vehicle behavior without making a
 specific tire formulation exclusive.
@@ -159,7 +211,7 @@ Exit criteria:
 - Tire-model choice is configurable without changing the solver wrapper.
 - Tire and drive modules can be tested independently.
 
-## Phase 6: Public API, Examples, And Docs
+## Phase 7: Public API, Examples, And Docs
 
 Goal: make the solver usable by Newton users.
 
@@ -179,12 +231,18 @@ Exit criteria:
 
 ## Open Questions
 
-- For later phases, should tire and powertrain forces keep the phase-1
-  `body_f` merge contract or move to additional namespaced diagnostics buffers?
+- For later phases, should tire and powertrain forces keep a `body_f` merge
+  contract or move to additional namespaced diagnostics buffers?
 - For vehicles with explicit suspension, should support forces continue to act
   on wheel bodies only or split across wheel and chassis bodies?
-- How should suspension joints and analytical wheel contact share damping?
+- How should suspension joints and Newton contact damping share normal-contact
+  behavior?
 - Which material fields should seed shared tire-model parameters?
-- When raycasts arrive, should terrain shape filtering reuse Newton collision
-  groups or a separate `wheeled:*` mask?
-
+- Should wheel-pair solver friction be set low/zero before applying custom tire
+  friction, or should the wheeled layer initially reuse solver friction until a
+  tire model is active?
+- Should patch area come from the geometric contact cloud, force-weighted
+  contacts, penetration-weighted contacts, or hydroelastic contact surfaces
+  when available?
+- What force-reporting path should be required for MuJoCo Warp when Newton
+  contacts are converted into MuJoCo contacts?
