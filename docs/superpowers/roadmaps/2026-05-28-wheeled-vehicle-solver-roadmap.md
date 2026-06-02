@@ -31,8 +31,9 @@ collisions to Newton and the wrapped solver.
 
 ## Current Work
 
-Phase 1 is specified in
-`docs/superpowers/specs/2026-05-28-wheeled-vehicle-phase-1-design.md`.
+Phase 1 needs a fresh spec and implementation plan based on Newton collision
+contacts and contact patch estimation. The previous Phase 1 spec was removed so
+this work can restart from the revised collision-first direction.
 
 The local files
 `docs/superpowers/specs/2026-03-12-wheel-ground-contact-design.md` and
