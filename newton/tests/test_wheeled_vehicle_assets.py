@@ -77,3 +77,9 @@ class TestWheeledVehicleAssetInspection(unittest.TestCase):
         self.assertIn("shape_labels", report)
         self.assertIn("candidate_wheel_body_labels", report)
         self.assertIn("candidate_wheel_shape_labels", report)
+
+
+class TestWheeledVehicleInspectionScript(unittest.TestCase):
+    def test_script_file_exists(self):
+        script_path = Path(__file__).resolve().parents[2] / "scripts" / "inspect_wheeled_assets.py"
+        self.assertTrue(script_path.exists(), f"Missing inspection script: {script_path}")
