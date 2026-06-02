@@ -101,6 +101,8 @@ Exit criteria:
 
 ## Phase 1A: Wheel Metadata Loading
 
+Plan: `docs/superpowers/plans/2026-06-02-wheeled-vehicle-phase-1a-metadata-loading.md`
+
 Goal: prove that the wheeled layer can load wheel metadata from the Phase 0
 fixtures and build flat wheel tables without doing any contact or collision
 interpretation.
