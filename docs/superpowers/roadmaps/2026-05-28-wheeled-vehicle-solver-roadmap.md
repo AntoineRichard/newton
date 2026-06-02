@@ -43,7 +43,7 @@ this checkout, so this roadmap starts from the current Newton solver structure.
 
 ## Phase 00: Simplified USDA Fixtures
 
-Plan: Task 00 in `docs/superpowers/plans/2026-06-01-wheeled-vehicle-phase-0-assets.md`
+Plan: `docs/superpowers/plans/2026-06-02-wheeled-vehicle-phase-00-fixtures.md`
 
 Goal: create simple, deterministic USDA reference vehicles before relying on
 real robot assets.
@@ -76,7 +76,7 @@ Exit criteria:
 
 ## Phase 0: Fixture Intake And Inspection
 
-Plan: remaining tasks in `docs/superpowers/plans/2026-06-01-wheeled-vehicle-phase-0-assets.md`
+Plan: `docs/superpowers/plans/2026-06-01-wheeled-vehicle-phase-0-assets.md`
 
 Goal: load and inspect the Phase 00 reference fixtures before tuning the
 vehicle model.
