@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "namespace": "wheeled",
+  "assets": [
+    {
+      "name": "rc_car",
+      "file": "rc_car.usda",
+      "vehicle_type": "ackermann",
+      "description": "Simplified Ackermann RC car fixture for wheeled-vehicle solver development.",
+      "reference_dimensions": {
+        "mass_kg": 4.0,
+        "wheel_radius_m": 0.055,
+        "wheel_width_m": 0.045,
+        "wheelbase_m": 0.324,
+        "track_width_m": 0.296,
+        "center_ground_clearance_m": 0.047,
+        "suspension_travel_m": 0.05,
+        "suspension_drive_stiffness_n_per_m": 800.0,
+        "suspension_drive_damping_n_s_per_m": 30.0,
+        "steering_limit_deg": 35.0,
+        "steering_drive_stiffness_n_m_per_rad": 16.0,
+        "steering_drive_damping_n_m_s_per_rad": 1.0,
+        "steering_drive_torque_limit_n_m": 9.8,
+        "steering_velocity_limit_rad_per_s": 4.1887902047863905,
+        "source_note": "F1TENTH-inspired simplified fixture using Traxxas Slash-style dimensions: about 0.324 m wheelbase, 0.296 m track, and 0.047 m center ground clearance; replaces rough initial 0.40 m / 0.20 m design-note spacing. Suspension travel is an approximate fixture value, not a vendor spec. Steering drive values approximate a 100 kgf*cm RC servo with a 0.25 s per 60 deg speed reference."
+      },
+      "wheel_body_labels": [],
+      "wheel_shape_labels": [],
+      "suspension_joint_labels": [],
+      "steering_joint_labels": []
+    },
+    {
+      "name": "husky",
+      "file": "husky.usda",
+      "vehicle_type": "skid_steer",
+      "description": "Simplified skid-steer Husky-like fixture for wheeled-vehicle solver development.",
+      "reference_dimensions": {
+        "mass_kg": 80.0,
+        "wheel_radius_m": 0.1625,
+        "wheel_width_m": 0.13,
+        "wheelbase_m": 0.512,
+        "track_width_m": 0.566,
+        "source_note": "Clearpath Husky A300-inspired fixture; legacy A200 reference mass is 50 kg."
+      },
+      "wheel_body_labels": [],
+      "wheel_shape_labels": [],
+      "suspension_joint_labels": [],
+      "steering_joint_labels": []
+    }
+  ]
+}
