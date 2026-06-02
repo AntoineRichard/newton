@@ -1,0 +1,386 @@
+#usda 1.0
+(
+    doc = "Simplified wheeled vehicle fixture for Newton solver development."
+    defaultPrim = "rc_car"
+    metersPerUnit = 1
+    kilogramsPerUnit = 1
+    upAxis = "Z"
+)
+
+def PhysicsScene "physicsScene"
+{
+    vector3f physics:gravityDirection = (0, 0, -1)
+    float physics:gravityMagnitude = 9.8067
+}
+
+def Xform "rc_car" (
+    prepend apiSchemas = ["PhysicsArticulationRootAPI"]
+)
+{
+    quatf xformOp:orient = (1, 0, 0, 0)
+    double3 xformOp:translate = (0, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+    def Scope "RigidBodies"
+    {
+        def Xform "rc_car_chassis" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (0, 0, 0.077)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 2.96
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (0.00572267, 0.050838, 0.0547847)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+            def Scope "Geometry"
+            {
+                def Cube "rc_car_chassis" (
+                    prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"]
+                )
+                {
+                    float3[] extent = [(-1, -1, -1), (1, 1, 1)]
+                    float3 xformOp:scale = (0.225, 0.07, 0.03)
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    double3 xformOp:translate = (0, 0, 0)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                    color3f[] primvars:displayColor = [(0.55, 0.11, 0.08)]
+                }
+            }
+        }
+        def Xform "rc_front_left_suspension_link" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (0.162, 0.148, 0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 0.07
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (1e-05, 1e-05, 1e-05)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+        }
+        def Xform "rc_rear_left_suspension_link" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (-0.162, 0.148, 0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 0.07
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (1e-05, 1e-05, 1e-05)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+        }
+        def Xform "rc_front_right_suspension_link" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (0.162, -0.148, 0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 0.07
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (1e-05, 1e-05, 1e-05)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+        }
+        def Xform "rc_rear_right_suspension_link" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (-0.162, -0.148, 0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 0.07
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (1e-05, 1e-05, 1e-05)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+        }
+        def Xform "rc_front_left_steering_link" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (0.162, 0.148, 0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 0.02
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (1e-05, 1e-05, 1e-05)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+        }
+        def Xform "rc_front_right_steering_link" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (0.162, -0.148, 0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 0.02
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (1e-05, 1e-05, 1e-05)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+        }
+        def Xform "rc_front_left_wheel" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (0.162, 0.148, 0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 0.18
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (0.0001665, 0.00027225, 0.0001665)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+            def Scope "Geometry"
+            {
+                def Cylinder "rc_front_left_wheel" (
+                    prepend apiSchemas = ["PhysicsCollisionAPI"]
+                )
+                {
+                    float3[] extent = [(-0.055, -0.0225, -0.055), (0.055, 0.0225, 0.055)]
+                    uniform token axis = "Y"
+                    double radius = 0.055
+                    double height = 0.045
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    double3 xformOp:translate = (0, 0, 0)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+                    color3f[] primvars:displayColor = [(0.04, 0.04, 0.04)]
+                }
+            }
+        }
+        def Xform "rc_rear_left_wheel" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (-0.162, 0.148, 0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 0.18
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (0.0001665, 0.00027225, 0.0001665)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+            def Scope "Geometry"
+            {
+                def Cylinder "rc_rear_left_wheel" (
+                    prepend apiSchemas = ["PhysicsCollisionAPI"]
+                )
+                {
+                    float3[] extent = [(-0.055, -0.0225, -0.055), (0.055, 0.0225, 0.055)]
+                    uniform token axis = "Y"
+                    double radius = 0.055
+                    double height = 0.045
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    double3 xformOp:translate = (0, 0, 0)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+                    color3f[] primvars:displayColor = [(0.04, 0.04, 0.04)]
+                }
+            }
+        }
+        def Xform "rc_front_right_wheel" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (0.162, -0.148, 0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 0.18
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (0.0001665, 0.00027225, 0.0001665)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+            def Scope "Geometry"
+            {
+                def Cylinder "rc_front_right_wheel" (
+                    prepend apiSchemas = ["PhysicsCollisionAPI"]
+                )
+                {
+                    float3[] extent = [(-0.055, -0.0225, -0.055), (0.055, 0.0225, 0.055)]
+                    uniform token axis = "Y"
+                    double radius = 0.055
+                    double height = 0.045
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    double3 xformOp:translate = (0, 0, 0)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+                    color3f[] primvars:displayColor = [(0.04, 0.04, 0.04)]
+                }
+            }
+        }
+        def Xform "rc_rear_right_wheel" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (-0.162, -0.148, 0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 0.18
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (0.0001665, 0.00027225, 0.0001665)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+            def Scope "Geometry"
+            {
+                def Cylinder "rc_rear_right_wheel" (
+                    prepend apiSchemas = ["PhysicsCollisionAPI"]
+                )
+                {
+                    float3[] extent = [(-0.055, -0.0225, -0.055), (0.055, 0.0225, 0.055)]
+                    uniform token axis = "Y"
+                    double radius = 0.055
+                    double height = 0.045
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    double3 xformOp:translate = (0, 0, 0)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+                    color3f[] primvars:displayColor = [(0.04, 0.04, 0.04)]
+                }
+            }
+        }
+    }
+
+    def Scope "Joints"
+    {
+        def PhysicsPrismaticJoint "rc_front_left_suspension"
+        {
+            uniform token physics:axis = "Z"
+            rel physics:body0 = </rc_car/RigidBodies/rc_car_chassis>
+            rel physics:body1 = </rc_car/RigidBodies/rc_front_left_suspension_link>
+            point3f physics:localPos0 = (0.162, 0.148, -0.022)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            float physics:lowerLimit = -0.025
+            float physics:upperLimit = 0.025
+        }
+        def PhysicsPrismaticJoint "rc_rear_left_suspension"
+        {
+            uniform token physics:axis = "Z"
+            rel physics:body0 = </rc_car/RigidBodies/rc_car_chassis>
+            rel physics:body1 = </rc_car/RigidBodies/rc_rear_left_suspension_link>
+            point3f physics:localPos0 = (-0.162, 0.148, -0.022)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            float physics:lowerLimit = -0.025
+            float physics:upperLimit = 0.025
+        }
+        def PhysicsPrismaticJoint "rc_front_right_suspension"
+        {
+            uniform token physics:axis = "Z"
+            rel physics:body0 = </rc_car/RigidBodies/rc_car_chassis>
+            rel physics:body1 = </rc_car/RigidBodies/rc_front_right_suspension_link>
+            point3f physics:localPos0 = (0.162, -0.148, -0.022)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            float physics:lowerLimit = -0.025
+            float physics:upperLimit = 0.025
+        }
+        def PhysicsPrismaticJoint "rc_rear_right_suspension"
+        {
+            uniform token physics:axis = "Z"
+            rel physics:body0 = </rc_car/RigidBodies/rc_car_chassis>
+            rel physics:body1 = </rc_car/RigidBodies/rc_rear_right_suspension_link>
+            point3f physics:localPos0 = (-0.162, -0.148, -0.022)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            float physics:lowerLimit = -0.025
+            float physics:upperLimit = 0.025
+        }
+        def PhysicsRevoluteJoint "rc_front_left_steering"
+        {
+            uniform token physics:axis = "Z"
+            rel physics:body0 = </rc_car/RigidBodies/rc_front_left_suspension_link>
+            rel physics:body1 = </rc_car/RigidBodies/rc_front_left_steering_link>
+            point3f physics:localPos0 = (0, 0, 0)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            float physics:lowerLimit = -35
+            float physics:upperLimit = 35
+        }
+        def PhysicsRevoluteJoint "rc_front_right_steering"
+        {
+            uniform token physics:axis = "Z"
+            rel physics:body0 = </rc_car/RigidBodies/rc_front_right_suspension_link>
+            rel physics:body1 = </rc_car/RigidBodies/rc_front_right_steering_link>
+            point3f physics:localPos0 = (0, 0, 0)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            float physics:lowerLimit = -35
+            float physics:upperLimit = 35
+        }
+        def PhysicsRevoluteJoint "rc_front_left_axle"
+        {
+            uniform token physics:axis = "Y"
+            rel physics:body0 = </rc_car/RigidBodies/rc_front_left_steering_link>
+            rel physics:body1 = </rc_car/RigidBodies/rc_front_left_wheel>
+            point3f physics:localPos0 = (0, 0, 0)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+        def PhysicsRevoluteJoint "rc_rear_left_axle"
+        {
+            uniform token physics:axis = "Y"
+            rel physics:body0 = </rc_car/RigidBodies/rc_rear_left_suspension_link>
+            rel physics:body1 = </rc_car/RigidBodies/rc_rear_left_wheel>
+            point3f physics:localPos0 = (0, 0, 0)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+        def PhysicsRevoluteJoint "rc_front_right_axle"
+        {
+            uniform token physics:axis = "Y"
+            rel physics:body0 = </rc_car/RigidBodies/rc_front_right_steering_link>
+            rel physics:body1 = </rc_car/RigidBodies/rc_front_right_wheel>
+            point3f physics:localPos0 = (0, 0, 0)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+        def PhysicsRevoluteJoint "rc_rear_right_axle"
+        {
+            uniform token physics:axis = "Y"
+            rel physics:body0 = </rc_car/RigidBodies/rc_rear_right_suspension_link>
+            rel physics:body1 = </rc_car/RigidBodies/rc_rear_right_wheel>
+            point3f physics:localPos0 = (0, 0, 0)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+    }
+}

@@ -1,0 +1,224 @@
+#usda 1.0
+(
+    doc = "Simplified wheeled vehicle fixture for Newton solver development."
+    defaultPrim = "husky"
+    metersPerUnit = 1
+    kilogramsPerUnit = 1
+    upAxis = "Z"
+)
+
+def PhysicsScene "physicsScene"
+{
+    vector3f physics:gravityDirection = (0, 0, -1)
+    float physics:gravityMagnitude = 9.8067
+}
+
+def Xform "husky" (
+    prepend apiSchemas = ["PhysicsArticulationRootAPI"]
+)
+{
+    quatf xformOp:orient = (1, 0, 0, 0)
+    double3 xformOp:translate = (0, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+    def Scope "RigidBodies"
+    {
+        def Xform "husky_chassis" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (0, 0, 0.2875)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 72
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (2.19, 6.2556, 7.6956)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+            def Scope "Geometry"
+            {
+                def Cube "husky_chassis" (
+                    prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"]
+                )
+                {
+                    float3[] extent = [(-1, -1, -1), (1, 1, 1)]
+                    float3 xformOp:scale = (0.495, 0.275, 0.125)
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    double3 xformOp:translate = (0, 0, 0)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                    color3f[] primvars:displayColor = [(0.19, 0.32, 0.42)]
+                }
+            }
+        }
+        def Xform "husky_front_left_wheel" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (0.256, 0.283, 0.1625)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 2
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (0.0160198, 0.0264063, 0.0160198)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+            def Scope "Geometry"
+            {
+                def Cylinder "husky_front_left_wheel" (
+                    prepend apiSchemas = ["PhysicsCollisionAPI"]
+                )
+                {
+                    float3[] extent = [(-0.1625, -0.065, -0.1625), (0.1625, 0.065, 0.1625)]
+                    uniform token axis = "Y"
+                    double radius = 0.1625
+                    double height = 0.13
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    double3 xformOp:translate = (0, 0, 0)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+                    color3f[] primvars:displayColor = [(0.05, 0.05, 0.05)]
+                }
+            }
+        }
+        def Xform "husky_rear_left_wheel" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (-0.256, 0.283, 0.1625)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 2
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (0.0160198, 0.0264063, 0.0160198)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+            def Scope "Geometry"
+            {
+                def Cylinder "husky_rear_left_wheel" (
+                    prepend apiSchemas = ["PhysicsCollisionAPI"]
+                )
+                {
+                    float3[] extent = [(-0.1625, -0.065, -0.1625), (0.1625, 0.065, 0.1625)]
+                    uniform token axis = "Y"
+                    double radius = 0.1625
+                    double height = 0.13
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    double3 xformOp:translate = (0, 0, 0)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+                    color3f[] primvars:displayColor = [(0.05, 0.05, 0.05)]
+                }
+            }
+        }
+        def Xform "husky_front_right_wheel" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (0.256, -0.283, 0.1625)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 2
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (0.0160198, 0.0264063, 0.0160198)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+            def Scope "Geometry"
+            {
+                def Cylinder "husky_front_right_wheel" (
+                    prepend apiSchemas = ["PhysicsCollisionAPI"]
+                )
+                {
+                    float3[] extent = [(-0.1625, -0.065, -0.1625), (0.1625, 0.065, 0.1625)]
+                    uniform token axis = "Y"
+                    double radius = 0.1625
+                    double height = 0.13
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    double3 xformOp:translate = (0, 0, 0)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+                    color3f[] primvars:displayColor = [(0.05, 0.05, 0.05)]
+                }
+            }
+        }
+        def Xform "husky_rear_right_wheel" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            quatf xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (-0.256, -0.283, 0.1625)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+            vector3f physics:linearVelocity = (0, 0, 0)
+            vector3f physics:angularVelocity = (0, 0, 0)
+            float physics:mass = 2
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (0.0160198, 0.0264063, 0.0160198)
+            quatf physics:principalAxes = (1, 0, 0, 0)
+            def Scope "Geometry"
+            {
+                def Cylinder "husky_rear_right_wheel" (
+                    prepend apiSchemas = ["PhysicsCollisionAPI"]
+                )
+                {
+                    float3[] extent = [(-0.1625, -0.065, -0.1625), (0.1625, 0.065, 0.1625)]
+                    uniform token axis = "Y"
+                    double radius = 0.1625
+                    double height = 0.13
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    double3 xformOp:translate = (0, 0, 0)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+                    color3f[] primvars:displayColor = [(0.05, 0.05, 0.05)]
+                }
+            }
+        }
+    }
+
+    def Scope "Joints"
+    {
+        def PhysicsRevoluteJoint "husky_front_left_axle"
+        {
+            uniform token physics:axis = "Y"
+            rel physics:body0 = </husky/RigidBodies/husky_chassis>
+            rel physics:body1 = </husky/RigidBodies/husky_front_left_wheel>
+            point3f physics:localPos0 = (0.256, 0.283, -0.125)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+        def PhysicsRevoluteJoint "husky_rear_left_axle"
+        {
+            uniform token physics:axis = "Y"
+            rel physics:body0 = </husky/RigidBodies/husky_chassis>
+            rel physics:body1 = </husky/RigidBodies/husky_rear_left_wheel>
+            point3f physics:localPos0 = (-0.256, 0.283, -0.125)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+        def PhysicsRevoluteJoint "husky_front_right_axle"
+        {
+            uniform token physics:axis = "Y"
+            rel physics:body0 = </husky/RigidBodies/husky_chassis>
+            rel physics:body1 = </husky/RigidBodies/husky_front_right_wheel>
+            point3f physics:localPos0 = (0.256, -0.283, -0.125)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+        def PhysicsRevoluteJoint "husky_rear_right_axle"
+        {
+            uniform token physics:axis = "Y"
+            rel physics:body0 = </husky/RigidBodies/husky_chassis>
+            rel physics:body1 = </husky/RigidBodies/husky_rear_right_wheel>
+            point3f physics:localPos0 = (-0.256, -0.283, -0.125)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+    }
+}
