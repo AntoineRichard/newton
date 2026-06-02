@@ -270,8 +270,16 @@ def Xform "rc_car" (
 
     def Scope "Joints"
     {
-        def PhysicsPrismaticJoint "rc_front_left_suspension"
+        def PhysicsPrismaticJoint "rc_front_left_suspension" (
+            prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+        )
         {
+            float drive:linear:physics:damping = 30
+            float drive:linear:physics:maxForce = inf
+            float drive:linear:physics:stiffness = 800
+            float drive:linear:physics:targetPosition = 0
+            float drive:linear:physics:targetVelocity = 0
+            uniform token drive:linear:physics:type = "force"
             uniform token physics:axis = "Z"
             rel physics:body0 = </rc_car/RigidBodies/rc_car_chassis>
             rel physics:body1 = </rc_car/RigidBodies/rc_front_left_suspension_link>
@@ -282,8 +290,16 @@ def Xform "rc_car" (
             float physics:lowerLimit = -0.025
             float physics:upperLimit = 0.025
         }
-        def PhysicsPrismaticJoint "rc_rear_left_suspension"
+        def PhysicsPrismaticJoint "rc_rear_left_suspension" (
+            prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+        )
         {
+            float drive:linear:physics:damping = 30
+            float drive:linear:physics:maxForce = inf
+            float drive:linear:physics:stiffness = 800
+            float drive:linear:physics:targetPosition = 0
+            float drive:linear:physics:targetVelocity = 0
+            uniform token drive:linear:physics:type = "force"
             uniform token physics:axis = "Z"
             rel physics:body0 = </rc_car/RigidBodies/rc_car_chassis>
             rel physics:body1 = </rc_car/RigidBodies/rc_rear_left_suspension_link>
@@ -294,8 +310,16 @@ def Xform "rc_car" (
             float physics:lowerLimit = -0.025
             float physics:upperLimit = 0.025
         }
-        def PhysicsPrismaticJoint "rc_front_right_suspension"
+        def PhysicsPrismaticJoint "rc_front_right_suspension" (
+            prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+        )
         {
+            float drive:linear:physics:damping = 30
+            float drive:linear:physics:maxForce = inf
+            float drive:linear:physics:stiffness = 800
+            float drive:linear:physics:targetPosition = 0
+            float drive:linear:physics:targetVelocity = 0
+            uniform token drive:linear:physics:type = "force"
             uniform token physics:axis = "Z"
             rel physics:body0 = </rc_car/RigidBodies/rc_car_chassis>
             rel physics:body1 = </rc_car/RigidBodies/rc_front_right_suspension_link>
@@ -306,8 +330,16 @@ def Xform "rc_car" (
             float physics:lowerLimit = -0.025
             float physics:upperLimit = 0.025
         }
-        def PhysicsPrismaticJoint "rc_rear_right_suspension"
+        def PhysicsPrismaticJoint "rc_rear_right_suspension" (
+            prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+        )
         {
+            float drive:linear:physics:damping = 30
+            float drive:linear:physics:maxForce = inf
+            float drive:linear:physics:stiffness = 800
+            float drive:linear:physics:targetPosition = 0
+            float drive:linear:physics:targetVelocity = 0
+            uniform token drive:linear:physics:type = "force"
             uniform token physics:axis = "Z"
             rel physics:body0 = </rc_car/RigidBodies/rc_car_chassis>
             rel physics:body1 = </rc_car/RigidBodies/rc_rear_right_suspension_link>
