@@ -31,9 +31,11 @@ collisions to Newton and the wrapped solver.
 
 ## Current Work
 
-Phase 1 needs a fresh spec and implementation plan based on Newton collision
-contacts and contact patch estimation. The previous Phase 1 spec was removed so
-this work can restart from the revised collision-first direction.
+Phase 1A needs a fresh spec and implementation plan focused only on wheel
+metadata loading, custom attributes, and flat wheel table construction. Phase 1B
+should follow with Newton collision-contact grouping and contact patch
+estimation. The previous Phase 1 spec was removed so this work can restart from
+this smaller two-step direction.
 
 The local files
 `docs/superpowers/specs/2026-03-12-wheel-ground-contact-design.md` and
@@ -97,21 +99,61 @@ Exit criteria:
 - Wheel bodies and relevant joints can be identified without hard-coded Python
   object references in the runtime path.
 
-## Phase 1: Newton Contact Patch Wrapper
+## Phase 1A: Wheel Metadata Loading
 
-Goal: prove that the wheeled layer can identify wheel-ground contacts from
+Goal: prove that the wheeled layer can load wheel metadata from the Phase 0
+fixtures and build flat wheel tables without doing any contact or collision
+interpretation.
+
+Scope:
+
+- Add the minimal wheeled-vehicle metadata loader or solver wrapper needed to
+  consume a `ModelBuilder`/`Model` plus wheel metadata.
+- Register initial `wheeled:*` custom attributes for wheel metadata, including
+  wheel shape/body identity, radius, width, vehicle id, and steerable or driven
+  flags where needed.
+- Use the Phase 0 manifest labels as the first source of fixture metadata until
+  USD schema polish moves those fields into assets directly.
+- Resolve wheel body labels, wheel shape labels, suspension joint labels, and
+  steering joint labels into model indices.
+- Build flat wheel arrays at initialization for single-world and multi-world
+  models.
+- Add diagnostics that report the wheel-to-shape, wheel-to-body, and optional
+  wheel-to-joint mappings.
+
+Out of scope:
+
+- Contact generation, contact grouping, contact patch estimation, or terrain
+  material lookup.
+- Raycast terrain or raycast wheel contact.
+- Any dedicated tire model, including Pacejka, Brush, or Fiala.
+- Steering commands, drive commands, motor curves, or differentials.
+- Hydroelastic tire-ground contacts.
+- Final USD schema polish.
+
+Exit criteria:
+
+- The RC-car and Husky fixtures load through the wheeled metadata path and
+  produce deterministic flat wheel arrays.
+- Wheel shapes and wheel bodies are resolved from the Phase 0 manifest labels
+  without hard-coded runtime object references.
+- The metadata path works for single-world and multi-world model construction.
+- The implementation contains no runtime collision/contact assumptions.
+- Tests fail before implementation and pass after implementation.
+
+## Phase 1B: Newton Contact Patch Wrapper
+
+Goal: use the Phase 1A wheel tables to identify wheel-ground contacts from
 Newton's collision pipeline and estimate per-wheel contact state on a flat
 reference scene.
 
 Scope:
 
-- Add a public wheeled-vehicle solver wrapper over a rigid solver.
-- Register `wheeled:*` custom attributes for wheel metadata.
-- Build flat wheel arrays at solver initialization.
 - Keep wheel collision enabled for wheel-ground contact generation.
 - Start with `SolverMuJoCo` using Newton-generated contacts
   (`use_mujoco_contacts=False`) so the contact geometry comes from Newton.
-- Group active Newton contacts by wheel shape and counterpart terrain shape.
+- Group active Newton contacts by Phase 1A wheel shape index and counterpart
+  terrain shape.
 - Estimate per-wheel contact location, normal, patch extents, and patch area
   from the contact cloud.
 - Read terrain shape and material fields, including friction coefficients, as
@@ -122,6 +164,7 @@ Scope:
 
 Out of scope:
 
+- Wheel metadata loading beyond the Phase 1A contract.
 - Raycast terrain or raycast wheel contact.
 - Any dedicated tire model, including Pacejka, Brush, or Fiala.
 - Steering or drive modes.
@@ -141,7 +184,7 @@ Exit criteria:
 
 ## Phase 2: Basic Wheel Drive And Braking
 
-Goal: add minimal longitudinal behavior using the Phase 1 contact patch state.
+Goal: add minimal longitudinal behavior using the Phase 1B contact patch state.
 
 Scope:
 

@@ -42,10 +42,10 @@
 - Suspension joints: []
 - Steering joints: []
 
-## Phase 1 Metadata Decisions
+## Phase 1A Metadata Decisions
 
 - Mark every `wheel_shape_labels` entry with `wheeled:is_wheel = 1`.
 - Use `wheel_shape_labels` as the source of explicit `wheeled:wheel_radius` values when shape inference is ambiguous.
 - Use `wheel_body_labels` as the receiving bodies for wheel support forces.
 - Keep Husky `steering_joint_labels` empty for skid-steer control.
-- Treat missing suspension labels as an asset limitation, not a Phase 1 blocker, because the first plane-contact wrapper can use shape/body metadata only.
+- Treat missing suspension labels as an asset limitation, not a Phase 1A blocker, because the Phase 1B contact wrapper can use shape/body metadata only.
