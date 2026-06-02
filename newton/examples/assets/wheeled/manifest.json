@@ -24,10 +24,28 @@
         "steering_velocity_limit_rad_per_s": 4.1887902047863905,
         "source_note": "F1TENTH-inspired simplified fixture using Traxxas Slash-style dimensions: about 0.324 m wheelbase, 0.296 m track, and 0.047 m center ground clearance; replaces rough initial 0.40 m / 0.20 m design-note spacing. Suspension travel is an approximate fixture value, not a vendor spec. Steering drive values approximate a 100 kgf*cm RC servo with a 0.25 s per 60 deg speed reference."
       },
-      "wheel_body_labels": [],
-      "wheel_shape_labels": [],
-      "suspension_joint_labels": [],
-      "steering_joint_labels": []
+      "wheel_body_labels": [
+        "/rc_car/RigidBodies/rc_front_left_wheel",
+        "/rc_car/RigidBodies/rc_rear_left_wheel",
+        "/rc_car/RigidBodies/rc_front_right_wheel",
+        "/rc_car/RigidBodies/rc_rear_right_wheel"
+      ],
+      "wheel_shape_labels": [
+        "/rc_car/RigidBodies/rc_front_left_wheel/Geometry/rc_front_left_wheel",
+        "/rc_car/RigidBodies/rc_rear_left_wheel/Geometry/rc_rear_left_wheel",
+        "/rc_car/RigidBodies/rc_front_right_wheel/Geometry/rc_front_right_wheel",
+        "/rc_car/RigidBodies/rc_rear_right_wheel/Geometry/rc_rear_right_wheel"
+      ],
+      "suspension_joint_labels": [
+        "/rc_car/Joints/rc_front_left_suspension",
+        "/rc_car/Joints/rc_rear_left_suspension",
+        "/rc_car/Joints/rc_front_right_suspension",
+        "/rc_car/Joints/rc_rear_right_suspension"
+      ],
+      "steering_joint_labels": [
+        "/rc_car/Joints/rc_front_left_steering",
+        "/rc_car/Joints/rc_front_right_steering"
+      ]
     },
     {
       "name": "husky",
@@ -42,8 +60,18 @@
         "track_width_m": 0.566,
         "source_note": "Clearpath Husky A300-inspired fixture; legacy A200 reference mass is 50 kg."
       },
-      "wheel_body_labels": [],
-      "wheel_shape_labels": [],
+      "wheel_body_labels": [
+        "/husky/RigidBodies/husky_front_left_wheel",
+        "/husky/RigidBodies/husky_rear_left_wheel",
+        "/husky/RigidBodies/husky_front_right_wheel",
+        "/husky/RigidBodies/husky_rear_right_wheel"
+      ],
+      "wheel_shape_labels": [
+        "/husky/RigidBodies/husky_front_left_wheel/Geometry/husky_front_left_wheel",
+        "/husky/RigidBodies/husky_rear_left_wheel/Geometry/husky_rear_left_wheel",
+        "/husky/RigidBodies/husky_front_right_wheel/Geometry/husky_front_right_wheel",
+        "/husky/RigidBodies/husky_rear_right_wheel/Geometry/husky_rear_right_wheel"
+      ],
       "suspension_joint_labels": [],
       "steering_joint_labels": []
     }

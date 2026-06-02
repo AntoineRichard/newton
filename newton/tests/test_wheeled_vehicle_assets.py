@@ -5,7 +5,7 @@ import json
 import unittest
 from pathlib import Path
 
-from newton._src.utils.wheeled_asset_inspection import inspect_usd_asset, match_labels
+from newton._src.utils.wheeled_asset_inspection import inspect_manifest, inspect_usd_asset, match_labels
 from newton.tests.unittest_utils import USD_AVAILABLE
 
 _ASSET_DIR = Path(__file__).resolve().parents[1] / "examples" / "assets" / "wheeled"
@@ -83,3 +83,34 @@ class TestWheeledVehicleInspectionScript(unittest.TestCase):
     def test_script_file_exists(self):
         script_path = Path(__file__).resolve().parents[2] / "scripts" / "inspect_wheeled_assets.py"
         self.assertTrue(script_path.exists(), f"Missing inspection script: {script_path}")
+
+
+class TestWheeledVehicleReferenceAssetLabels(unittest.TestCase):
+    def test_manifest_identifies_required_phase_1_labels(self):
+        manifest = json.loads(_MANIFEST_PATH.read_text())
+        assets = {asset["name"]: asset for asset in manifest["assets"]}
+
+        rc_car = assets["rc_car"]
+        self.assertGreaterEqual(len(rc_car["wheel_body_labels"]), 4)
+        self.assertGreaterEqual(len(rc_car["wheel_shape_labels"]), 4)
+        self.assertGreaterEqual(len(rc_car["steering_joint_labels"]), 1)
+
+        husky = assets["husky"]
+        self.assertGreaterEqual(len(husky["wheel_body_labels"]), 4)
+        self.assertGreaterEqual(len(husky["wheel_shape_labels"]), 4)
+        self.assertEqual(husky["steering_joint_labels"], [])
+
+    @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
+    def test_manifest_labels_exist_in_loaded_assets(self):
+        reports = {report["name"]: report for report in inspect_manifest(_MANIFEST_PATH)}
+        for name, report in reports.items():
+            labels = set(report["body_labels"] + report["shape_labels"] + report["joint_labels"])
+            manifest = report["manifest"]
+            for key in (
+                "wheel_body_labels",
+                "wheel_shape_labels",
+                "suspension_joint_labels",
+                "steering_joint_labels",
+            ):
+                missing = sorted(set(manifest[key]).difference(labels))
+                self.assertEqual(missing, [], f"{name} manifest has labels not found in loaded asset for {key}")
