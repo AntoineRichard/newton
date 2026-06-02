@@ -5,6 +5,8 @@ import json
 import unittest
 from pathlib import Path
 
+from newton._src.utils.wheeled_asset_inspection import inspect_usd_asset, match_labels
+from newton.tests.unittest_utils import USD_AVAILABLE
 
 _ASSET_DIR = Path(__file__).resolve().parents[1] / "examples" / "assets" / "wheeled"
 _MANIFEST_PATH = _ASSET_DIR / "manifest.json"
@@ -52,3 +54,26 @@ class TestWheeledVehicleAssetManifest(unittest.TestCase):
             path = _ASSET_DIR / asset["file"]
             self.assertTrue(path.exists(), f"Missing asset file for {asset['name']}: {path}")
             self.assertGreater(path.stat().st_size, 0, f"Empty asset file for {asset['name']}: {path}")
+
+
+class TestWheeledVehicleAssetInspection(unittest.TestCase):
+    def test_match_labels_is_case_insensitive(self):
+        labels = ["/World/Robot/front_left_WHEEL", "/World/Robot/chassis", "/World/Robot/rear_tire"]
+        self.assertEqual(
+            match_labels(labels, ["wheel", "tire"]),
+            ["/World/Robot/front_left_WHEEL", "/World/Robot/rear_tire"],
+        )
+
+    @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
+    def test_inspect_existing_usd_reports_counts(self):
+        asset_path = Path(__file__).resolve().parent / "assets" / "cube_cylinder.usda"
+        report = inspect_usd_asset(asset_path)
+
+        self.assertEqual(report["path"], str(asset_path))
+        self.assertGreater(report["body_count"], 0)
+        self.assertGreater(report["shape_count"], 0)
+        self.assertIn("body_labels", report)
+        self.assertIn("joint_labels", report)
+        self.assertIn("shape_labels", report)
+        self.assertIn("candidate_wheel_body_labels", report)
+        self.assertIn("candidate_wheel_shape_labels", report)
