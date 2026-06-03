@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Wheeled-vehicle metadata helpers."""
+"""Wheeled-vehicle metadata and contact patch helpers."""
 
+from ._src.wheeled.contact_patch import WheelContactPatchState, update_wheel_contact_patches
 from ._src.wheeled.metadata import (
     WheeledAssetMetadata,
     WheeledModelMetadata,
@@ -16,6 +17,7 @@ from ._src.wheeled.metadata import (
 )
 
 __all__ = [
+    "WheelContactPatchState",
     "WheelMetadata",
     "WheeledAssetMetadata",
     "WheeledModelMetadata",
@@ -25,4 +27,5 @@ __all__ = [
     "load_wheeled_manifest",
     "read_wheeled_metadata",
     "register_wheeled_custom_attributes",
+    "update_wheel_contact_patches",
 ]
