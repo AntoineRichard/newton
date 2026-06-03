@@ -1,0 +1,131 @@
+#usda 1.0
+(
+    defaultPrim = "rc_car"
+    subLayers = [
+        @../../../examples/assets/wheeled/rc_car.usda@
+    ]
+)
+
+over "physicsScene"
+{
+    custom bool newton:wheeled:is_wheel = false (
+        customData = {
+            string assignment = "model"
+            string frequency = "shape"
+        }
+    )
+    custom int newton:wheeled:wheel_id = -1 (
+        customData = {
+            string assignment = "model"
+            string frequency = "shape"
+        }
+    )
+    custom int newton:wheeled:vehicle_id = -1 (
+        customData = {
+            string assignment = "model"
+            string frequency = "shape"
+        }
+    )
+    custom float newton:wheeled:wheel_radius = 0.0 (
+        customData = {
+            string assignment = "model"
+            string frequency = "shape"
+        }
+    )
+    custom float newton:wheeled:wheel_width = 0.0 (
+        customData = {
+            string assignment = "model"
+            string frequency = "shape"
+        }
+    )
+    custom bool newton:wheeled:is_wheel_body = false (
+        customData = {
+            string assignment = "model"
+            string frequency = "body"
+        }
+    )
+    custom int newton:wheeled:wheel_body_id = -1 (
+        customData = {
+            string assignment = "model"
+            string frequency = "body"
+        }
+    )
+}
+
+over "rc_car"
+{
+    over "RigidBodies"
+    {
+        over "rc_front_left_wheel"
+        {
+            custom bool newton:wheeled:is_wheel_body = true
+            custom int newton:wheeled:wheel_body_id = 0
+
+            over "Geometry"
+            {
+                over "rc_front_left_wheel"
+                {
+                    custom bool newton:wheeled:is_wheel = true
+                    custom int newton:wheeled:wheel_id = 0
+                    custom int newton:wheeled:vehicle_id = 0
+                    custom float newton:wheeled:wheel_radius = 0.055
+                    custom float newton:wheeled:wheel_width = 0.045
+                }
+            }
+        }
+
+        over "rc_rear_left_wheel"
+        {
+            custom bool newton:wheeled:is_wheel_body = true
+            custom int newton:wheeled:wheel_body_id = 1
+
+            over "Geometry"
+            {
+                over "rc_rear_left_wheel"
+                {
+                    custom bool newton:wheeled:is_wheel = true
+                    custom int newton:wheeled:wheel_id = 1
+                    custom int newton:wheeled:vehicle_id = 0
+                    custom float newton:wheeled:wheel_radius = 0.055
+                    custom float newton:wheeled:wheel_width = 0.045
+                }
+            }
+        }
+
+        over "rc_front_right_wheel"
+        {
+            custom bool newton:wheeled:is_wheel_body = true
+            custom int newton:wheeled:wheel_body_id = 2
+
+            over "Geometry"
+            {
+                over "rc_front_right_wheel"
+                {
+                    custom bool newton:wheeled:is_wheel = true
+                    custom int newton:wheeled:wheel_id = 2
+                    custom int newton:wheeled:vehicle_id = 0
+                    custom float newton:wheeled:wheel_radius = 0.055
+                    custom float newton:wheeled:wheel_width = 0.045
+                }
+            }
+        }
+
+        over "rc_rear_right_wheel"
+        {
+            custom bool newton:wheeled:is_wheel_body = true
+            custom int newton:wheeled:wheel_body_id = 3
+
+            over "Geometry"
+            {
+                over "rc_rear_right_wheel"
+                {
+                    custom bool newton:wheeled:is_wheel = true
+                    custom int newton:wheeled:wheel_id = 3
+                    custom int newton:wheeled:vehicle_id = 0
+                    custom float newton:wheeled:wheel_radius = 0.055
+                    custom float newton:wheeled:wheel_width = 0.045
+                }
+            }
+        }
+    }
+}

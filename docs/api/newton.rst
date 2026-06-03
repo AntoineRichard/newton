@@ -20,6 +20,7 @@ newton
    newton_usd
    newton_utils
    newton_viewer
+   newton_wheeled
 
 .. rubric:: Submodules
 
@@ -33,6 +34,7 @@ newton
 - :doc:`newton.usd <newton_usd>`
 - :doc:`newton.utils <newton_utils>`
 - :doc:`newton.viewer <newton_viewer>`
+- :doc:`newton.wheeled <newton_wheeled>`
 
 .. rubric:: Classes
 
