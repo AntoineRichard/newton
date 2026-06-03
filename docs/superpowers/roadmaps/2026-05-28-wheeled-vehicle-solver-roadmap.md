@@ -194,6 +194,10 @@ Exit criteria:
 
 ## Phase 2: Basic Wheel Drive And Braking
 
+Spec: `docs/superpowers/specs/2026-06-03-wheeled-vehicle-phase-2-basic-drive-braking.md`
+
+Plan: `docs/superpowers/plans/2026-06-03-wheeled-vehicle-phase-2-basic-drive-braking.md`
+
 Goal: add minimal longitudinal behavior using the Phase 1B contact patch state.
 
 Scope:

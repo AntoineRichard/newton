@@ -71,8 +71,12 @@ class TestWheelContactPatchState(unittest.TestCase):
             requested_attributes={"force"},
         )
         contacts.rigid_contact_count.assign(np.array([4], dtype=np.int32))
-        contacts.rigid_contact_shape0.assign(np.array([wheel0_shape, terrain_shape, wheel0_shape, terrain_shape], dtype=np.int32))
-        contacts.rigid_contact_shape1.assign(np.array([terrain_shape, wheel1_shape, terrain_shape, non_wheel_shape], dtype=np.int32))
+        contacts.rigid_contact_shape0.assign(
+            np.array([wheel0_shape, terrain_shape, wheel0_shape, terrain_shape], dtype=np.int32)
+        )
+        contacts.rigid_contact_shape1.assign(
+            np.array([terrain_shape, wheel1_shape, terrain_shape, non_wheel_shape], dtype=np.int32)
+        )
         contacts.rigid_contact_point0.assign(
             np.array(
                 [
@@ -214,9 +218,7 @@ class TestWheelContactPatchState(unittest.TestCase):
         contacts.rigid_contact_count.assign(np.array([2], dtype=np.int32))
         contacts.rigid_contact_shape0.assign(np.array(wheel_shapes, dtype=np.int32))
         contacts.rigid_contact_shape1.assign(np.array(terrain_shapes, dtype=np.int32))
-        contacts.rigid_contact_point0.assign(
-            np.array([[0.0, 0.0, -0.5], [0.0, 0.0, -0.5]], dtype=np.float32)
-        )
+        contacts.rigid_contact_point0.assign(np.array([[0.0, 0.0, -0.5], [0.0, 0.0, -0.5]], dtype=np.float32))
         contacts.rigid_contact_point1.assign(np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float32))
         contacts.rigid_contact_normal.assign(np.array([[0.0, 0.0, -1.0], [0.0, 0.0, -1.0]], dtype=np.float32))
 
