@@ -149,6 +149,10 @@ Exit criteria:
 
 ## Phase 1B: Newton Contact Patch Wrapper
 
+Spec: `docs/superpowers/specs/2026-06-03-wheeled-vehicle-phase-1b-contact-patch-wrapper.md`
+
+Plan: `docs/superpowers/plans/2026-06-03-wheeled-vehicle-phase-1b-contact-patch-wrapper.md`
+
 Goal: use the Phase 1A wheel tables to identify wheel-ground contacts from
 Newton's collision pipeline and estimate per-wheel contact state on a flat
 reference scene.
