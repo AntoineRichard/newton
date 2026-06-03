@@ -47,5 +47,6 @@
 - Mark every `wheel_shape_labels` entry with `wheeled:is_wheel = 1`.
 - Use `wheel_shape_labels` as the source of explicit `wheeled:wheel_radius` values when shape inference is ambiguous.
 - Use `wheel_body_labels` as the receiving bodies for wheel support forces.
-- Keep Husky `steering_joint_labels` empty for skid-steer control.
-- Treat missing suspension labels as an asset limitation, not a Phase 1A blocker, because the Phase 1B contact wrapper can use shape/body metadata only.
+- Do not carry steering or suspension labels into Phase 1A metadata tables; those joints stay in the ordinary simulation model and later control phases.
+- Do not carry `vehicle_type` into Phase 1A metadata tables; it remains descriptive fixture/report context until a later topology or control phase needs it.
+- Test both Phase 1A metadata ingestion paths: runtime annotation from the Phase 0 manifest after loading the generated fixtures, and direct loading of separate metadata-bearing USDA test fixtures with authored `wheeled:*` attributes.

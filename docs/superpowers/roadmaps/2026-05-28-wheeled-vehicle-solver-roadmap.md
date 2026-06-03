@@ -112,16 +112,18 @@ Scope:
 - Add the minimal wheeled-vehicle metadata loader or solver wrapper needed to
   consume a `ModelBuilder`/`Model` plus wheel metadata.
 - Register initial `wheeled:*` custom attributes for wheel metadata, including
-  wheel shape/body identity, radius, width, vehicle id, and steerable or driven
-  flags where needed.
-- Use the Phase 0 manifest labels as the first source of fixture metadata until
-  USD schema polish moves those fields into assets directly.
-- Resolve wheel body labels, wheel shape labels, suspension joint labels, and
-  steering joint labels into model indices.
+  wheel shape/body identity, radius, width, and vehicle id.
+- Use the Phase 0 manifest labels as the runtime annotation source, and add
+  separate metadata-bearing USDA test fixtures to exercise direct `wheeled:*`
+  custom-attribute import.
+- Resolve wheel body labels and wheel shape labels into model indices for the
+  runtime annotation path, and validate equivalent indices from authored USDA
+  attributes.
 - Build flat wheel arrays at initialization for single-world and multi-world
   models.
-- Add diagnostics that report the wheel-to-shape, wheel-to-body, and optional
-  wheel-to-joint mappings.
+- Leave steering and suspension joints to ordinary simulator dynamics and later
+  control phases rather than adding joint fields to the wheeled metadata tables.
+- Add diagnostics that report the wheel-to-shape and wheel-to-body mappings.
 
 Out of scope:
 
@@ -135,10 +137,12 @@ Out of scope:
 
 Exit criteria:
 
-- The RC-car and Husky fixtures load through the wheeled metadata path and
-  produce deterministic flat wheel arrays.
+- The RC-car and Husky fixtures load through both wheeled metadata paths:
+  runtime annotation after import, and direct import from pre-authored USDA
+  `wheeled:*` attributes.
 - Wheel shapes and wheel bodies are resolved from the Phase 0 manifest labels
-  without hard-coded runtime object references.
+  without hard-coded runtime object references, and the pre-authored USDA path
+  produces equivalent wheel identity and dimension tables.
 - The metadata path works for single-world and multi-world model construction.
 - The implementation contains no runtime collision/contact assumptions.
 - Tests fail before implementation and pass after implementation.

@@ -2,11 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Load wheeled-vehicle metadata from the Phase 0 fixture manifest, register initial `wheeled:*` custom attributes, and build deterministic flat wheel tables without doing contact or collision interpretation.
+**Goal:** Load wheeled-vehicle metadata from the Phase 0 fixture manifest and from pre-authored USDA `wheeled:*` attributes, register initial custom attributes, and build deterministic flat wheel tables without doing contact or collision interpretation.
 
-**Done when:** The RC-car and Husky Phase 00 fixtures can be loaded through a Phase 1A metadata path that resolves wheel body labels, wheel shape labels, and optional suspension/steering joint labels into model indices; finalizes shape/body custom attributes; and exposes flat arrays or diagnostics suitable for Phase 1B contact grouping.
+**Done when:** The RC-car and Husky Phase 00 fixtures can be loaded through both Phase 1A metadata paths: runtime annotation from manifest labels after import, and direct import from pre-authored USDA custom attributes. Both paths resolve wheel body labels and wheel shape labels into model indices; finalize shape/body custom attributes; and expose flat arrays or diagnostics suitable for Phase 1B contact grouping.
 
 **Scope:** Phase 1A is metadata and indexing only. It does not create contact buffers, group contacts, estimate contact patches, apply forces, build tire models, command steering/drives, or change collision behavior.
+
+Steering and suspension joints are intentionally out of scope for Phase 1A metadata. They may exist in fixture assets, but their dynamics and control behavior are handled by the simulator and later control phases rather than by the wheel table.
 
 ---
 
@@ -17,12 +19,14 @@ Use the Phase 0 outputs as the source of fixture labels and dimensions:
 - `newton/examples/assets/wheeled/manifest.json`
 - `newton/examples/assets/wheeled/rc_car.usda`
 - `newton/examples/assets/wheeled/husky.usda`
+- `newton/tests/assets/wheeled/rc_car_wheeled_attrs.usda` once authored in Phase 1A
+- `newton/tests/assets/wheeled/husky_wheeled_attrs.usda` once authored in Phase 1A
 - `docs/superpowers/reports/2026-06-01-wheeled-vehicle-phase-0-assets.md`
 
 Relevant local APIs and patterns:
 
 - `ModelBuilder.add_custom_attribute()` and `custom_attributes={...}` on `add_shape_*()` and `add_body()` already support namespaced model attributes.
-- `Model.body_label`, `Model.shape_label`, and `Model.joint_label` preserve imported labels after finalization.
+- `Model.body_label` and `Model.shape_label` preserve imported labels after finalization.
 - `Model.shape_body` maps shape indices to body indices.
 - `newton/_src/utils/wheeled_asset_inspection.py` can be reused as a test utility but should not become the runtime Phase 1A metadata path.
 
@@ -37,25 +41,25 @@ Use these initial `wheeled:*` attributes:
 | `wheeled:vehicle_id` | `SHAPE` | `wp.int32` | Vehicle index owning the wheel shape, `-1` for non-wheel shapes |
 | `wheeled:wheel_radius` | `SHAPE` | `wp.float32` | Wheel radius [m] |
 | `wheeled:wheel_width` | `SHAPE` | `wp.float32` | Wheel width [m] |
-| `wheeled:is_steerable` | `SHAPE` | `wp.bool` | Wheel has an associated steering joint |
-| `wheeled:is_driven` | `SHAPE` | `wp.bool` | Wheel is available for later drive/brake commands |
 | `wheeled:is_wheel_body` | `BODY` | `wp.bool` | Body owns at least one wheel shape |
 | `wheeled:wheel_body_id` | `BODY` | `wp.int32` | Flat wheel index for wheel bodies, `-1` for non-wheel bodies |
 
-Store optional joint mappings in the Phase 1A wheel table rather than as joint custom attributes in this first step. This keeps the custom attribute surface small and avoids guessing future command/control layouts.
+Do not resolve steering or suspension joints in Phase 1A. Those joints remain ordinary simulation structure and are not part of the wheel metadata contract.
 
 ## File Structure
 
 | File | Action | Responsibility |
 | --- | --- | --- |
 | `newton/wheeled.py` | Create | Public import surface for Phase 1A metadata helpers |
-| `newton/_src/wheeled/metadata.py` | Create | Internal dataclasses, manifest parsing, label resolution, wheel table construction |
+| `newton/_src/wheeled/metadata.py` | Create | Internal dataclasses, manifest parsing, wheel label resolution, wheel table construction |
 | `newton/_src/wheeled/__init__.py` | Create | Internal package marker and exports |
-| `newton/tests/test_wheeled_vehicle_metadata.py` | Create | Unit tests for custom attribute registration, manifest loading, label resolution, and wheel table diagnostics |
+| `newton/tests/test_wheeled_vehicle_metadata.py` | Create | Unit tests for custom attribute registration, manifest loading, wheel label resolution, and wheel table diagnostics |
+| `newton/tests/assets/wheeled/rc_car_wheeled_attrs.usda` | Create | RC-car test fixture with pre-authored `wheeled:*` wheel attributes |
+| `newton/tests/assets/wheeled/husky_wheeled_attrs.usda` | Create | Husky test fixture with pre-authored `wheeled:*` wheel attributes |
 | `docs/superpowers/roadmaps/2026-05-28-wheeled-vehicle-solver-roadmap.md` | Modify | Add the Phase 1A plan link |
 | `docs/superpowers/reports/2026-06-01-wheeled-vehicle-phase-0-assets.md` | Read | Source metadata decision notes |
 
-Do not modify `newton/examples/assets/wheeled/*.usda` in Phase 1A unless a test proves the manifest labels no longer resolve.
+Do not modify `newton/examples/assets/wheeled/*.usda` in Phase 1A unless a test proves the manifest labels no longer resolve. Author the metadata-bearing USDA fixtures as separate test assets so the runtime-annotation and pre-authored import paths can be tested independently.
 
 ## Task 1: Public Surface And Attribute Registration
 
@@ -93,8 +97,11 @@ from ._src.wheeled.metadata import (
     WheeledAssetMetadata,
     WheeledModelMetadata,
     WheelMetadata,
+    apply_wheeled_manifest,
+    apply_wheeled_manifest_metadata,
     build_wheeled_metadata,
     load_wheeled_manifest,
+    read_wheeled_metadata,
     register_wheeled_custom_attributes,
 )
 ```
@@ -135,8 +142,9 @@ contact grouping.
 Test `load_wheeled_manifest(path)` with the Phase 0 manifest:
 
 - returns two `WheeledAssetMetadata` entries named `rc_car` and `husky`;
-- preserves `vehicle_type`;
-- exposes wheel body, wheel shape, suspension joint, and steering joint labels;
+- exposes wheel body and wheel shape labels;
+- ignores descriptive manifest fields such as `vehicle_type` for Phase 1A metadata;
+- ignores `suspension_joint_labels` and `steering_joint_labels` for Phase 1A metadata, even if present in the Phase 0 manifest;
 - reads `wheel_radius_m` and `wheel_width_m` into per-asset defaults;
 - rejects duplicate asset names, missing files, and mismatched wheel body/shape list lengths.
 
@@ -151,11 +159,8 @@ Recommended dataclasses:
 class WheeledAssetMetadata:
     name: str
     file: Path
-    vehicle_type: str
     wheel_body_labels: tuple[str, ...]
     wheel_shape_labels: tuple[str, ...]
-    suspension_joint_labels: tuple[str, ...]
-    steering_joint_labels: tuple[str, ...]
     wheel_radius: float
     wheel_width: float
 ```
@@ -184,6 +189,7 @@ Commit body:
 ```text
 Parse the Phase 0 wheeled fixture manifest into typed metadata objects and
 validate the label and dimension contract before any model-index resolution.
+Descriptive topology fields such as `vehicle_type` remain out of Phase 1A.
 This keeps fixture intake separate from collision and contact logic.
 ```
 
@@ -201,8 +207,8 @@ Load `rc_car.usda` and `husky.usda` into a `ModelBuilder`, call `register_wheele
 - all manifest wheel body labels resolve to body indices;
 - shape custom attributes are populated for wheel shapes only;
 - body custom attributes are populated for wheel bodies only;
-- missing labels raise `ValueError` with the missing label and label kind;
-- RC front wheels are steerable and Husky wheels are not steerable.
+- missing wheel labels raise `ValueError` with the missing label and label kind;
+- steering and suspension labels in the manifest are not resolved or stored in Phase 1A metadata.
 
 Use `SchemaResolverPhysx()` when loading USDA so the builder state matches Phase 0 validation.
 
@@ -216,17 +222,15 @@ def apply_wheeled_manifest_metadata(
     asset: WheeledAssetMetadata,
     vehicle_id: int,
     *,
-    driven_by_default: bool = True,
 ) -> list[WheelMetadata]:
     ...
 ```
 
 Implementation notes:
 
-- Build `dict[str, int]` lookup maps from `builder.body_label`, `builder.shape_label`, and `builder.joint_label`.
+- Build `dict[str, int]` lookup maps from `builder.body_label` and `builder.shape_label` for wheel labels only.
 - Use `builder.shape_body[shape_index]` to verify each wheel shape is attached to the corresponding wheel body.
 - Populate builder custom attribute storage through the same paths used by existing custom attribute support. If direct post-import mutation is awkward, prefer a focused helper that appends values to registered custom attribute storage rather than re-importing assets.
-- Keep optional steering/suspension joint ids in returned `WheelMetadata`; do not require joint custom attributes yet.
 
 Recommended `WheelMetadata` fields:
 
@@ -237,15 +241,10 @@ class WheelMetadata:
     vehicle_id: int
     body_index: int
     shape_index: int
-    steering_joint_index: int
-    suspension_joint_index: int
     radius: float
     width: float
-    is_steerable: bool
-    is_driven: bool
 ```
 
-Use `-1` for missing optional joint indices.
 
 - [ ] **Step 3: Verify annotation tests pass**
 
@@ -265,11 +264,72 @@ Commit body:
 ```text
 Resolve Phase 0 manifest labels against imported fixture builders and annotate
 wheel shapes and bodies with wheeled metadata attributes. The returned wheel
-metadata records optional steering and suspension joints without adding contact
-logic.
+metadata intentionally excludes steering and suspension joints. Those joints stay
+under ordinary simulator dynamics and later control phases rather than Phase 1A
+wheeled metadata.
 ```
 
-## Task 4: Flat Wheel Table Construction
+## Task 4: Pre-Authored USDA Metadata Fixtures
+
+**Files:**
+- Create: `newton/tests/assets/wheeled/rc_car_wheeled_attrs.usda`
+- Create: `newton/tests/assets/wheeled/husky_wheeled_attrs.usda`
+- Modify: `newton/_src/wheeled/metadata.py`
+- Modify: `newton/tests/test_wheeled_vehicle_metadata.py`
+
+- [ ] **Step 1: Add failing pre-authored USDA tests**
+
+Add tests that register the `wheeled:*` custom attributes on a fresh `ModelBuilder`, load each metadata-authored USDA, finalize the model, and assert:
+
+- wheel shape attributes are imported directly from USDA without calling `apply_wheeled_manifest_metadata()`;
+- wheel body attributes are imported directly from USDA;
+- non-wheel shapes and bodies receive registered defaults;
+- `wheel_id`, `vehicle_id`, `wheel_radius`, and `wheel_width` match the same values used by the runtime manifest annotation path;
+- no steering, suspension, or descriptive `vehicle_type` attributes are authored or expected by Phase 1A.
+
+These tests should also compare each pre-authored USDA path against the matching runtime-annotated Phase 00 fixture so both ingestion paths prove the same wheel identity and dimension contract.
+
+- [ ] **Step 2: Author the two metadata-bearing USDA fixtures**
+
+Create deterministic test assets that mirror the Phase 00 RC-car and Husky geometry while adding only the Phase 1A `wheeled:*` custom attributes:
+
+- wheel collision prims carry `wheeled:is_wheel`, `wheeled:wheel_id`, `wheeled:vehicle_id`, `wheeled:wheel_radius`, and `wheeled:wheel_width`;
+- wheel body prims carry `wheeled:is_wheel_body` and `wheeled:wheel_body_id`;
+- steering joints, suspension joints, chassis bodies, and descriptive vehicle fields carry no Phase 1A metadata.
+
+Prefer a USDA override/reference to the Phase 00 asset if Newton's importer preserves the authored custom attributes and referenced geometry reliably. If that is not reliable, copy the simplified test geometry mechanically into the test fixture and add the attributes there. Keep the example assets unchanged.
+
+- [ ] **Step 3: Implement authored-attribute metadata intake**
+
+Add the minimal helper needed to read finalized `model.wheeled` custom attributes into `WheelMetadata` or `WheeledModelMetadata` without a manifest. This may be a dedicated function such as `read_wheeled_metadata(model)` or a `build_wheeled_metadata(model, wheel_metadata=None)` path that derives wheel rows from authored model attributes when no explicit `WheelMetadata` list is provided.
+
+Validation should reject inconsistent authored data, including wheel shapes with missing radius/width, duplicate non-negative `wheel_id` values, wheel bodies without matching `wheel_body_id` values, and wheel shapes whose `shape_body` body is not marked as a wheel body.
+
+- [ ] **Step 4: Verify pre-authored USDA tests pass**
+
+Run the focused metadata tests.
+
+- [ ] **Step 5: Commit authored USDA fixtures**
+
+Run `uvx pre-commit run -a`, then commit:
+
+```bash
+git add newton/_src/wheeled/metadata.py newton/tests/test_wheeled_vehicle_metadata.py \
+  newton/tests/assets/wheeled/rc_car_wheeled_attrs.usda \
+  newton/tests/assets/wheeled/husky_wheeled_attrs.usda
+git commit -m "Add authored wheeled metadata fixtures"
+```
+
+Commit body:
+
+```text
+Add RC-car and Husky USDA test fixtures that carry the Phase 1A wheeled custom
+attributes directly on wheel shapes and bodies. The tests now cover both runtime
+manifest annotation and pre-authored USD import paths before contact logic is
+introduced.
+```
+
+## Task 5: Flat Wheel Table Construction
 
 **Files:**
 - Modify: `newton/_src/wheeled/metadata.py`
@@ -277,14 +337,14 @@ logic.
 
 - [ ] **Step 1: Add failing wheel table tests**
 
-Add tests for `build_wheeled_metadata(model, wheel_metadata)` or equivalent that assert:
+Add tests for `build_wheeled_metadata(model, wheel_metadata=None)` or equivalent that assert:
 
 - RC car produces four wheels with deterministic ordering matching the manifest;
 - Husky produces four wheels with deterministic ordering matching the manifest;
 - shape/body index arrays match model labels;
 - radius and width arrays match manifest dimensions;
-- RC front wheel entries are steerable with valid steering joint indices;
-- Husky entries have `-1` steering and suspension joint indices;
+- runtime-annotated fixtures and matching pre-authored USDA fixtures produce equivalent wheel tables;
+- authored `wheeled:wheel_id` and `wheeled:vehicle_id` values are respected when deriving tables from finalized model attributes;
 - diagnostics can be converted to JSON-compatible dictionaries for reports/tests.
 
 - [ ] **Step 2: Implement `WheeledModelMetadata`**
@@ -298,18 +358,14 @@ class WheeledModelMetadata:
     vehicle_count: int
     wheel_shape_indices: tuple[int, ...]
     wheel_body_indices: tuple[int, ...]
-    steering_joint_indices: tuple[int, ...]
-    suspension_joint_indices: tuple[int, ...]
     wheel_radius: tuple[float, ...]
     wheel_width: tuple[float, ...]
-    is_steerable: tuple[bool, ...]
-    is_driven: tuple[bool, ...]
 
     def to_dict(self) -> dict[str, object]:
         ...
 ```
 
-This object can stay host-side in Phase 1A. Do not introduce Warp kernels until Phase 1B needs device-side contact grouping.
+This object can stay host-side in Phase 1A. It should be buildable from either explicit `WheelMetadata` rows produced by runtime manifest annotation or finalized `model.wheeled` custom attributes imported from a pre-authored USDA. Do not introduce Warp kernels until Phase 1B needs device-side contact grouping.
 
 - [ ] **Step 3: Verify wheel table tests pass**
 
@@ -332,11 +388,12 @@ Commit body:
 
 ```text
 Build deterministic host-side wheel metadata tables from annotated fixture
-models. The tables expose wheel shape, body, steering, suspension, and dimension
-fields needed by Phase 1B contact grouping.
+models. The tables expose wheel shape, body, and dimension fields needed by
+Phase 1B contact grouping. Steering and suspension remain ordinary simulation
+state rather than wheeled metadata.
 ```
 
-## Task 5: Multi-World Metadata Checks
+## Task 6: Multi-World Metadata Checks
 
 **Files:**
 - Modify: `newton/_src/wheeled/metadata.py`
@@ -349,7 +406,8 @@ Build a model with two loaded fixture instances, for example two RC cars or one 
 - `vehicle_id` values distinguish fixture instances;
 - `wheel_id` values are globally flat and deterministic;
 - all shape/body indices are unique across instances;
-- diagnostics include per-vehicle wheel counts.
+- diagnostics include per-vehicle wheel counts;
+- at least one multi-vehicle check uses runtime annotation after loading, and at least one check covers pre-authored USDA metadata or documents why duplicate authored ids require runtime reindexing first.
 
 If `ModelBuilder.add_usd()` label collisions make duplicated assets ambiguous, document that finding in the test and use one RC car plus one Husky for Phase 1A.
 
@@ -390,7 +448,7 @@ wheel ids, vehicle ids, and resolved shape/body indices remain deterministic.
 This prepares Phase 1B contact grouping without adding contact logic.
 ```
 
-## Task 6: Roadmap And API Docs
+## Task 7: Roadmap And API Docs
 
 **Files:**
 - Modify: `docs/superpowers/roadmaps/2026-05-28-wheeled-vehicle-solver-roadmap.md`
@@ -443,4 +501,4 @@ documentation for the new wheeled metadata helpers.
 
 ## Handoff To Phase 1B
 
-Phase 1B should consume `WheeledModelMetadata.wheel_shape_indices` and related arrays for contact grouping. It should not rediscover wheel labels, reread the manifest at runtime, or add raycast fallback paths. The open Phase 1B questions are how Newton contacts expose shape pairs, normals, contact points, and solver/material data, and how to keep contact grouping device-side for many vehicles.
+Phase 1B should consume `WheeledModelMetadata.wheel_shape_indices` and related arrays for contact grouping, regardless of whether Phase 1A populated them from runtime manifest annotation or from pre-authored USDA attributes. It should not rediscover wheel labels, reread the manifest at runtime, or add raycast fallback paths. The open Phase 1B questions are how Newton contacts expose shape pairs, normals, contact points, and solver/material data, and how to keep contact grouping device-side for many vehicles.
