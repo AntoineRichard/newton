@@ -119,7 +119,10 @@ Expected before implementation: import failure or missing contact-patch helpers.
 
 - [ ] **Step 1: Add `WheelContactPatchState`**
 
-Create a public data object that owns flat per-wheel arrays on the model device:
+Create a public, readable entrypoint for the wheel-indexed reduction of Newton
+`Contacts`. This object is not a collision object and should not replace or wrap
+`Contacts`; it is a reusable per-wheel output buffer sized from Phase 1A
+metadata. It should own flat per-wheel arrays on the model device:
 
 - `active`
 - `contact_count`
@@ -132,8 +135,10 @@ Create a public data object that owns flat per-wheel arrays on the model device:
 - `friction_mu_seed`
 - `normal_force`
 
-Use SI units in public docstrings. Keep the object responsible for allocation
-and clearing, not for discovering wheel metadata.
+Use SI units in public docstrings. Keep the object responsible for allocation,
+clearing, and validation of its own wheel count, not for discovering wheel
+metadata. Any temporary arrays needed for reductions may be internal, but avoid
+exposing scratch fields as public API.
 
 - [ ] **Step 2: Add `update_wheel_contact_patches()`**
 
@@ -145,9 +150,10 @@ Add a helper that accepts:
 - `wheeled_metadata`
 - `patch_state`
 
-The helper should launch kernels only. Host-side convenience diagnostics can be
-added separately for tests, but the update path must not loop over contacts or
-wheels in Python.
+The helper should treat `contacts` as the source of truth and `patch_state` as
+the destination reduction. It should launch kernels only. Host-side convenience
+diagnostics can be added separately for tests, but the update path must not loop
+over contacts or wheels in Python.
 
 - [ ] **Step 3: Export through public modules**
 

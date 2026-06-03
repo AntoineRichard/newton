@@ -87,11 +87,20 @@ directly with synthetic shape ordering.
 
 ## Output Data
 
-Add a contact-patch data object exposed through `newton.wheeled`. The exact
-class name can be chosen during implementation, but the public surface should be
-prefix-first and explicit, for example `WheelContactPatchState`.
+Newton `Contacts` remains the source of truth for collision output and solver
+input. Phase 1B should add a wheel-indexed reduction object exposed through
+`newton.wheeled` as a readable API entrypoint and reusable allocation holder.
+The exact class name can be chosen during implementation, but the public surface
+should be prefix-first and explicit, for example `WheelContactPatchState`.
 
-The object should own flat per-wheel arrays:
+`WheelContactPatchState` should not replace, wrap, or mutate `Contacts`. It
+should be a derived per-step view over the latest contact buffers, sized from
+`WheeledModelMetadata`, and updated explicitly after `model.collide()`. Any
+scratch arrays needed for reductions can be owned internally, but the public
+fields should stay focused on wheel-level diagnostics and later tire-model
+inputs.
+
+The object should expose flat per-wheel arrays:
 
 | Field | Meaning |
 | --- | --- |
@@ -106,9 +115,10 @@ The object should own flat per-wheel arrays:
 | `friction_mu_seed` | Friction coefficient seed from the counterpart shape |
 | `normal_force` | Optional normal-force diagnostic [N], `0` if unavailable |
 
-The arrays should be allocated on the model device. Host-side diagnostics can be
-provided for tests and debugging, but the runtime update path should remain
-device-side.
+The arrays should be allocated on the model device and reused across frames.
+Host-side diagnostics can be provided for tests and debugging, but the runtime
+update path should remain device-side. Construction should validate that the
+patch state wheel count matches the Phase 1A metadata used to update it.
 
 ## Patch Estimation
 
