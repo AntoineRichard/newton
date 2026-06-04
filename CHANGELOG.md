@@ -16,6 +16,7 @@
 - Add USD parsing for `NewtonSiteAPI` to mark shapes as sites.
 - Add `ViewerRTX`, a real-time ray-traced viewer powered by NVIDIA OVRTX.
 - Add `newton.wheeled.WheelContactPatchState` and `update_wheel_contact_patches()` for reducing Newton contacts into per-wheel patch diagnostics.
+- Add `newton.wheeled.WheelDriveControl`, `WheelDriveState`, `apply_wheel_drive_forces()`, and `update_wheel_drive_normal_loads()` for Coulomb-limited wheel drive/braking from contact patch diagnostics.
 
 ### Changed
 

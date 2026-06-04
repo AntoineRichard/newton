@@ -4,7 +4,7 @@
 newton.wheeled
 ==============
 
-Wheeled-vehicle metadata and contact patch helpers.
+Wheeled-vehicle metadata, contact patch, and drive helpers.
 
 .. py:module:: newton.wheeled
 .. currentmodule:: newton.wheeled
@@ -16,6 +16,8 @@ Wheeled-vehicle metadata and contact patch helpers.
    :nosignatures:
 
    WheelContactPatchState
+   WheelDriveControl
+   WheelDriveState
    WheelMetadata
    WheeledAssetMetadata
    WheeledModelMetadata
@@ -26,6 +28,7 @@ Wheeled-vehicle metadata and contact patch helpers.
    :toctree: _generated
    :signatures: long
 
+   apply_wheel_drive_forces
    apply_wheeled_manifest
    apply_wheeled_manifest_metadata
    build_wheeled_metadata
@@ -33,3 +36,4 @@ Wheeled-vehicle metadata and contact patch helpers.
    read_wheeled_metadata
    register_wheeled_custom_attributes
    update_wheel_contact_patches
+   update_wheel_drive_normal_loads
