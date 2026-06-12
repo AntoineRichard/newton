@@ -1,0 +1,108 @@
+<mujoco model="anymal">
+  <compiler angle="radian"/>
+
+  <option timestep="0.01" impratio="100" gravity="0 0 -9.81" cone="elliptic" iterations="100" ls_iterations="50"/>
+
+  <default>
+    <geom friction="1 0.5 0.001" solref="0.01"/>
+  </default>
+
+  <worldbody>
+    <body name="/World/envs/env_0/Robot/base">
+      <inertial pos="-0.0156262 0.000679619 -0.0115341" quat="0.00514525 0.712947 0.00225068 0.701195" mass="26.4596" diaginertia="1.54083 1.47549 0.252864"/>
+      <joint name="joint_1" type="free"/>
+      <geom name="capsule_9" size="0.12 0.35" quat="0.707107 0 0.707107 0" type="capsule" contype="1024" conaffinity="2147482623" friction="0.5 0.25 0.0005"/>
+      <body name="/World/envs/env_0/Robot/LF_HIP" pos="0.304 0.109 0">
+        <inertial pos="0.035047 -0.00122677 0" quat="0.502484 0.502593 0.497424 0.497473" mass="0.36586" diaginertia="0.000558279 0.000443321 0.00023849"/>
+        <joint name="/World/envs/env_0/Robot/base/LF_HAA" pos="0 0 0" axis="1 0 0" limited="true" range="-0.785398 0.610865" armature="0.01"/>
+        <body name="/World/envs/env_0/Robot/LF_THIGH" pos="0.069 0.006 0" quat="-3.09086e-08 0.707107 0.707107 3.09086e-08">
+          <inertial pos="-0.0905113 -8.79575e-05 -0.140188" quat="0.99036 -0.00771394 0.1034 -0.0918498" mass="5.1322" diaginertia="0.10915 0.107919 0.00970373"/>
+          <joint name="/World/envs/env_0/Robot/LF_HIP/LF_HFE" pos="0 0 0" axis="1 0 0" limited="true" range="-9.42478 9.42478" armature="0.01"/>
+          <geom name="box_5" size="0.0465 0.0315 0.1425" pos="0.09513 -5.67019e-09 0.1425" quat="-3.09086e-08 -0.707107 -0.707107 -3.09086e-08" type="box" contype="64" conaffinity="2147483583" friction="0.5 0.25 0.0005"/>
+          <geom name="cylinder_10" size="0.07 0.081565" pos="0.125065 -7.45445e-09 0.285" quat="0.5 -0.5 -0.5 0.5" type="cylinder" contype="64" conaffinity="2147483583" friction="0.5 0.25 0.0005"/>
+          <body name="/World/envs/env_0/Robot/LF_SHANK" pos="0.1805 -1.07586e-08 0.285" quat="0 -1 0 -4.37114e-08">
+            <inertial pos="0.00893208 -0.0218162 0.000419159" quat="0.698829 0.715221 -0.00860088 -0.00482772" mass="0.49954" diaginertia="0.0016716 0.00127452 0.000549681"/>
+            <joint name="/World/envs/env_0/Robot/LF_THIGH/LF_KFE" pos="0 0 0" axis="1 0 0" limited="true" range="-9.42478 9.42478" armature="0.01"/>
+            <geom name="cylinder_11" size="0.0175 0.19786" pos="0.00535884 -0.1 -0.164217" quat="-0.707107 0 0 0.707107" type="cylinder" contype="64" conaffinity="2147483583" friction="0.5 0.25 0.0005"/>
+            <body name="/World/envs/env_0/Robot/LF_FOOT" pos="0.02225 -0.1 -0.39246" quat="0.707107 0 0 -0.707107">
+              <inertial pos="0 -0.01559 0.15004" quat="0.999868 0.0162581 0 0" mass="0.29644" diaginertia="0.00514263 0.00513691 0.000113592"/>
+              <geom name="sphere_1" size="0.031455" pos="0 -0.00814115 0.0303832" contype="4" conaffinity="2147483643" friction="0.5 0.25 0.0005"/>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="/World/envs/env_0/Robot/LH_HIP" pos="-0.304 0.109 0" quat="0 1 -4.37114e-08 4.37114e-08">
+        <inertial pos="0.035047 0.00122676 0" quat="0.497473 0.497424 0.502593 0.502484" mass="0.36586" diaginertia="0.000558279 0.000443321 0.00023849"/>
+        <joint name="/World/envs/env_0/Robot/base/LH_HAA" pos="0 0 0" axis="1 0 0" limited="true" range="-0.785398 0.610865" armature="0.01"/>
+        <body name="/World/envs/env_0/Robot/LH_THIGH" pos="-0.069 -0.00600001 -6.03217e-09" quat="-0.707107 -6.18172e-08 0 0.707107">
+          <inertial pos="-0.0905113 8.79522e-05 -0.140188" quat="0.986364 0.0124144 0.10293 0.127814" mass="5.1322" diaginertia="0.109194 0.107873 0.00970476"/>
+          <joint name="/World/envs/env_0/Robot/LH_HIP/LH_HFE" pos="0 0 0" axis="1 0 0" limited="true" range="-9.42478 9.42478" armature="0.01"/>
+          <geom name="box_6" size="0.0465 0.0315 0.1425" pos="0.09513 -5.67019e-09 0.1425" quat="-3.09086e-08 -0.707107 -0.707107 -3.09086e-08" type="box" contype="128" conaffinity="2147483519" friction="0.5 0.25 0.0005"/>
+          <geom name="cylinder_12" size="0.07 0.081565" pos="0.125065 -7.45445e-09 0.285" quat="0.5 -0.5 -0.5 0.5" type="cylinder" contype="128" conaffinity="2147483519" friction="0.5 0.25 0.0005"/>
+          <body name="/World/envs/env_0/Robot/LH_SHANK" pos="0.1805 -1.07586e-08 0.285" quat="0 -1 0 -4.37114e-08">
+            <inertial pos="0.00893208 0.0218162 0.000419159" quat="0.715221 0.698829 0.00482768 0.00860083" mass="0.49954" diaginertia="0.0016716 0.00127452 0.000549681"/>
+            <joint name="/World/envs/env_0/Robot/LH_THIGH/LH_KFE" pos="0 0 0" axis="1 0 0" limited="true" range="-9.42478 9.42478" armature="0.01"/>
+            <geom name="cylinder_13" size="0.0175 0.19786" pos="0.00535885 0.1 -0.164217" quat="-0.707107 0 0 0.707107" type="cylinder" contype="128" conaffinity="2147483519" friction="0.5 0.25 0.0005"/>
+            <body name="/World/envs/env_0/Robot/LH_FOOT" pos="0.02225 0.1 -0.39246" quat="0.707107 0 0 -0.707107">
+              <inertial pos="0 -0.01559 0.15004" quat="0.999868 0.0162581 0 0" mass="0.29644" diaginertia="0.00514263 0.00513691 0.000113592"/>
+              <geom name="sphere_2" size="0.031455" pos="0 -0.00814115 0.0303832" contype="8" conaffinity="2147483639" friction="0.5 0.25 0.0005"/>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="/World/envs/env_0/Robot/RF_HIP" pos="0.304 -0.109 0">
+        <inertial pos="0.035047 0.00122677 0" quat="0.497473 0.497424 0.502593 0.502484" mass="0.36586" diaginertia="0.000558279 0.000443321 0.00023849"/>
+        <joint name="/World/envs/env_0/Robot/base/RF_HAA" pos="0 0 0" axis="1 0 0" limited="true" range="-0.610865 0.785398" armature="0.01"/>
+        <body name="/World/envs/env_0/Robot/RF_THIGH" pos="0.069 -0.006 0" quat="0.707107 0 0 0.707107">
+          <inertial pos="-0.0905113 8.79575e-05 -0.140188" quat="0.986364 0.0124145 0.10293 0.127815" mass="5.1322" diaginertia="0.109194 0.107873 0.00970475"/>
+          <joint name="/World/envs/env_0/Robot/RF_HIP/RF_HFE" pos="0 0 0" axis="1 0 0" limited="true" range="-9.42478 9.42478" armature="0.01"/>
+          <geom name="box_7" size="0.0465 0.0315 0.1425" pos="-0.09513 5.67019e-09 -0.1425" quat="-0.707107 0 0 0.707107" type="box" contype="256" conaffinity="2147483391" friction="0.5 0.25 0.0005"/>
+          <geom name="cylinder_14" size="0.07 0.081565" pos="-0.125065 7.45445e-09 -0.285" quat="-0.5 -0.5 0.5 0.5" type="cylinder" contype="256" conaffinity="2147483391" friction="0.5 0.25 0.0005"/>
+          <body name="/World/envs/env_0/Robot/RF_SHANK" pos="-0.1805 1.07586e-08 -0.285" quat="0 1 0 4.37114e-08">
+            <inertial pos="0.00893208 0.0218162 0.000419159" quat="0.715221 0.698829 0.00482772 0.00860088" mass="0.49954" diaginertia="0.0016716 0.00127452 0.000549681"/>
+            <joint name="/World/envs/env_0/Robot/RF_THIGH/RF_KFE" pos="0 0 0" axis="1 0 0" limited="true" range="-9.42478 9.42478" armature="0.01"/>
+            <geom name="cylinder_15" size="0.0175 0.19786" pos="-0.00535885 0.1 0.164217" quat="-3.09086e-08 -0.707107 -0.707107 -3.09086e-08" type="cylinder" contype="256" conaffinity="2147483391" friction="0.5 0.25 0.0005"/>
+            <body name="/World/envs/env_0/Robot/RF_FOOT" pos="-0.02225 0.1 0.39246" quat="-3.09086e-08 -0.707107 -0.707107 -3.09086e-08">
+              <inertial pos="0 0.01559 0.15004" quat="0.999868 -0.0162581 0 0" mass="0.29644" diaginertia="0.00514263 0.00513691 0.000113592"/>
+              <geom name="sphere_3" size="0.031455" pos="0 0.00814115 0.0303832" contype="16" conaffinity="2147483631" friction="0.5 0.25 0.0005"/>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="/World/envs/env_0/Robot/RH_HIP" pos="-0.304 -0.109 0" quat="0 1 -4.37114e-08 4.37114e-08">
+        <inertial pos="0.035047 -0.00122677 0" quat="0.502484 0.502593 0.497424 0.497473" mass="0.36586" diaginertia="0.000558279 0.000443321 0.00023849"/>
+        <joint name="/World/envs/env_0/Robot/base/RH_HAA" pos="0 0 0" axis="1 0 0" limited="true" range="-0.610865 0.785398" armature="0.01"/>
+        <body name="/World/envs/env_0/Robot/RH_THIGH" pos="-0.069 0.00599999 -6.03217e-09" quat="-3.09086e-08 0.707107 -0.707107 3.09086e-08">
+          <inertial pos="-0.0905113 -8.79522e-05 -0.140188" quat="0.99036 -0.00771395 0.1034 -0.09185" mass="5.1322" diaginertia="0.109149 0.107919 0.00970372"/>
+          <joint name="/World/envs/env_0/Robot/RH_HIP/RH_HFE" pos="0 0 0" axis="1 0 0" limited="true" range="-9.42478 9.42478" armature="0.01"/>
+          <geom name="box_8" size="0.0465 0.0315 0.1425" pos="-0.09513 5.67019e-09 -0.1425" quat="-0.707107 0 0 0.707107" type="box" contype="512" conaffinity="2147483135" friction="0.5 0.25 0.0005"/>
+          <geom name="cylinder_16" size="0.07 0.081565" pos="-0.125065 7.45445e-09 -0.285" quat="0.5 0.5 -0.5 -0.5" type="cylinder" contype="512" conaffinity="2147483135" friction="0.5 0.25 0.0005"/>
+          <body name="/World/envs/env_0/Robot/RH_SHANK" pos="-0.1805 1.07586e-08 -0.285" quat="0 1 0 4.37114e-08">
+            <inertial pos="0.00893208 -0.0218162 0.000419159" quat="0.698829 0.715221 -0.00860083 -0.00482768" mass="0.49954" diaginertia="0.0016716 0.00127452 0.000549681"/>
+            <joint name="/World/envs/env_0/Robot/RH_THIGH/RH_KFE" pos="0 0 0" axis="1 0 0" limited="true" range="-9.42478 9.42478" armature="0.01"/>
+            <geom name="cylinder_17" size="0.0175 0.19786" pos="-0.00535887 -0.1 0.164217" quat="-3.09086e-08 -0.707107 -0.707107 -3.09086e-08" type="cylinder" contype="512" conaffinity="2147483135" friction="0.5 0.25 0.0005"/>
+            <body name="/World/envs/env_0/Robot/RH_FOOT" pos="-0.02225 -0.1 0.39246" quat="-3.09086e-08 -0.707107 -0.707107 -3.09086e-08">
+              <inertial pos="0 0.01559 0.15004" quat="0.999868 -0.0162581 0 0" mass="0.29644" diaginertia="0.00514263 0.00513691 0.000113592"/>
+              <geom name="sphere_4" size="0.031455" pos="0 0.00814115 0.0303832" contype="32" conaffinity="2147483615" friction="0.5 0.25 0.0005"/>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <general joint="/World/envs/env_0/Robot/base/LF_HAA" forcerange="-1000000000 1000000000" biastype="affine"/>
+    <general joint="/World/envs/env_0/Robot/LF_HIP/LF_HFE" forcerange="-1000000000 1000000000" biastype="affine"/>
+    <general joint="/World/envs/env_0/Robot/LF_THIGH/LF_KFE" forcerange="-1000000000 1000000000" biastype="affine"/>
+    <general joint="/World/envs/env_0/Robot/base/LH_HAA" forcerange="-1000000000 1000000000" biastype="affine"/>
+    <general joint="/World/envs/env_0/Robot/LH_HIP/LH_HFE" forcerange="-1000000000 1000000000" biastype="affine"/>
+    <general joint="/World/envs/env_0/Robot/LH_THIGH/LH_KFE" forcerange="-1000000000 1000000000" biastype="affine"/>
+    <general joint="/World/envs/env_0/Robot/base/RF_HAA" forcerange="-1000000000 1000000000" biastype="affine"/>
+    <general joint="/World/envs/env_0/Robot/RF_HIP/RF_HFE" forcerange="-1000000000 1000000000" biastype="affine"/>
+    <general joint="/World/envs/env_0/Robot/RF_THIGH/RF_KFE" forcerange="-1000000000 1000000000" biastype="affine"/>
+    <general joint="/World/envs/env_0/Robot/base/RH_HAA" forcerange="-1000000000 1000000000" biastype="affine"/>
+    <general joint="/World/envs/env_0/Robot/RH_HIP/RH_HFE" forcerange="-1000000000 1000000000" biastype="affine"/>
+    <general joint="/World/envs/env_0/Robot/RH_THIGH/RH_KFE" forcerange="-1000000000 1000000000" biastype="affine"/>
+  </actuator>
+</mujoco>

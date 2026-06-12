@@ -305,6 +305,12 @@ class ModelBuilder:
             For MuJoCo, stiffness values will internally be scaled by masses.
             Users should choose kh to match their desired force-to-penetration ratio.
         """
+        preserve_contact_footprint: bool = False
+        """Whether contacts involving this shape skip cylinder/cone footprint collapse and
+        axial-rolling projection, preserving the full multi-point manifold. Intended for
+        wheel shapes so a rolling cylinder yields a contact patch rather than a collapsed
+        line. Has no effect unless the collision pipeline honors
+        :attr:`ShapeFlags.PRESERVE_CONTACT_FOOTPRINT`. Defaults to False."""
 
         def configure_sdf(
             self,
@@ -414,6 +420,7 @@ class ModelBuilder:
             shape_flags |= ShapeFlags.COLLIDE_PARTICLES if self.has_particle_collision else 0
             shape_flags |= ShapeFlags.SITE if self.is_site else 0
             shape_flags |= ShapeFlags.HYDROELASTIC if self.is_hydroelastic else 0
+            shape_flags |= ShapeFlags.PRESERVE_CONTACT_FOOTPRINT if self.preserve_contact_footprint else 0
             return shape_flags
 
         @flags.setter
@@ -422,6 +429,7 @@ class ModelBuilder:
 
             self.is_visible = bool(value & ShapeFlags.VISIBLE)
             self.is_hydroelastic = bool(value & ShapeFlags.HYDROELASTIC)
+            self.preserve_contact_footprint = bool(value & ShapeFlags.PRESERVE_CONTACT_FOOTPRINT)
 
             # Check if SITE flag is being set
             is_site_flag = bool(value & ShapeFlags.SITE)

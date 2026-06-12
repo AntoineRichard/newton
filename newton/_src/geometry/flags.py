@@ -35,6 +35,11 @@ class ShapeFlags(IntEnum):
     HYDROELASTIC = 1 << 4
     """Indicates that the shape uses hydroelastic collision."""
 
+    PRESERVE_CONTACT_FOOTPRINT = 1 << 5
+    """Skip cylinder/cone contact-footprint collapse and axial-rolling projection for
+    contacts involving this shape, preserving the full multi-point manifold (e.g. a
+    wheel-terrain contact patch instead of a collapsed line)."""
+
 
 __all__ = [
     "ParticleFlags",

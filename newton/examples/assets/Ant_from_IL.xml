@@ -1,0 +1,72 @@
+<mujoco model="ant">
+  <compiler angle="radian"/>
+
+  <option timestep="0.01" impratio="100" gravity="0 0 -9.81" cone="elliptic" ls_iterations="20"/>
+
+  <default>
+    <geom friction="1 0.5 0.001" solref="0.01"/>
+  </default>
+
+  <worldbody>
+    <body name="/World/envs/env_0/Robot/torso">
+      <inertial pos="0 0 0" quat="0.5 0.5 -0.5 0.5" mass="0.48388" diaginertia="0.0135857 0.0111204 0.0111204"/>
+      <joint name="joint_1" type="free"/>
+      <geom name="sphere_1" size="0.25" contype="4" conaffinity="2147483643" friction="0.5 0.25 0.0005"/>
+      <geom name="capsule_2" size="0.08 0.141421" pos="0.1 0.1 0" quat="0.653281 -0.270598 0.653281 0.270598" type="capsule" contype="4" conaffinity="2147483643" friction="0.5 0.25 0.0005"/>
+      <geom name="capsule_3" size="0.08 0.141421" pos="-0.1 0.1 0" quat="0.270598 -0.653281 0.270598 0.653281" type="capsule" contype="4" conaffinity="2147483643" friction="0.5 0.25 0.0005"/>
+      <geom name="capsule_4" size="0.08 0.141421" pos="-0.1 -0.1 0" quat="-0.270598 -0.653281 -0.270598 0.653281" type="capsule" contype="4" conaffinity="2147483643" friction="0.5 0.25 0.0005"/>
+      <geom name="capsule_5" size="0.08 0.141421" pos="0.1 -0.1 0" quat="0.653281 0.270598 0.653281 -0.270598" type="capsule" contype="4" conaffinity="2147483643" friction="0.5 0.25 0.0005"/>
+      <body name="/World/envs/env_0/Robot/front_left_leg" pos="0.2 0.2 0" quat="0.707107 0 -0.707107 0">
+        <inertial pos="0.1 0.1 0" quat="0.653281 0.653281 0.270598 0.270598" mass="0.0391578" diaginertia="0.000567966 0.000567966 0.000118442"/>
+        <joint name="/World/envs/env_0/Robot/joints/front_left_leg" pos="0 0 0" axis="1 0 0" limited="true" range="-0.698132 0.698132" armature="0.01"/>
+        <geom name="capsule_6" size="0.08 0.141421" pos="1.19209e-08 0.1 -0.1" quat="0 0 0.92388 0.382683" type="capsule" contype="4" conaffinity="2147483643" friction="0.5 0.25 0.0005"/>
+        <body name="/World/envs/env_0/Robot/front_left_foot" pos="2.38419e-08 0.2 -0.2" quat="0.270598 0.653282 0.270598 0.653282">
+          <inertial pos="0.2 0.2 0" quat="0.653281 0.653281 0.270598 0.270598" mass="0.0675922" diaginertia="0.00267479 0.00267479 0.000209432"/>
+          <joint name="/World/envs/env_0/Robot/joints/front_left_foot" pos="0 0 0" axis="1 0 0" limited="true" range="0.523599 1.74533" armature="0.01"/>
+          <geom name="capsule_7" size="0.08 0.282843" pos="-4.47035e-08 -0.282843 0" quat="0.5 0.5 0.5 -0.5" type="capsule" contype="4" conaffinity="2147483643" friction="0.5 0.25 0.0005"/>
+        </body>
+      </body>
+      <body name="/World/envs/env_0/Robot/front_right_leg" pos="-0.2 0.2 0" quat="0.707107 0 -0.707107 0">
+        <inertial pos="-0.1 0.1 0" quat="0.468235 0.0435784 0.705763 0.529864" mass="0.0391577" diaginertia="0.000567966 0.000567966 0.000118442"/>
+        <joint name="/World/envs/env_0/Robot/joints/front_right_leg" pos="0 0 0" axis="1 0 0" limited="true" range="-0.698132 0.698132" armature="0.01"/>
+        <geom name="capsule_8" size="0.08 0.141421" pos="-1.19209e-08 0.1 0.1" quat="0 0 0.382683 0.92388" type="capsule" contype="4" conaffinity="2147483643" friction="0.5 0.25 0.0005"/>
+        <body name="/World/envs/env_0/Robot/front_right_foot" pos="-2.38419e-08 0.2 0.2" quat="0.653281 0.270598 0.653281 0.270598">
+          <inertial pos="-0.2 0.2 0" quat="0.493279 0.00944254 0.707044 0.506632" mass="0.0675922" diaginertia="0.00267479 0.00267479 0.000209432"/>
+          <joint name="/World/envs/env_0/Robot/joints/front_right_foot" pos="0 0 0" axis="1 0 0" limited="true" range="-1.74533 -0.523599" armature="0.01"/>
+          <geom name="capsule_9" size="0.08 0.282843" pos="-1.49012e-08 0.282843 0" quat="0.5 -0.5 0.5 0.5" type="capsule" contype="4" conaffinity="2147483643" friction="0.5 0.25 0.0005"/>
+        </body>
+      </body>
+      <body name="/World/envs/env_0/Robot/left_back_leg" pos="-0.2 -0.2 0" quat="0.707107 0 -0.707107 0">
+        <inertial pos="-0.1 -0.1 0" quat="0.529864 0.705763 0.0435784 0.468235" mass="0.0391577" diaginertia="0.000567966 0.000567966 0.000118442"/>
+        <joint name="/World/envs/env_0/Robot/joints/left_back_leg" pos="0 0 0" axis="1 0 0" limited="true" range="-0.698132 0.698132" armature="0.01"/>
+        <geom name="capsule_10" size="0.08 0.141421" pos="-1.19209e-08 -0.1 0.1" quat="0 0 -0.382683 0.92388" type="capsule" contype="4" conaffinity="2147483643" friction="0.5 0.25 0.0005"/>
+        <body name="/World/envs/env_0/Robot/left_back_foot" pos="-2.38419e-08 -0.2 0.2" quat="0.270598 0.653282 0.270598 0.653282">
+          <inertial pos="-0.2 -0.2 0" quat="0.506632 0.707044 0.00944254 0.493279" mass="0.0675922" diaginertia="0.00267479 0.00267479 0.000209432"/>
+          <joint name="/World/envs/env_0/Robot/joints/left_back_foot" pos="0 0 0" axis="1 0 0" limited="true" range="-1.74533 -0.523599" armature="0.01"/>
+          <geom name="capsule_11" size="0.08 0.282843" pos="4.47035e-08 0.282843 0" quat="0.5 -0.5 0.5 0.5" type="capsule" contype="4" conaffinity="2147483643" friction="0.5 0.25 0.0005"/>
+        </body>
+      </body>
+      <body name="/World/envs/env_0/Robot/right_back_leg" pos="0.2 -0.2 0" quat="0.707107 0 -0.707107 0">
+        <inertial pos="0.1 -0.1 0" quat="0.270598 0.270598 0.653281 0.653281" mass="0.0391578" diaginertia="0.000567966 0.000567966 0.000118442"/>
+        <joint name="/World/envs/env_0/Robot/joints/right_back_leg" pos="0 0 0" axis="1 0 0" limited="true" range="-0.698132 0.698132" armature="0.01"/>
+        <geom name="capsule_12" size="0.08 0.141421" pos="1.19209e-08 -0.1 -0.1" quat="0 0 0.92388 -0.382683" type="capsule" contype="4" conaffinity="2147483643" friction="0.5 0.25 0.0005"/>
+        <body name="/World/envs/env_0/Robot/right_back_foot" pos="2.38419e-08 -0.2 -0.2" quat="0.653281 0.270598 0.653281 0.270598">
+          <inertial pos="0.2 -0.2 0" quat="0.270598 0.270598 0.653281 0.653281" mass="0.0675922" diaginertia="0.00267479 0.00267479 0.000209432"/>
+          <joint name="/World/envs/env_0/Robot/joints/right_back_foot" pos="0 0 0" axis="1 0 0" limited="true" range="0.523599 1.74533" armature="0.01"/>
+          <geom name="capsule_13" size="0.08 0.282843" pos="1.49012e-08 -0.282843 0" quat="0.5 0.5 0.5 -0.5" type="capsule" contype="4" conaffinity="2147483643" friction="0.5 0.25 0.0005"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <general joint="/World/envs/env_0/Robot/joints/front_left_leg" forcerange="-1000000 1000000" biastype="affine" gainprm="0"/>
+    <general joint="/World/envs/env_0/Robot/joints/front_left_foot" forcerange="-1000000 1000000" biastype="affine" gainprm="0"/>
+    <general joint="/World/envs/env_0/Robot/joints/front_right_leg" forcerange="-1000000 1000000" biastype="affine" gainprm="0"/>
+    <general joint="/World/envs/env_0/Robot/joints/front_right_foot" forcerange="-1000000 1000000" biastype="affine" gainprm="0"/>
+    <general joint="/World/envs/env_0/Robot/joints/left_back_leg" forcerange="-1000000 1000000" biastype="affine" gainprm="0"/>
+    <general joint="/World/envs/env_0/Robot/joints/left_back_foot" forcerange="-1000000 1000000" biastype="affine" gainprm="0"/>
+    <general joint="/World/envs/env_0/Robot/joints/right_back_leg" forcerange="-1000000 1000000" biastype="affine" gainprm="0"/>
+    <general joint="/World/envs/env_0/Robot/joints/right_back_foot" forcerange="-1000000 1000000" biastype="affine" gainprm="0"/>
+  </actuator>
+</mujoco>
