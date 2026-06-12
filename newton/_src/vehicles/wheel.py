@@ -66,6 +66,8 @@ class WheelDynamics:
         self.rolling_resistance = z(wp.float32)
         self.kp = z(wp.float32)
         self.tau_max = z(wp.float32)
+        self.max_speed = z(wp.float32)
+        self.brake_max = z(wp.float32)
         self.fallback_load = z(wp.float32)
         self.min_ref = z(wp.float32)
         self.apply_reaction = z(wp.int32)
