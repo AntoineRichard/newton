@@ -97,7 +97,9 @@ class VehicleModelData:
 
     wheel_count: int
     vehicle_count: int
+    shape_count: int
     device: wp.context.Device
+    shape_to_wheel: wp.array[wp.int32]
     wheel_shape: wp.array[wp.int32]
     wheel_body: wp.array[wp.int32]
     wheel_vehicle: wp.array[wp.int32]
@@ -338,6 +340,10 @@ def read_vehicle_model_data(model: Model, *, device: wp.context.Devicelike | Non
         raise ValueError(f"wheel ids must be contiguous 0..N-1, got {ids}")
     wheel_count = len(rows)
     shapes = [s for _, s in rows]
+    shape_count = int(model.shape_count)
+    s2w = np.full(shape_count, -1, dtype=np.int32)
+    for wid, s in rows:
+        s2w[s] = wid
 
     w_shape = np.array(shapes, dtype=np.int32)
     w_body = np.array([int(shape_body[s]) for s in shapes], dtype=np.int32)
@@ -383,7 +389,9 @@ def read_vehicle_model_data(model: Model, *, device: wp.context.Devicelike | Non
     return VehicleModelData(
         wheel_count=wheel_count,
         vehicle_count=v_count,
+        shape_count=shape_count,
         device=wp.get_device(device),
+        shape_to_wheel=arr(s2w, wp.int32),
         wheel_shape=arr(w_shape, wp.int32),
         wheel_body=arr(w_body, wp.int32),
         wheel_vehicle=arr(w_vehicle, wp.int32),
