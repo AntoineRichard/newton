@@ -69,12 +69,19 @@ Tests live in `newton/tests/test_vehicles_*.py` and
   torque mode. → PASS.
 - **Controller** (6, MuJoCo, CPU+CUDA): **drive forward** (reaches cruise
   ≈ ω·r), **skid-steer rotate-in-place**, pipeline finite. → PASS.
-- **Examples** (headless `--test`): `vehicle_husky` drives then rotates;
-  `vehicle_rc_car` drives forward and turns under steering. → PASS.
+- **Examples** (4, registered in `test_examples.py`, CPU+CUDA, null viewer):
+  `vehicle_husky` (2 worlds — also exercises runtime replication) drives then
+  rotates; `vehicle_rc_car` drives forward and turns under steering. → PASS.
 - **Flag** (4): `PRESERVE_CONTACT_FOOTPRINT` unique bit; `ShapeConfig` round-trip.
   → PASS.
 
-Total: **40 tests pass on CPU and CUDA** (`Ran 40 tests ... OK`, ~60 s).
+Total: **40 vehicle tests + 4 example tests pass on CPU and CUDA.** Regression on
+the surfaces my changes touch also passes: collision/rigid-contact (37), model +
+shapes (67). The whole-repo `-m newton.tests` run exceeds the 10-minute tool
+timeout (its runner buffers output, so a timed-out run yields no partial
+signal); the targeted regressions above cover every file these changes touch
+(new package + an additive flag + the `newton.__init__` export), so a full pass
+is not expected to differ.
 
 ## Key decisions and deviations from the spec (with rationale)
 

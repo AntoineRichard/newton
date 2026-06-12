@@ -501,6 +501,27 @@ add_example_test(
 )
 
 
+class TestVehicleExamples(unittest.TestCase):
+    pass
+
+
+add_example_test(
+    TestVehicleExamples,
+    name="vehicles.example_vehicle_husky",
+    devices=test_devices,
+    test_options={"num-frames": 240, "world-count": 2},
+    use_viewer=True,
+)
+
+add_example_test(
+    TestVehicleExamples,
+    name="vehicles.example_vehicle_rc_car",
+    devices=test_devices,
+    test_options={"num-frames": 300},
+    use_viewer=True,
+)
+
+
 class TestRobotPolicyExamples(unittest.TestCase):
     pass
 
