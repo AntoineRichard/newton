@@ -8,6 +8,7 @@ import warp as wp
 
 from newton._src.sim import Contacts, Model, State
 
+from ..geometry.types import GeoType
 from .metadata import WheeledModelMetadata
 
 
@@ -49,12 +50,31 @@ class WheelContactPatchState:
         self.shape_count = int(model.shape_count)
         self.device = model.device
         self.wheel_shape_indices = tuple(int(index) for index in wheeled_metadata.wheel_shape_indices)
+        self.wheel_body_indices = tuple(int(index) for index in wheeled_metadata.wheel_body_indices)
+        self.wheel_radius = tuple(float(radius) for radius in wheeled_metadata.wheel_radius)
+        self.wheel_width = tuple(float(width) for width in wheeled_metadata.wheel_width)
         self._wheeled_metadata = wheeled_metadata
 
         if len(self.wheel_shape_indices) != self.wheel_count:
             raise ValueError(
                 "wheeled metadata wheel_shape_indices length must match wheel_count "
                 f"({len(self.wheel_shape_indices)} != {self.wheel_count})"
+            )
+
+        if len(self.wheel_body_indices) != self.wheel_count:
+            raise ValueError(
+                "wheeled metadata wheel_body_indices length must match wheel_count "
+                f"({len(self.wheel_body_indices)} != {self.wheel_count})"
+            )
+        if len(self.wheel_radius) != self.wheel_count:
+            raise ValueError(
+                "wheeled metadata wheel_radius length must match wheel_count "
+                f"({len(self.wheel_radius)} != {self.wheel_count})"
+            )
+        if len(self.wheel_width) != self.wheel_count:
+            raise ValueError(
+                "wheeled metadata wheel_width length must match wheel_count "
+                f"({len(self.wheel_width)} != {self.wheel_count})"
             )
 
         shape_wheel_ids = np.full(self.shape_count, -1, dtype=np.int32)
@@ -64,6 +84,13 @@ class WheelContactPatchState:
             if shape_wheel_ids[shape_index] >= 0:
                 raise ValueError(f"shape {shape_index} is assigned to more than one wheel")
             shape_wheel_ids[shape_index] = wheel_id
+            body_index = self.wheel_body_indices[wheel_id]
+            if body_index < 0 or body_index >= int(model.body_count):
+                raise ValueError(f"wheel {wheel_id} has invalid body index {body_index}")
+            if self.wheel_radius[wheel_id] <= 0.0:
+                raise ValueError(f"wheel {wheel_id} has non-positive radius")
+            if self.wheel_width[wheel_id] <= 0.0:
+                raise ValueError(f"wheel {wheel_id} has non-positive width")
 
         with wp.ScopedDevice(self.device):
             self.active = wp.zeros(self.wheel_count, dtype=wp.bool)
@@ -78,6 +105,10 @@ class WheelContactPatchState:
             self.normal_force = wp.zeros(self.wheel_count, dtype=wp.float32)
 
             self._shape_wheel_ids = wp.array(shape_wheel_ids, dtype=wp.int32)
+            self._wheel_shape_indices = wp.array(np.array(self.wheel_shape_indices, dtype=np.int32), dtype=wp.int32)
+            self._wheel_body_indices = wp.array(np.array(self.wheel_body_indices, dtype=np.int32), dtype=wp.int32)
+            self._wheel_radius = wp.array(np.array(self.wheel_radius, dtype=np.float32), dtype=wp.float32)
+            self._wheel_width = wp.array(np.array(self.wheel_width, dtype=np.float32), dtype=wp.float32)
             self._point_sum = wp.zeros(self.wheel_count, dtype=wp.vec3)
             self._normal_sum = wp.zeros(self.wheel_count, dtype=wp.vec3)
             self._terrain_shape_min = wp.full(self.wheel_count, self.shape_count, dtype=wp.int32)
@@ -142,6 +173,8 @@ def update_wheel_contact_patches(
     contacts: Contacts,
     wheeled_metadata: WheeledModelMetadata,
     patch_state: WheelContactPatchState,
+    *,
+    enable_analytic_plane_patches: bool = False,
 ) -> None:
     """Update wheel contact patch diagnostics from Newton rigid contacts.
 
@@ -151,6 +184,10 @@ def update_wheel_contact_patches(
         contacts: Newton contact buffers populated by collision generation.
         wheeled_metadata: Phase 1A wheel metadata used for wheel identity.
         patch_state: Destination wheel-indexed contact patch state.
+        enable_analytic_plane_patches: Replace active wheel-cylinder against
+            plane patches with the closed-form flat cylinder-plane footprint.
+            The rigid contact buffers are not modified; this only changes the
+            per-wheel patch diagnostics.
     """
 
     patch_state._validate_update_inputs(model, wheeled_metadata)
@@ -251,6 +288,34 @@ def update_wheel_contact_patches(
         device=patch_state.device,
     )
 
+    if enable_analytic_plane_patches:
+        wp.launch(
+            kernel=_apply_analytic_plane_wheel_contact_patches,
+            dim=patch_state.wheel_count,
+            inputs=[
+                model.shape_type,
+                model.shape_body,
+                model.shape_transform,
+                state.body_q,
+                patch_state.active,
+                patch_state.terrain_shape_index,
+                patch_state._wheel_shape_indices,
+                patch_state._wheel_body_indices,
+                patch_state._wheel_radius,
+                patch_state._wheel_width,
+            ],
+            outputs=[
+                patch_state.center,
+                patch_state.normal,
+                patch_state.patch_u_extent,
+                patch_state.patch_v_extent,
+                patch_state.patch_area,
+                patch_state._tangent_u,
+                patch_state._tangent_v,
+            ],
+            device=patch_state.device,
+        )
+
 
 @wp.func
 def _contact_wheel_id(
@@ -320,6 +385,99 @@ def _patch_tangent_u(normal: wp.vec3) -> wp.vec3:
     if wp.abs(normal[2]) > 0.9:
         return wp.vec3(1.0, 0.0, 0.0)
     return _safe_normalize(wp.cross(wp.vec3(0.0, 0.0, 1.0), normal))
+
+
+@wp.func
+def _shape_transform_world(
+    shape_index: int,
+    shape_body: wp.array[wp.int32],
+    shape_transform: wp.array[wp.transform],
+    body_q: wp.array[wp.transform],
+) -> wp.transform:
+    local_transform = shape_transform[shape_index]
+    body_index = shape_body[shape_index]
+    if body_index >= 0:
+        return wp.transform_multiply(body_q[body_index], local_transform)
+    return local_transform
+
+
+@wp.kernel
+def _apply_analytic_plane_wheel_contact_patches(
+    shape_type: wp.array[wp.int32],
+    shape_body: wp.array[wp.int32],
+    shape_transform: wp.array[wp.transform],
+    body_q: wp.array[wp.transform],
+    active: wp.array[wp.bool],
+    terrain_shape_index: wp.array[wp.int32],
+    wheel_shape_indices: wp.array[wp.int32],
+    wheel_body_indices: wp.array[wp.int32],
+    wheel_radius: wp.array[wp.float32],
+    wheel_width: wp.array[wp.float32],
+    center: wp.array[wp.vec3],
+    normal: wp.array[wp.vec3],
+    patch_u_extent: wp.array[wp.float32],
+    patch_v_extent: wp.array[wp.float32],
+    patch_area: wp.array[wp.float32],
+    tangent_u: wp.array[wp.vec3],
+    tangent_v: wp.array[wp.vec3],
+):
+    wheel_id = wp.tid()
+    if not active[wheel_id]:
+        return
+
+    terrain_shape = terrain_shape_index[wheel_id]
+    wheel_shape = wheel_shape_indices[wheel_id]
+    wheel_body = wheel_body_indices[wheel_id]
+    if terrain_shape < 0 or wheel_shape < 0 or wheel_body < 0:
+        return
+    if shape_type[terrain_shape] != wp.static(int(GeoType.PLANE)):
+        return
+    if shape_type[wheel_shape] != wp.static(int(GeoType.CYLINDER)):
+        return
+
+    radius = wheel_radius[wheel_id]
+    width = wheel_width[wheel_id]
+    if radius <= 0.0 or width <= 0.0:
+        return
+
+    X_ws_plane = _shape_transform_world(terrain_shape, shape_body, shape_transform, body_q)
+    X_ws_wheel = _shape_transform_world(wheel_shape, shape_body, shape_transform, body_q)
+
+    plane_normal = _safe_normalize(wp.transform_vector(X_ws_plane, wp.vec3(0.0, 0.0, 1.0)))
+    axle_axis = _safe_normalize(wp.transform_vector(X_ws_wheel, wp.vec3(0.0, 0.0, 1.0)))
+    if wp.length(plane_normal) <= 1.0e-6 or wp.length(axle_axis) <= 1.0e-6:
+        return
+
+    axle_normal_dot = wp.dot(axle_axis, plane_normal)
+    # The closed-form footprint below assumes the wheel axle is parallel to the plane.
+    if wp.abs(axle_normal_dot) > 0.1:
+        return
+
+    plane_origin = wp.transform_get_translation(X_ws_plane)
+    wheel_center = wp.transform_get_translation(X_ws_wheel)
+    signed_height = wp.dot(wheel_center - plane_origin, plane_normal)
+    sink_depth = radius - signed_height
+    if sink_depth <= 0.0:
+        return
+
+    clamped_sink = wp.clamp(sink_depth, 0.0, 2.0 * radius)
+    chord_term = wp.max(0.0, 2.0 * radius * clamped_sink - clamped_sink * clamped_sink)
+    chord = 2.0 * wp.sqrt(chord_term)
+    if chord <= 0.0:
+        return
+
+    lateral = _safe_normalize(axle_axis - axle_normal_dot * plane_normal)
+    longitudinal = _safe_normalize(wp.cross(lateral, plane_normal))
+    if wp.length(lateral) <= 1.0e-6 or wp.length(longitudinal) <= 1.0e-6:
+        return
+
+    center[wheel_id] = wheel_center - signed_height * plane_normal
+    normal[wheel_id] = plane_normal
+    tangent_u[wheel_id] = longitudinal
+    tangent_v[wheel_id] = lateral
+    patch_u_extent[wheel_id] = chord
+    patch_v_extent[wheel_id] = width
+    patch_area[wheel_id] = chord * width
 
 
 @wp.kernel

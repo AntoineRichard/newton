@@ -13,7 +13,7 @@ buffers can be stepped by `SolverMuJoCo(use_mujoco_contacts=False)`.
 
 **Scope:** Phase 1B is contact interpretation only. It does not apply tire
 forces, add raycasts, command steering or drives, modify suspension dynamics, or
-change the Phase 1A wheel metadata contract.
+change the stabilized Phase 1A wheel metadata contract.
 
 ---
 
@@ -35,7 +35,12 @@ Spec:
 
 Relevant handoff from Phase 1A:
 
-- Consume `WheeledModelMetadata.wheel_shape_indices` and related flat arrays.
+- Consume `WheeledModelMetadata.wheel_shape_indices` and
+  `wheel_body_indices` for per-wheel contact grouping and validation.
+- Treat `wheel_vehicle_ids` and `vehicle_wheel_counts` as diagnostic/context
+  fields only; do not group contacts by vehicle.
+- Assume runtime-annotated and authored metadata already provide globally flat
+  wheel ids and vehicle ids, including after builder replication.
 - Do not rediscover wheels from labels or manifests at runtime.
 - Do not add raycast fallbacks.
 
@@ -355,7 +360,11 @@ uv run --extra dev -m newton.tests -k test_wheeled_vehicle_contact_patch
 Build a multi-world model from the same simple fixture and verify:
 
 - shape-to-wheel lookup remains correct after model finalization;
+- replicated metadata produces a `WheelContactPatchState` sized by
+  `WheeledModelMetadata.wheel_count`;
 - contacts from multiple worlds group into the expected flat wheel ids;
+- `wheel_vehicle_ids` can be inspected for diagnostics but is not used for
+  contact grouping;
 - inactive wheels remain deterministic.
 
 - [ ] **Step 2: Run focused regression tests**

@@ -15,6 +15,10 @@ import warp as wp
 from newton._src.sim import Model, ModelBuilder
 
 _WHEELED_NAMESPACE = "wheeled"
+_VEHICLE_FREQUENCY = f"{_WHEELED_NAMESPACE}:vehicle"
+_VEHICLE_INDEX_ATTR = f"{_WHEELED_NAMESPACE}:vehicle_index"
+_WHEEL_FREQUENCY = f"{_WHEELED_NAMESPACE}:wheel"
+_WHEEL_INDEX_ATTR = f"{_WHEELED_NAMESPACE}:wheel_index"
 
 
 @dataclass(frozen=True)
@@ -28,6 +32,7 @@ class WheeledAssetMetadata:
         wheel_shape_labels: Wheel collision shape labels.
         wheel_radius: Wheel radius [m].
         wheel_width: Wheel width [m].
+        axle_joint_labels: Optional axle joint labels.
     """
 
     name: str
@@ -36,6 +41,7 @@ class WheeledAssetMetadata:
     wheel_shape_labels: tuple[str, ...]
     wheel_radius: float
     wheel_width: float
+    axle_joint_labels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -104,16 +110,56 @@ def register_wheeled_custom_attributes(builder: ModelBuilder) -> None:
         builder: Model builder to receive `wheeled:*` attributes.
     """
 
-    specs = (
-        ("is_wheel", Model.AttributeFrequency.SHAPE, wp.bool, False),
-        ("wheel_id", Model.AttributeFrequency.SHAPE, wp.int32, -1),
-        ("vehicle_id", Model.AttributeFrequency.SHAPE, wp.int32, -1),
-        ("wheel_radius", Model.AttributeFrequency.SHAPE, wp.float32, 0.0),
-        ("wheel_width", Model.AttributeFrequency.SHAPE, wp.float32, 0.0),
-        ("is_wheel_body", Model.AttributeFrequency.BODY, wp.bool, False),
-        ("wheel_body_id", Model.AttributeFrequency.BODY, wp.int32, -1),
+    builder.add_custom_frequency(
+        ModelBuilder.CustomFrequency(
+            name="vehicle",
+            namespace=_WHEELED_NAMESPACE,
+            usd_prim_filter=_usd_is_vehicle_prim,
+        )
     )
-    for name, frequency, dtype, default in specs:
+    builder.add_custom_attribute(
+        ModelBuilder.CustomAttribute(
+            name="vehicle_index",
+            frequency=_VEHICLE_FREQUENCY,
+            assignment=Model.AttributeAssignment.MODEL,
+            dtype=wp.int32,
+            default=-1,
+            namespace=_WHEELED_NAMESPACE,
+            references=_VEHICLE_FREQUENCY,
+            usd_attribute_name="newton:wheeled:vehicle_id",
+        )
+    )
+
+    builder.add_custom_frequency(
+        ModelBuilder.CustomFrequency(
+            name="wheel",
+            namespace=_WHEELED_NAMESPACE,
+            usd_prim_filter=_usd_is_wheel_prim,
+        )
+    )
+    builder.add_custom_attribute(
+        ModelBuilder.CustomAttribute(
+            name="wheel_index",
+            frequency=_WHEEL_FREQUENCY,
+            assignment=Model.AttributeAssignment.MODEL,
+            dtype=wp.int32,
+            default=-1,
+            namespace=_WHEELED_NAMESPACE,
+            references=_WHEEL_FREQUENCY,
+            usd_attribute_name="newton:wheeled:wheel_id",
+        )
+    )
+
+    specs = (
+        ("is_wheel", Model.AttributeFrequency.SHAPE, wp.bool, False, None),
+        ("wheel_id", Model.AttributeFrequency.SHAPE, wp.int32, -1, _WHEEL_FREQUENCY),
+        ("vehicle_id", Model.AttributeFrequency.SHAPE, wp.int32, -1, _VEHICLE_FREQUENCY),
+        ("wheel_radius", Model.AttributeFrequency.SHAPE, wp.float32, 0.0, None),
+        ("wheel_width", Model.AttributeFrequency.SHAPE, wp.float32, 0.0, None),
+        ("is_wheel_body", Model.AttributeFrequency.BODY, wp.bool, False, None),
+        ("wheel_body_id", Model.AttributeFrequency.BODY, wp.int32, -1, _WHEEL_FREQUENCY),
+    )
+    for name, frequency, dtype, default, references in specs:
         builder.add_custom_attribute(
             ModelBuilder.CustomAttribute(
                 name=name,
@@ -122,6 +168,7 @@ def register_wheeled_custom_attributes(builder: ModelBuilder) -> None:
                 dtype=dtype,
                 default=default,
                 namespace=_WHEELED_NAMESPACE,
+                references=references,
             )
         )
 
@@ -169,6 +216,7 @@ def load_wheeled_manifest(path: str | Path) -> tuple[WheeledAssetMetadata, ...]:
 
         wheel_body_labels = _require_str_tuple(raw_asset, "wheel_body_labels", name)
         wheel_shape_labels = _require_str_tuple(raw_asset, "wheel_shape_labels", name)
+        axle_joint_labels = _optional_str_tuple(raw_asset, "axle_joint_labels", name)
         if len(wheel_body_labels) != len(wheel_shape_labels):
             raise ValueError(
                 f"asset {name} wheel_shape_labels length must match wheel_body_labels length "
@@ -176,6 +224,11 @@ def load_wheeled_manifest(path: str | Path) -> tuple[WheeledAssetMetadata, ...]:
             )
         if not wheel_body_labels:
             raise ValueError(f"asset {name} wheel_body_labels must not be empty")
+        if axle_joint_labels and len(axle_joint_labels) != len(wheel_body_labels):
+            raise ValueError(
+                f"asset {name} axle_joint_labels length must match wheel_body_labels length "
+                f"({len(axle_joint_labels)} != {len(wheel_body_labels)})"
+            )
 
         reference_dimensions = raw_asset.get("reference_dimensions")
         if not isinstance(reference_dimensions, dict):
@@ -191,6 +244,7 @@ def load_wheeled_manifest(path: str | Path) -> tuple[WheeledAssetMetadata, ...]:
                 wheel_shape_labels=wheel_shape_labels,
                 wheel_radius=wheel_radius,
                 wheel_width=wheel_width,
+                axle_joint_labels=axle_joint_labels,
             )
         )
 
@@ -229,6 +283,18 @@ def apply_wheeled_manifest_metadata(
     shape_by_label = _label_lookup(builder.shape_label, asset.name, "shape")
 
     wheels: list[WheelMetadata] = []
+    _reserve_custom_frequency_rows(
+        builder,
+        frequency=_VEHICLE_FREQUENCY,
+        index_attribute=_VEHICLE_INDEX_ATTR,
+        count=vehicle_id + 1,
+    )
+    _reserve_custom_frequency_rows(
+        builder,
+        frequency=_WHEEL_FREQUENCY,
+        index_attribute=_WHEEL_INDEX_ATTR,
+        count=wheel_id_start + len(asset.wheel_body_labels),
+    )
     for offset, (body_label, shape_label) in enumerate(
         zip(asset.wheel_body_labels, asset.wheel_shape_labels, strict=True)
     ):
@@ -465,6 +531,20 @@ def _require_str_tuple(raw: dict[str, Any], key: str, asset_name: str) -> tuple[
     return tuple(out)
 
 
+def _optional_str_tuple(raw: dict[str, Any], key: str, asset_name: str) -> tuple[str, ...]:
+    value = raw.get(key)
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError(f"asset {asset_name} {key} must be a list when provided")
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item:
+            raise ValueError(f"asset {asset_name} {key} entries must be non-empty strings")
+        out.append(item)
+    return tuple(out)
+
+
 def _require_positive_float(raw: dict[str, Any], key: str, asset_name: str) -> float:
     value = raw.get(key)
     if not isinstance(value, int | float):
@@ -479,6 +559,8 @@ def _require_registered(builder: ModelBuilder) -> None:
     missing = sorted(
         key
         for key in (
+            _VEHICLE_INDEX_ATTR,
+            _WHEEL_INDEX_ATTR,
             "wheeled:is_wheel",
             "wheeled:wheel_id",
             "wheeled:vehicle_id",
@@ -491,6 +573,38 @@ def _require_registered(builder: ModelBuilder) -> None:
     )
     if missing:
         raise ValueError(f"wheeled custom attributes are not registered: {missing}")
+
+
+def _reserve_custom_frequency_rows(
+    builder: ModelBuilder,
+    *,
+    frequency: str,
+    index_attribute: str,
+    count: int,
+) -> None:
+    if count <= 0:
+        return
+    _require_registered(builder)
+    current = int(builder._custom_frequency_counts.get(frequency, 0))
+    for index in range(current, count):
+        builder.add_custom_values(**{index_attribute: index})
+
+
+def _usd_is_vehicle_prim(prim: Any, _context: dict[str, Any]) -> bool:
+    return _usd_has_true_attribute(prim, "newton:wheeled:is_vehicle")
+
+
+def _usd_is_wheel_prim(prim: Any, _context: dict[str, Any]) -> bool:
+    return _usd_has_true_attribute(prim, "newton:wheeled:is_wheel")
+
+
+def _usd_has_true_attribute(prim: Any, attribute_name: str) -> bool:
+    if not prim or prim.IsPseudoRoot():
+        return False
+    attr = prim.GetAttribute(attribute_name)
+    if not attr or not attr.HasAuthoredValueOpinion():
+        return False
+    return bool(attr.Get())
 
 
 def _label_lookup(labels: Sequence[str], asset_name: str, label_kind: str) -> dict[str, int]:

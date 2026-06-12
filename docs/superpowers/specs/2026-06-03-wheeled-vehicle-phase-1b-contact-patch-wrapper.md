@@ -29,8 +29,8 @@ collision engine, and normal support remains owned by the wrapped rigid solver.
   model in this phase.
 - Do not add steering, drive, brake, motor, differential, or suspension control
   behavior.
-- Do not change the Phase 1A metadata schema beyond using the existing wheel
-  shape/body arrays.
+- Do not change the stabilized Phase 1A metadata schema. Phase 1B consumes it,
+  but contact grouping uses only the flat wheel shape/body arrays.
 - Do not replace Newton's collision engine or create a separate analytical
   plane-support kernel.
 - Do not implement hydroelastic wheel-terrain handling. Keep that as a later
@@ -47,6 +47,19 @@ Phase 1B depends on:
 - `Model.shape_material_mu`
 - Optional `Contacts.force` when contact force reporting has been requested and
   the wrapped solver has populated it.
+
+Phase 1A handoff:
+
+- `WheeledModelMetadata.wheel_shape_indices` provides the flat wheel index to
+  shape mapping used for contact grouping.
+- `WheeledModelMetadata.wheel_body_indices` provides the corresponding wheel
+  bodies for validation and downstream diagnostics.
+- `WheeledModelMetadata.wheel_vehicle_ids` and `vehicle_wheel_counts` are
+  diagnostic/context fields in Phase 1B. They must not be used to group
+  contacts.
+- Runtime-annotated and pre-authored USDA metadata should already have globally
+  flat wheel ids and vehicle ids, including after builder replication. Phase 1B
+  must not reindex wheels, reread manifests, or rediscover wheels from labels.
 
 Relevant rigid contact fields:
 
@@ -66,7 +79,8 @@ shapes.
 ## Contact Interpretation
 
 A rigid contact is a wheel contact when either contact shape is present in the
-Phase 1A wheel shape table.
+Phase 1A wheel shape table. The table is already flat across worlds and
+replicated assets.
 
 For each active wheel contact:
 
@@ -185,7 +199,9 @@ Add `unittest` coverage for:
   a solver that supports contact force reporting.
 - `SolverMuJoCo(use_mujoco_contacts=False)` stepping with Newton-generated
   contacts while the wheeled layer reads the same contact buffers.
-- Single-world and multi-world model construction.
+- Single-world and multi-world model construction, including replicated
+  metadata whose patch arrays are sized by `wheel_count` and indexed by flat
+  wheel id.
 
 Tests should fail before implementation and pass after implementation.
 
@@ -195,6 +211,8 @@ Tests should fail before implementation and pass after implementation.
   by the collision pipeline.
 - Contact grouping uses the Phase 1A wheel shape arrays and does not rediscover
   wheels from labels or manifests at runtime.
+- `wheel_vehicle_ids` remains diagnostic/context only; changing vehicle
+  grouping must not change per-wheel contact grouping.
 - The support normal is correct regardless of whether the wheel is shape 0 or
   shape 1 in the contact pair.
 - Material and optional normal-force diagnostics are reported without applying

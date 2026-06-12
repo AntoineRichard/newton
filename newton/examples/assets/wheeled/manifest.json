@@ -45,6 +45,12 @@
       "steering_joint_labels": [
         "/rc_car/Joints/rc_front_left_steering",
         "/rc_car/Joints/rc_front_right_steering"
+      ],
+      "axle_joint_labels": [
+        "/rc_car/Joints/rc_front_left_axle",
+        "/rc_car/Joints/rc_rear_left_axle",
+        "/rc_car/Joints/rc_front_right_axle",
+        "/rc_car/Joints/rc_rear_right_axle"
       ]
     },
     {
@@ -73,7 +79,13 @@
         "/husky/RigidBodies/husky_rear_right_wheel/Geometry/husky_rear_right_wheel"
       ],
       "suspension_joint_labels": [],
-      "steering_joint_labels": []
+      "steering_joint_labels": [],
+      "axle_joint_labels": [
+        "/husky/Joints/husky_front_left_axle",
+        "/husky/Joints/husky_rear_left_axle",
+        "/husky/Joints/husky_front_right_axle",
+        "/husky/Joints/husky_rear_right_axle"
+      ]
     }
   ]
 }

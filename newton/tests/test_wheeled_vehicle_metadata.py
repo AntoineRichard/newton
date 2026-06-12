@@ -38,6 +38,8 @@ class TestWheeledMetadataRegistration(unittest.TestCase):
         newton.wheeled.register_wheeled_custom_attributes(builder)
 
         expected = {
+            "wheeled:vehicle_index",
+            "wheeled:wheel_index",
             "wheeled:is_wheel",
             "wheeled:wheel_id",
             "wheeled:vehicle_id",
@@ -189,6 +191,25 @@ class TestWheeledManifestAnnotation(unittest.TestCase):
         self.assertEqual(table.vehicle_wheel_counts, (4, 4))
         self.assertEqual(sorted(table.wheel_shape_indices), list(table.wheel_shape_indices))
 
+    def test_replicated_runtime_metadata_has_unique_wheel_ids(self):
+        asset = _asset_by_name("rc_car")
+        template = _load_fixture_builder(asset)
+        newton.wheeled.apply_wheeled_manifest_metadata(template, asset, vehicle_id=0)
+
+        scene = newton.ModelBuilder()
+        scene.replicate(template, 2)
+        model = scene.finalize(device="cpu")
+
+        wheels = newton.wheeled.read_wheeled_metadata(model)
+        table = newton.wheeled.build_wheeled_metadata(model)
+        self.assertEqual([wheel.wheel_id for wheel in wheels], list(range(8)))
+        self.assertEqual(table.wheel_count, 8)
+        self.assertEqual(table.vehicle_count, 2)
+        self.assertEqual(table.wheel_vehicle_ids, (0, 0, 0, 0, 1, 1, 1, 1))
+        self.assertEqual(table.vehicle_wheel_counts, (4, 4))
+        self.assertEqual(model.get_custom_frequency_count("wheeled:vehicle"), 2)
+        np.testing.assert_allclose(table.wheel_radius, (0.055,) * 8)
+
 
 class TestWheeledModelMetadata(unittest.TestCase):
     def test_builds_table_from_authored_model_attributes(self):
@@ -271,6 +292,26 @@ class TestWheeledAuthoredUsdMetadata(unittest.TestCase):
                 self.assertEqual(authored_table.wheel_vehicle_ids, runtime_table.wheel_vehicle_ids)
                 np.testing.assert_allclose(authored_table.wheel_radius, runtime_table.wheel_radius)
                 np.testing.assert_allclose(authored_table.wheel_width, runtime_table.wheel_width)
+
+    def test_replicated_authored_metadata_has_unique_wheel_ids(self):
+        authored_path = _TEST_ASSET_DIR / "rc_car_wheeled_attrs.usda"
+        template = newton.ModelBuilder()
+        newton.wheeled.register_wheeled_custom_attributes(template)
+        template.add_usd(str(authored_path), schema_resolvers=[newton.usd.SchemaResolverPhysx()])
+
+        scene = newton.ModelBuilder()
+        scene.replicate(template, 2)
+        model = scene.finalize(device="cpu")
+
+        wheels = newton.wheeled.read_wheeled_metadata(model)
+        table = newton.wheeled.build_wheeled_metadata(model)
+        self.assertEqual([wheel.wheel_id for wheel in wheels], list(range(8)))
+        self.assertEqual(table.wheel_count, 8)
+        self.assertEqual(table.vehicle_count, 2)
+        self.assertEqual(table.wheel_vehicle_ids, (0, 0, 0, 0, 1, 1, 1, 1))
+        self.assertEqual(table.vehicle_wheel_counts, (4, 4))
+        self.assertEqual(model.get_custom_frequency_count("wheeled:vehicle"), 2)
+        np.testing.assert_allclose(table.wheel_radius, (0.055,) * 8)
 
 
 if __name__ == "__main__":

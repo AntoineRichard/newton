@@ -480,7 +480,7 @@ def get_custom_attribute_declarations(prim: Usd.Prim) -> dict[str, ModelBuilder.
     """
     Get custom attribute declarations from a USD prim, typically from a ``PhysicsScene`` prim.
 
-    Supports metadata format with assignment and frequency specified as ``customData``:
+    Supports metadata format with assignment, frequency, and optional references specified as ``customData``:
 
     .. code-block:: usda
 
@@ -547,9 +547,10 @@ def get_custom_attribute_declarations(prim: Usd.Prim) -> dict[str, ModelBuilder.
 
         default_value = attr.Get()
 
-        # Try to read customData for assignment and frequency
+        # Try to read customData for assignment, frequency, and optional references
         assignment_meta = attr.GetCustomDataByKey("assignment")
         frequency_meta = attr.GetCustomDataByKey("frequency")
+        references_meta = attr.GetCustomDataByKey("references")
 
         if assignment_meta and frequency_meta:
             # Metadata format
@@ -581,6 +582,7 @@ def get_custom_attribute_declarations(prim: Usd.Prim) -> dict[str, ModelBuilder.
             dtype=dtype,
             default=converted_value,
             namespace=namespace,
+            references=references_meta if isinstance(references_meta, str) and references_meta else None,
         )
 
         out[custom_attr.key] = custom_attr

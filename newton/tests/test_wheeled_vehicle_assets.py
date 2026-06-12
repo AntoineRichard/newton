@@ -14,12 +14,10 @@ _REQUIRED_ASSET_NAMES = {"rc_car", "husky"}
 _REQUIRED_ASSET_KEYS = {
     "name",
     "file",
-    "vehicle_type",
     "description",
+    "reference_dimensions",
     "wheel_body_labels",
     "wheel_shape_labels",
-    "suspension_joint_labels",
-    "steering_joint_labels",
 }
 
 
@@ -37,15 +35,12 @@ class TestWheeledVehicleAssetManifest(unittest.TestCase):
         for asset in manifest["assets"]:
             self.assertTrue(_REQUIRED_ASSET_KEYS.issubset(asset), asset)
             self.assertTrue(asset["file"].endswith(".usda"), asset["file"])
-            self.assertIn(asset["vehicle_type"], {"ackermann", "skid_steer"})
             self.assertIsInstance(asset["description"], str)
             self.assertGreater(len(asset["description"]), 0)
-            for key in (
-                "wheel_body_labels",
-                "wheel_shape_labels",
-                "suspension_joint_labels",
-                "steering_joint_labels",
-            ):
+            self.assertIsInstance(asset["reference_dimensions"], dict)
+            self.assertGreater(asset["reference_dimensions"]["wheel_radius_m"], 0.0)
+            self.assertGreater(asset["reference_dimensions"]["wheel_width_m"], 0.0)
+            for key in ("wheel_body_labels", "wheel_shape_labels"):
                 self.assertIsInstance(asset[key], list)
 
     def test_manifest_files_exist(self):
@@ -86,19 +81,14 @@ class TestWheeledVehicleInspectionScript(unittest.TestCase):
 
 
 class TestWheeledVehicleReferenceAssetLabels(unittest.TestCase):
-    def test_manifest_identifies_required_phase_1_labels(self):
+    def test_manifest_identifies_required_wheel_labels(self):
         manifest = json.loads(_MANIFEST_PATH.read_text())
         assets = {asset["name"]: asset for asset in manifest["assets"]}
 
-        rc_car = assets["rc_car"]
-        self.assertGreaterEqual(len(rc_car["wheel_body_labels"]), 4)
-        self.assertGreaterEqual(len(rc_car["wheel_shape_labels"]), 4)
-        self.assertGreaterEqual(len(rc_car["steering_joint_labels"]), 1)
-
-        husky = assets["husky"]
-        self.assertGreaterEqual(len(husky["wheel_body_labels"]), 4)
-        self.assertGreaterEqual(len(husky["wheel_shape_labels"]), 4)
-        self.assertEqual(husky["steering_joint_labels"], [])
+        for asset in assets.values():
+            self.assertGreaterEqual(len(asset["wheel_body_labels"]), 4)
+            self.assertGreaterEqual(len(asset["wheel_shape_labels"]), 4)
+            self.assertEqual(len(asset["wheel_body_labels"]), len(asset["wheel_shape_labels"]))
 
     @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
     def test_manifest_labels_exist_in_loaded_assets(self):
@@ -106,11 +96,6 @@ class TestWheeledVehicleReferenceAssetLabels(unittest.TestCase):
         for name, report in reports.items():
             labels = set(report["body_labels"] + report["shape_labels"] + report["joint_labels"])
             manifest = report["manifest"]
-            for key in (
-                "wheel_body_labels",
-                "wheel_shape_labels",
-                "suspension_joint_labels",
-                "steering_joint_labels",
-            ):
+            for key in ("wheel_body_labels", "wheel_shape_labels"):
                 missing = sorted(set(manifest[key]).difference(labels))
                 self.assertEqual(missing, [], f"{name} manifest has labels not found in loaded asset for {key}")

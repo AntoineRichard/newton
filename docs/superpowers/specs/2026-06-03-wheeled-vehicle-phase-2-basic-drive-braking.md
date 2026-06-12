@@ -32,6 +32,20 @@ only wheel-specific longitudinal drive/brake forces in this phase.
 - Do not require new USD schema work for the first implementation.
 - Do not make hydroelastic terrain behavior part of this phase.
 
+## Phase 1A Handoff
+
+Phase 2 consumes the stabilized Phase 1A `WheeledModelMetadata` contract:
+
+- Drive and brake commands are per-wheel and indexed by flat wheel id. Use
+  `wheel_body_indices`, `wheel_shape_indices`, `wheel_radius`, and `wheel_width`
+  for force application and diagnostics.
+- `wheel_vehicle_ids` and `vehicle_wheel_counts` are available for diagnostics
+  or command partitioning, but the first drive/brake API should not require
+  vehicle-level grouping.
+- Runtime-annotated and pre-authored USDA metadata should already have globally
+  flat wheel ids and vehicle ids, including after builder replication. Phase 2
+  must not reindex wheels, reread manifests, or rediscover wheels from labels.
+
 ## Public API Shape
 
 Keep the API readable but narrow. Candidate public names:
@@ -170,7 +184,8 @@ forces; in that case the configured fallback load remains the source.
 
 Add `unittest` coverage for:
 
-- Public imports and allocation of drive control/state arrays.
+- Public imports and allocation of drive control/state arrays sized by
+  `WheeledModelMetadata.wheel_count`.
 - Inactive wheel patches applying zero force.
 - Drive torque converting to longitudinal force and clipping to `mu * normal_load`.
 - Brake torque opposing current longitudinal/slip velocity without accelerating a
@@ -183,10 +198,14 @@ Add `unittest` coverage for:
   friction handled explicitly.
 - A skid-steer-style fixture rotating or yawing from opposite left/right wheel
   force commands.
+- Replicated metadata whose drive control/state arrays remain indexed by flat
+  wheel id, with vehicle ids used only for optional diagnostics or command
+  partitioning.
 
 ## Acceptance Criteria
 
-- Basic drive/brake force computation is batched and device-side.
+- Basic drive/brake force computation is batched, device-side, and indexed by
+  flat wheel id.
 - Longitudinal wheel forces are applied at Phase 1B patch centers as external
   wheel-body wrenches.
 - Force limits use explicit normal-load and friction sources.

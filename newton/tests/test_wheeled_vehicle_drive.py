@@ -275,7 +275,9 @@ class TestWheelDriveForces(unittest.TestCase):
         newton.wheeled.apply_wheel_drive_forces(model, state, metadata, patch_state, control, drive_state)
 
         np.testing.assert_allclose(drive_state.normal_load.numpy(), np.array([12.0, 3.0], dtype=np.float32), atol=1e-6)
-        np.testing.assert_allclose(drive_state.applied_force.numpy(), np.array([12.0, 3.0], dtype=np.float32), atol=1e-6)
+        np.testing.assert_allclose(
+            drive_state.applied_force.numpy(), np.array([12.0, 3.0], dtype=np.float32), atol=1e-6
+        )
 
         patch_state.active.assign(np.array([False, True], dtype=bool))
         patch_state.normal_force.assign(np.array([0.0, 4.0], dtype=np.float32))

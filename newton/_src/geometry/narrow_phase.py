@@ -133,7 +133,7 @@ def write_contact_simple(
         )
 
 
-def create_narrow_phase_primitive_kernel(writer_func: Any):
+def create_narrow_phase_primitive_kernel(writer_func: Any, *, enable_plane_cylinder_contact_collapse: bool = True):
     """
     Create a kernel for fast analytical collision detection of primitive shapes.
 
@@ -144,11 +144,14 @@ def create_narrow_phase_primitive_kernel(writer_func: Any):
 
     Args:
         writer_func: Contact writer function (e.g., write_contact_simple)
+        enable_plane_cylinder_contact_collapse: Whether plane-cylinder pairs should use the analytical
+            primitive contact set. Disable to route them through GJK/MPR for
+            contact-quality diagnostics.
 
     Returns:
         A warp kernel for primitive collision detection
     """
-    _module = f"narrow_phase_primitive_{writer_func.__name__}"
+    _module = f"narrow_phase_primitive_{writer_func.__name__}_{enable_plane_cylinder_contact_collapse}"
 
     @wp.kernel(enable_backward=False, module=_module)
     def narrow_phase_primitive_kernel(
@@ -214,13 +217,15 @@ def create_narrow_phase_primitive_kernel(writer_func: Any):
                 shape_a, shape_b = shape_b, shape_a
                 type_a, type_b = type_b, type_a
 
-            # Check if both shapes are hydroelastic - route to SDF-SDF pipeline
+            # Check if both shapes are hydroelastic - route to SDF hydroelastic pipeline.
+            # Analytic plane + SDF pairs are supported; plane-plane pairs have no finite contact patch.
             is_hydro_a = (shape_flags[shape_a] & ShapeFlags.HYDROELASTIC) != 0
             is_hydro_b = (shape_flags[shape_b] & ShapeFlags.HYDROELASTIC) != 0
             if is_hydro_a and is_hydro_b and shape_pairs_sdf_sdf:
-                idx = wp.atomic_add(shape_pairs_sdf_sdf_count, 0, 1)
-                if idx < shape_pairs_sdf_sdf.shape[0]:
-                    shape_pairs_sdf_sdf[idx] = wp.vec2i(shape_a, shape_b)
+                if type_a != GeoType.PLANE or type_b != GeoType.PLANE:
+                    idx = wp.atomic_add(shape_pairs_sdf_sdf_count, 0, 1)
+                    if idx < shape_pairs_sdf_sdf.shape[0]:
+                        shape_pairs_sdf_sdf[idx] = wp.vec2i(shape_a, shape_b)
                 continue
 
             # Get shape data
@@ -431,7 +436,7 @@ def create_narrow_phase_primitive_kernel(writer_func: Any):
             # Plane-Cylinder collision (type_a=PLANE=0, type_b=CYLINDER=5)
             # Produces up to 4 contacts
             # -----------------------------------------------------------------
-            elif is_plane_a and is_cylinder_b:
+            elif is_plane_a and is_cylinder_b and wp.static(enable_plane_cylinder_contact_collapse):
                 plane_normal = wp.quat_rotate(quat_a, wp.vec3(0.0, 0.0, 1.0))
                 cylinder_axis = wp.quat_rotate(quat_b, wp.vec3(0.0, 0.0, 1.0))
                 cylinder_radius = scale_b[0]
@@ -894,8 +899,9 @@ def narrow_phase_find_mesh_triangle_overlaps_kernel(
         )
 
 
-def create_narrow_phase_process_mesh_triangle_contacts_kernel(writer_func: Any):
-    _module = f"narrow_phase_mesh_tri_{writer_func.__name__}"
+def create_narrow_phase_process_mesh_triangle_contacts_kernel(writer_func: Any, post_process_contact: Any = None):
+    _ppc = post_process_contact.__name__ if post_process_contact is not None else "default"
+    _module = f"narrow_phase_mesh_tri_{writer_func.__name__}_{_ppc}"
 
     @wp.kernel(enable_backward=False, module=_module)
     def narrow_phase_process_mesh_triangle_contacts_kernel(
@@ -982,8 +988,8 @@ def create_narrow_phase_process_mesh_triangle_contacts_kernel(writer_func: Any):
             gap_b = shape_gap[shape_b]
             gap_sum = gap_a + gap_b
 
-            # Compute and write contacts using GJK/MPR with standard post-processing
-            wp.static(create_compute_gjk_mpr_contacts(writer_func))(
+            # Compute and write contacts using GJK/MPR with selected post-processing.
+            wp.static(create_compute_gjk_mpr_contacts(writer_func, post_process_contact=post_process_contact))(
                 shape_data_a,
                 shape_data_b,
                 quat_a,
@@ -1438,6 +1444,8 @@ class NarrowPhase:
         use_lean_gjk_mpr: bool = False,
         deterministic: bool = False,
         contact_max: int | None = None,
+        enable_axial_contact_projection: bool = True,
+        enable_plane_cylinder_contact_collapse: bool = True,
         verify_buffers: bool = True,
     ) -> None:
         """
@@ -1470,6 +1478,12 @@ class NarrowPhase:
                 Defaults to ``max_candidate_pairs``.  Set this to a larger value when
                 a single candidate pair can emit multiple contacts (e.g. up to 4 for
                 primitive multi-contact paths).
+            enable_axial_contact_projection: Whether cylinder/cone contacts
+                against discrete surfaces should apply the axial rolling
+                stabilization projection. Disable only for contact diagnostics.
+            enable_plane_cylinder_contact_collapse: Whether plane-cylinder pairs should use the analytical
+                primitive contact set. Disable to route them through GJK/MPR
+                for contact-quality diagnostics only.
             verify_buffers: When True (the default), launch a ``dim=[1]``
                 diagnostic kernel (:func:`verify_narrow_phase_buffers`) at the
                 end of :meth:`launch` that compares each public counter on this
@@ -1492,6 +1506,8 @@ class NarrowPhase:
         self.has_meshes = has_meshes
         self.has_heightfields = has_heightfields
         self.deterministic = deterministic
+        self.enable_axial_contact_projection = enable_axial_contact_projection
+        self.enable_plane_cylinder_contact_collapse = enable_plane_cylinder_contact_collapse
         self.verify_buffers = verify_buffers
         device_obj = wp.get_device(device)
 
@@ -1546,9 +1562,14 @@ class NarrowPhase:
         # launch geometry.
         self.block_dim = 1 if device_obj.is_cpu else 128
 
+        post_process_contact = None if enable_axial_contact_projection else post_process_minkowski_only
+
         # Create the appropriate kernel variants
         # Primitive kernel handles lightweight primitives and routes remaining pairs
-        self.primitive_kernel = create_narrow_phase_primitive_kernel(writer_func)
+        self.primitive_kernel = create_narrow_phase_primitive_kernel(
+            writer_func,
+            enable_plane_cylinder_contact_collapse=enable_plane_cylinder_contact_collapse,
+        )
         # GJK/MPR kernel handles remaining convex-convex pairs
         if use_lean_gjk_mpr:
             # Use lean support function (CONVEX_MESH, BOX, SPHERE only) and lean post-processing
@@ -1560,10 +1581,17 @@ class NarrowPhase:
                 post_process_contact=post_process_minkowski_only,
             )
         else:
-            self.narrow_phase_kernel = create_narrow_phase_kernel_gjk_mpr(self.external_aabb, writer_func)
+            self.narrow_phase_kernel = create_narrow_phase_kernel_gjk_mpr(
+                self.external_aabb,
+                writer_func,
+                post_process_contact=post_process_contact,
+            )
         # Create triangle contacts kernel when meshes or heightfields are present
         if has_meshes or has_heightfields:
-            self.mesh_triangle_contacts_kernel = create_narrow_phase_process_mesh_triangle_contacts_kernel(writer_func)
+            self.mesh_triangle_contacts_kernel = create_narrow_phase_process_mesh_triangle_contacts_kernel(
+                writer_func,
+                post_process_contact=post_process_contact,
+            )
         else:
             self.mesh_triangle_contacts_kernel = None
 

@@ -32,17 +32,26 @@ Relevant local APIs and patterns:
 
 ## Metadata Contract
 
-Use these initial `wheeled:*` attributes:
+Use these initial custom frequencies and `wheeled:*` attributes:
+
+| Custom frequency | Meaning |
+| --- | --- |
+| `wheeled:vehicle` | Flat vehicle instance rows used to offset replicated vehicle ids |
+| `wheeled:wheel` | Flat wheel rows used to offset replicated wheel shape/body ids |
 
 | Attribute | Frequency | Type | Meaning |
 | --- | --- | --- | --- |
+| `wheeled:vehicle_index` | `wheeled:vehicle` | `wp.int32` | Flat vehicle row index for replication/reference offsets |
+| `wheeled:wheel_index` | `wheeled:wheel` | `wp.int32` | Flat wheel row index for replication/reference offsets |
 | `wheeled:is_wheel` | `SHAPE` | `wp.bool` | Shape participates as a wheel in wheeled metadata tables |
-| `wheeled:wheel_id` | `SHAPE` | `wp.int32` | Flat wheel index for wheel shapes, `-1` for non-wheel shapes |
-| `wheeled:vehicle_id` | `SHAPE` | `wp.int32` | Vehicle index owning the wheel shape, `-1` for non-wheel shapes |
+| `wheeled:wheel_id` | `SHAPE` | `wp.int32` | Flat wheel index for wheel shapes, `-1` for non-wheel shapes; references `wheeled:wheel` |
+| `wheeled:vehicle_id` | `SHAPE` | `wp.int32` | Flat vehicle instance index owning the wheel shape, `-1` for non-wheel shapes; references `wheeled:vehicle` |
 | `wheeled:wheel_radius` | `SHAPE` | `wp.float32` | Wheel radius [m] |
 | `wheeled:wheel_width` | `SHAPE` | `wp.float32` | Wheel width [m] |
 | `wheeled:is_wheel_body` | `BODY` | `wp.bool` | Body owns at least one wheel shape |
-| `wheeled:wheel_body_id` | `BODY` | `wp.int32` | Flat wheel index for wheel bodies, `-1` for non-wheel bodies |
+| `wheeled:wheel_body_id` | `BODY` | `wp.int32` | Flat wheel index for wheel bodies, `-1` for non-wheel bodies; references `wheeled:wheel` |
+
+Runtime annotation must reserve rows in both custom frequencies before assigning shape/body attributes. Authored USDA fixtures must provide one vehicle-frequency row per vehicle, using a vehicle root marker such as `newton:wheeled:is_vehicle = true`, and one wheel-frequency row per wheel shape. This keeps `vehicle_id`, `wheel_id`, and `wheel_body_id` unique when a template builder is replicated.
 
 Do not resolve steering or suspension joints in Phase 1A. Those joints remain ordinary simulation structure and are not part of the wheel metadata contract.
 
@@ -285,16 +294,19 @@ Add tests that register the `wheeled:*` custom attributes on a fresh `ModelBuild
 - wheel body attributes are imported directly from USDA;
 - non-wheel shapes and bodies receive registered defaults;
 - `wheel_id`, `vehicle_id`, `wheel_radius`, and `wheel_width` match the same values used by the runtime manifest annotation path;
+- vehicle roots provide one `wheeled:vehicle` frequency row and wheel shapes provide `wheeled:wheel` frequency rows so reference offsets are available during builder replication;
 - no steering, suspension, or descriptive `vehicle_type` attributes are authored or expected by Phase 1A.
 
-These tests should also compare each pre-authored USDA path against the matching runtime-annotated Phase 00 fixture so both ingestion paths prove the same wheel identity and dimension contract.
+These tests should also compare each pre-authored USDA path against the matching runtime-annotated Phase 00 fixture so both ingestion paths prove the same wheel identity, vehicle identity, and dimension contract.
 
 - [ ] **Step 2: Author the two metadata-bearing USDA fixtures**
 
 Create deterministic test assets that mirror the Phase 00 RC-car and Husky geometry while adding only the Phase 1A `wheeled:*` custom attributes:
 
+- vehicle root prims carry `wheeled:is_vehicle` and local `wheeled:vehicle_id` values used by the `wheeled:vehicle` custom frequency;
 - wheel collision prims carry `wheeled:is_wheel`, `wheeled:wheel_id`, `wheeled:vehicle_id`, `wheeled:wheel_radius`, and `wheeled:wheel_width`;
 - wheel body prims carry `wheeled:is_wheel_body` and `wheeled:wheel_body_id`;
+- `wheeled:vehicle_id` declarations reference `wheeled:vehicle`, while `wheeled:wheel_id` and `wheeled:wheel_body_id` declarations reference `wheeled:wheel`;
 - steering joints, suspension joints, chassis bodies, and descriptive vehicle fields carry no Phase 1A metadata.
 
 Prefer a USDA override/reference to the Phase 00 asset if Newton's importer preserves the authored custom attributes and referenced geometry reliably. If that is not reliable, copy the simplified test geometry mechanically into the test fixture and add the attributes there. Keep the example assets unchanged.
@@ -345,6 +357,7 @@ Add tests for `build_wheeled_metadata(model, wheel_metadata=None)` or equivalent
 - radius and width arrays match manifest dimensions;
 - runtime-annotated fixtures and matching pre-authored USDA fixtures produce equivalent wheel tables;
 - authored `wheeled:wheel_id` and `wheeled:vehicle_id` values are respected when deriving tables from finalized model attributes;
+- replicated runtime-annotated and authored templates both produce unique flat wheel ids and vehicle ids;
 - diagnostics can be converted to JSON-compatible dictionaries for reports/tests.
 
 - [ ] **Step 2: Implement `WheeledModelMetadata`**
@@ -358,8 +371,10 @@ class WheeledModelMetadata:
     vehicle_count: int
     wheel_shape_indices: tuple[int, ...]
     wheel_body_indices: tuple[int, ...]
+    wheel_vehicle_ids: tuple[int, ...]
     wheel_radius: tuple[float, ...]
     wheel_width: tuple[float, ...]
+    vehicle_wheel_counts: tuple[int, ...]
 
     def to_dict(self) -> dict[str, object]:
         ...
@@ -403,11 +418,12 @@ state rather than wheeled metadata.
 
 Build a model with two loaded fixture instances, for example two RC cars or one RC car plus one Husky with separate root transforms. Assert:
 
-- `vehicle_id` values distinguish fixture instances;
+- `vehicle_id` values distinguish fixture instances, including replicated template builders;
 - `wheel_id` values are globally flat and deterministic;
 - all shape/body indices are unique across instances;
 - diagnostics include per-vehicle wheel counts;
-- at least one multi-vehicle check uses runtime annotation after loading, and at least one check covers pre-authored USDA metadata or documents why duplicate authored ids require runtime reindexing first.
+- runtime annotation reserves `wheeled:vehicle` and `wheeled:wheel` rows before assigning ids;
+- at least one multi-vehicle check uses runtime annotation after loading, and at least one check covers pre-authored USDA metadata with custom-frequency references preserved.
 
 If `ModelBuilder.add_usd()` label collisions make duplicated assets ambiguous, document that finding in the test and use one RC car plus one Husky for Phase 1A.
 

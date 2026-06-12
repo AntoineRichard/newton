@@ -246,6 +246,85 @@ If you installed from source with uv, substitute `uv run` for `python` in the co
     </td>
   </tr>
   <tr>
+    <td colspan="3"><h3>Wheeled Examples</h3></td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/wheeled/example_wheeled_drive.py">
+        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_wheeled_drive.jpg" alt="Wheeled Drive">
+      </a>
+    </td>
+    <td align="center" width="33%">
+      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/wheeled/example_wheeled_force_drive.py">
+        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_wheeled_drive.jpg" alt="Wheeled Force Drive">
+      </a>
+    </td>
+    <td align="center" width="33%">
+      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/wheeled/example_wheeled_tire_drive.py">
+        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_wheeled_drive.jpg" alt="Wheeled Tire Drive">
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <code>python -m newton.examples wheeled_drive</code>
+    </td>
+    <td align="center" width="33%">
+      <code>python -m newton.examples wheeled_force_drive</code>
+    </td>
+    <td align="center" width="33%">
+      <code>python -m newton.examples wheeled_tire_drive</code>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/wheeled/example_wheeled_car_control.py">
+        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_wheeled_drive.jpg" alt="Wheeled Car Control">
+      </a>
+    </td>
+    <td align="center" width="33%">
+      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/wheeled/example_wheeled_husky_control.py">
+        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_wheeled_drive.jpg" alt="Wheeled Husky Control">
+      </a>
+    </td>
+    <td align="center" width="33%">
+      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/wheeled/example_wheeled_terrain_contact.py">
+        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_wheeled_drive.jpg" alt="Wheeled Terrain Contact">
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <code>python -m newton.examples wheeled_car_control --tire-model fiala</code>
+    </td>
+    <td align="center" width="33%">
+      <code>python -m newton.examples wheeled_husky_control</code>
+    </td>
+    <td align="center" width="33%">
+      <code>python -m newton.examples wheeled_terrain_contact</code>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/wheeled/example_wheeled_free_fall.py">
+        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_wheeled_drive.jpg" alt="Wheeled Free Fall">
+      </a>
+    </td>
+    <td align="center" width="33%">
+    </td>
+    <td align="center" width="33%">
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <code>python -m newton.examples wheeled_free_fall</code>
+    </td>
+    <td align="center" width="33%">
+    </td>
+    <td align="center" width="33%">
+    </td>
+  </tr>
+  <tr>
     <td colspan="3"><h3>Cable Examples</h3></td>
   </tr>
   <tr>

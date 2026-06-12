@@ -287,8 +287,7 @@ def _validate_metadata_arrays(
         )
     if len(wheel_radius) != wheel_count:
         raise ValueError(
-            "wheeled metadata wheel_radius length must match wheel_count "
-            f"({len(wheel_radius)} != {wheel_count})"
+            f"wheeled metadata wheel_radius length must match wheel_count ({len(wheel_radius)} != {wheel_count})"
         )
     for wheel_id, body_index in enumerate(wheel_body_indices):
         if body_index < 0 or body_index >= body_count:
@@ -308,7 +307,9 @@ def _validate_model_metadata_binding(
     wheeled_metadata: WheeledModelMetadata,
 ) -> None:
     if int(model.body_count) != owner_body_count:
-        raise ValueError(f"{owner_name} body_count {owner_body_count} does not match model body_count {model.body_count}")
+        raise ValueError(
+            f"{owner_name} body_count {owner_body_count} does not match model body_count {model.body_count}"
+        )
     _validate_metadata_binding(
         owner_name=owner_name,
         owner_wheel_count=owner_wheel_count,

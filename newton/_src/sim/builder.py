@@ -292,8 +292,11 @@ class ModelBuilder:
         """Whether the shape collides using SDF-based hydroelastics. For hydroelastic collisions, both participating shapes must have is_hydroelastic set to True. Defaults to False.
 
         .. note::
-            Hydroelastic collision handling only works with volumetric shapes and in particular will not work for shapes like flat meshes or cloth.
-            This flag will be automatically set to False for planes and heightfields in :meth:`ModelBuilder.add_shape`.
+            Hydroelastic collision handling only works with volumetric shapes and
+            analytic planes and in particular will not work for shapes like flat
+            meshes or cloth.
+            This flag will be automatically set to False for heightfields in
+            :meth:`ModelBuilder.add_shape`.
         """
         kh: float = 1.0e10
         """Contact stiffness coefficient for hydroelastic collisions. Used by MuJoCo, Featherstone, SemiImplicit when is_hydroelastic is True.
@@ -365,7 +368,7 @@ class ModelBuilder:
                     f"sdf_max_resolution must be divisible by 8 (got {self.sdf_max_resolution}). "
                     "This is required because SDF volumes are allocated in 8x8x8 tiles."
                 )
-            hydroelastic_supported = shape_type not in (GeoType.PLANE, GeoType.HFIELD)
+            hydroelastic_supported = shape_type != GeoType.HFIELD
             hydroelastic_requires_configured_sdf = shape_type in (
                 GeoType.SPHERE,
                 GeoType.BOX,
@@ -5585,12 +5588,11 @@ class ModelBuilder:
         self.body_shapes[body].append(shape)
         self.shape_label.append(label or f"shape_{shape}")
         self.shape_transform.append(xform)
-        # Get flags and clear HYDROELASTIC for unsupported shape types (PLANE, HFIELD)
+        # Get flags and clear HYDROELASTIC for unsupported shape types (HFIELD)
         shape_flags = cfg.flags
-        if (shape_flags & ShapeFlags.HYDROELASTIC) and (type == GeoType.PLANE or type == GeoType.HFIELD):
-            shape_flags &= (
-                ~ShapeFlags.HYDROELASTIC
-            )  # Falling back to mesh/primitive collisions for plane and hfield shapes
+        if (shape_flags & ShapeFlags.HYDROELASTIC) and type == GeoType.HFIELD:
+            # Falling back to mesh/primitive collisions for hfield shapes.
+            shape_flags &= ~ShapeFlags.HYDROELASTIC
 
         resolved_color = ModelBuilder._coerce_shape_color(color)
         if resolved_color is None and src is not None:
@@ -10140,11 +10142,11 @@ class ModelBuilder:
                 and getattr(ssrc, "sdf", None) is not None
                 for stype, ssrc, sflags in zip(self.shape_type, self.shape_source, self.shape_flags, strict=True)
             )
-            has_hydroelastic_shapes = any(
-                (sflags & ShapeFlags.HYDROELASTIC) and (sflags & ShapeFlags.COLLIDE_SHAPES)
-                for sflags in self.shape_flags
+            has_hydroelastic_sdf_shapes = any(
+                (sflags & ShapeFlags.HYDROELASTIC) and (sflags & ShapeFlags.COLLIDE_SHAPES) and stype != GeoType.PLANE
+                for stype, sflags in zip(self.shape_type, self.shape_flags, strict=True)
             )
-            if (has_mesh_sdf or has_hydroelastic_shapes) and not is_gpu:
+            if (has_mesh_sdf or has_hydroelastic_sdf_shapes) and not is_gpu:
                 raise ValueError(
                     "SDF collision paths require a CUDA-capable GPU device. "
                     "Texture SDFs (used for SDF collision) only support CUDA."
@@ -10199,7 +10201,7 @@ class ModelBuilder:
                             block_coords = list(mesh_sdf.block_coords)
                         else:
                             block_coords = []
-                elif is_hydroelastic and has_shape_collision:
+                elif is_hydroelastic and has_shape_collision and shape_type != GeoType.PLANE:
                     effective_max_resolution = sdf_max_resolution
                     if sdf_target_voxel_size is None and effective_max_resolution is None:
                         effective_max_resolution = 64

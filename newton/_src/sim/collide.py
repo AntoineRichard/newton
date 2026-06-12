@@ -506,6 +506,8 @@ class CollisionPipeline:
         contact_matching_pos_threshold: float = 0.0005,
         contact_matching_normal_dot_threshold: float = 0.995,
         contact_report: bool = False,
+        enable_axial_contact_projection: bool = True,
+        enable_plane_cylinder_contact_collapse: bool = True,
         verify_buffers: bool = True,
     ):
         """
@@ -573,6 +575,15 @@ class CollisionPipeline:
                 / ``rigid_contact_broken_count`` on the :class:`Contacts`
                 container, populated each frame.  Requires a non-disabled
                 ``contact_matching`` mode.
+            enable_axial_contact_projection: Whether cylinder/cone contacts
+                against discrete surfaces should apply the axial rolling
+                stabilization projection. Disable only for collision-quality
+                diagnostics. Ignored when a prebuilt ``narrow_phase`` is
+                supplied.
+            enable_plane_cylinder_contact_collapse: Whether plane-cylinder pairs should use the analytical
+                primitive contact set. Disable to route them through GJK/MPR
+                for contact-quality diagnostics.
+                Ignored when a prebuilt ``narrow_phase`` is supplied.
             verify_buffers: Run a ``dim=[1]`` diagnostic kernel at the end of
                 the narrow phase that prints warnings on any intermediate
                 candidate-pair or final rigid contact buffer overflow; see
@@ -650,6 +661,8 @@ class CollisionPipeline:
         self.reduce_contacts = reduce_contacts
         self.requires_grad = requires_grad
         self.soft_contact_margin = soft_contact_margin
+        self.enable_axial_contact_projection = enable_axial_contact_projection
+        self.enable_plane_cylinder_contact_collapse = enable_plane_cylinder_contact_collapse
 
         using_expert_components = broad_phase_instance is not None or narrow_phase is not None
         if using_expert_components:
@@ -788,6 +801,8 @@ class CollisionPipeline:
                 use_lean_gjk_mpr=use_lean_gjk_mpr,
                 deterministic=deterministic,
                 contact_max=rigid_contact_max,
+                enable_axial_contact_projection=enable_axial_contact_projection,
+                enable_plane_cylinder_contact_collapse=enable_plane_cylinder_contact_collapse,
                 verify_buffers=verify_buffers,
             )
             self.hydroelastic_sdf = self.narrow_phase.hydroelastic_sdf
