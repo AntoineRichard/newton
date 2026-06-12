@@ -4,7 +4,6 @@
 import unittest
 
 import numpy as np
-import warp as wp
 
 import newton
 import newton.vehicles as nv
@@ -82,8 +81,8 @@ def test_tire_reaction_and_injection(test, device):
     _fill(dyn.drive_target, 5.0)
     _fill(dyn.tau_max, 100.0)
     _fill(dyn.inertia, 0.01)
-    _fill(dyn.c_long, 2.0e4)
-    _fill(dyn.c_lat, 2.0e4)
+    _fill(dyn.c_long, 20.0)
+    _fill(dyn.c_lat, 20.0)
     _fill(dyn.mu_override, 1.0)
     _fill(dyn.min_ref, 0.5)
     dyn.omega.assign(np.array([5.0], dtype=np.float32))  # already driving (omega*r > v_long=0)

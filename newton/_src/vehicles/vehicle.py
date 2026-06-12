@@ -135,8 +135,7 @@ def _command_kernel(
         if mode == DRIVE_MODE_SKID_STEER:
             base = wp.clamp(d + wp.float32(side[w]) * s, -1.0, 1.0)
         if drive_input[w] == DRIVE_SPEED:
-            r = wp.max(radius[w], 1.0e-6)
-            drive_target[w] = base * max_speed[w] / r  # target angular speed [rad/s]
+            drive_target[w] = base * max_speed[w]  # target wheel angular speed [rad/s]
         else:
             drive_target[w] = base * tau_max[w]  # target torque [N·m]
     else:

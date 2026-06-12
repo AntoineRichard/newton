@@ -41,8 +41,9 @@ def tire_force(
         alpha: Slip angle [rad], ``atan2(v_lat, max(|v_long|, v_ref))``.
         fz: Normal load [N].
         mu: Friction coefficient.
-        c_long: Longitudinal slip stiffness [N].
-        c_lat: Lateral slip stiffness [N].
+        c_long: Longitudinal slip stiffness per unit normal load [1/rad];
+            the linear-regime slope is ``c_long * fz``.
+        c_lat: Lateral slip stiffness per unit normal load [1/rad].
 
     Returns:
         ``(F_long, F_lat)`` [N]: longitudinal force (positive forward when
@@ -53,8 +54,8 @@ def tire_force(
     limit = mu * fz
 
     if model_id == TIRE_LINEAR:
-        fx = c_long * kappa
-        fy = -c_lat * alpha
+        fx = c_long * fz * kappa
+        fy = -c_lat * fz * alpha
         mag = wp.sqrt(fx * fx + fy * fy)
         if mag > limit and mag > 1.0e-9:
             s = limit / mag
@@ -66,8 +67,8 @@ def tire_force(
     inv = 1.0 / (1.0 + wp.abs(kappa))
     sx = kappa * inv
     sy = wp.tan(alpha) * inv
-    flx = c_long * sx
-    fly = c_lat * sy
+    flx = c_long * fz * sx
+    fly = c_lat * fz * sy
     flin = wp.sqrt(flx * flx + fly * fly)
     if flin < 1.0e-9:
         return wp.vec2(0.0, 0.0)

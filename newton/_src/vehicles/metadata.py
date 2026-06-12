@@ -412,24 +412,44 @@ def read_vehicle_model_data(model: Model, *, device: wp.context.Devicelike | Non
     )
 
 
-def configure_wheel_solver_contacts(model: Model, data: VehicleModelData, *, mu: float = 0.0) -> None:
-    """Set wheel-ground tangential friction so the tire model owns it.
+def configure_wheel_solver_contacts(
+    model: Model, data: VehicleModelData, *, condim: int = 1, priority: int = 1
+) -> None:
+    """Make wheel-ground contacts normal-only so the tire model owns tangential force.
 
-    Sets ``model.shape_material_mu`` on wheel shapes to ``mu`` (default 0) so the
-    wrapped solver provides only normal support and the tire model owns all
-    tangential force, avoiding double-counting.
+    Sets MuJoCo ``condim`` (contact dimensionality) and ``geom_priority`` on wheel
+    shapes. With ``condim=1`` and a higher priority than the terrain, the wrapped
+    solver provides only normal support while the tire model owns all longitudinal
+    and lateral force, avoiding double-counting (and the NaN that ``condim=3`` with
+    zero friction would produce).
+
+    Requires ``SolverMuJoCo.register_custom_attributes(builder)`` to have been
+    called before :meth:`ModelBuilder.finalize`.
 
     Args:
-        model: Finalized model.
+        model: Finalized model carrying ``mujoco:*`` attributes.
         data: Vehicle tables from :func:`read_vehicle_model_data`.
-        mu: Tangential friction left to the solver on wheel shapes (default 0).
+        condim: MuJoCo contact dimensionality for wheel geoms (1 = normal-only).
+        priority: MuJoCo geom priority for wheel geoms (must exceed the terrain's).
+
+    Raises:
+        ValueError: If the model lacks the MuJoCo condim/priority attributes.
     """
     if data.wheel_count == 0:
         return
-    shape_mu = model.shape_material_mu.numpy()
+    ns = getattr(model, "mujoco", None)
+    if ns is None or not hasattr(ns, "condim") or not hasattr(ns, "geom_priority"):
+        raise ValueError(
+            "model lacks mujoco:condim/geom_priority; call "
+            "SolverMuJoCo.register_custom_attributes(builder) before finalize"
+        )
+    condim_values = ns.condim.numpy()
+    priority_values = ns.geom_priority.numpy()
     for s in data.wheel_shape.numpy():
-        shape_mu[int(s)] = mu
-    model.shape_material_mu.assign(shape_mu)
+        condim_values[int(s)] = condim
+        priority_values[int(s)] = priority
+    ns.condim.assign(condim_values)
+    ns.geom_priority.assign(priority_values)
 
 
 # --- helpers ---------------------------------------------------------------

@@ -129,12 +129,10 @@ def test_skid_steer_differential(test, device):
 def test_speed_vs_torque_mode(test, device):
     _model, data, dyn, cmd, control = _setup(device, nv.DriveMode.GENERIC, steer_front=False)
     cmd.drive.assign(np.array([1.0], dtype=np.float32))
-    # SPEED: target = max_speed / radius
+    # SPEED: target wheel angular speed = command * max_wheel_speed
     update_vehicle_controls(control, data, dyn, cmd)
-    radius = data.radius.numpy()
     targets = dyn.drive_target.numpy()
-    for w in range(data.wheel_count):
-        test.assertAlmostEqual(float(targets[w]), 10.0 / float(radius[w]), delta=1e-2)
+    test.assertTrue((abs(targets - 10.0) < 1e-2).all())
     # TORQUE: target = tau_max
     _fill(dyn.drive_input, int(nv.DriveInput.TORQUE))
     update_vehicle_controls(control, data, dyn, cmd)

@@ -238,7 +238,7 @@ def _wheel_dynamics_kernel(
                 force_world = fwd_t * f_long + lat_t * f_lat
                 torque_world = wp.cross(offset, force_world)
                 wp.atomic_add(body_f, body, wp.spatial_vector(force_world, torque_world))
-                denom = inertia[w] + dt * c_long[w] * r * r / ref
+                denom = inertia[w] + dt * c_long[w] * fz * r * r / ref
                 out_kappa[w] = kappa
                 out_alpha[w] = alpha
                 out_f_long[w] = f_long
