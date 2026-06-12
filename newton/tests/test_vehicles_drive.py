@@ -66,7 +66,7 @@ def _setup(device, drive_mode, steer_front):
 
 
 def test_ackermann_inner_outer(test, device):
-    model, data, dyn, cmd, control = _setup(device, nv.DriveMode.ACKERMANN, steer_front=True)
+    _model, data, dyn, cmd, control = _setup(device, nv.DriveMode.ACKERMANN, steer_front=True)
     cmd.steer.assign(np.array([1.0], dtype=np.float32))  # full left
     update_vehicle_controls(control, data, dyn, cmd)
 
@@ -92,7 +92,7 @@ def test_ackermann_inner_outer(test, device):
 
 
 def test_ackermann_zero_steer(test, device):
-    model, data, dyn, cmd, control = _setup(device, nv.DriveMode.ACKERMANN, steer_front=True)
+    _model, data, dyn, cmd, control = _setup(device, nv.DriveMode.ACKERMANN, steer_front=True)
     cmd.steer.assign(np.array([0.0], dtype=np.float32))
     update_vehicle_controls(control, data, dyn, cmd)
     steerable = data.steerable.numpy()
@@ -104,7 +104,7 @@ def test_ackermann_zero_steer(test, device):
 
 
 def test_skid_steer_differential(test, device):
-    model, data, dyn, cmd, control = _setup(device, nv.DriveMode.SKID_STEER, steer_front=False)
+    _model, data, dyn, cmd, control = _setup(device, nv.DriveMode.SKID_STEER, steer_front=False)
     # pure turn: opposite side speeds
     cmd.drive.assign(np.array([0.0], dtype=np.float32))
     cmd.steer.assign(np.array([1.0], dtype=np.float32))
@@ -127,7 +127,7 @@ def test_skid_steer_differential(test, device):
 
 
 def test_speed_vs_torque_mode(test, device):
-    model, data, dyn, cmd, control = _setup(device, nv.DriveMode.GENERIC, steer_front=False)
+    _model, data, dyn, cmd, control = _setup(device, nv.DriveMode.GENERIC, steer_front=False)
     cmd.drive.assign(np.array([1.0], dtype=np.float32))
     # SPEED: target = max_speed / radius
     update_vehicle_controls(control, data, dyn, cmd)
