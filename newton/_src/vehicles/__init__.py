@@ -8,6 +8,7 @@ must import from there, never from ``newton._src``.
 """
 
 from .controller import DriveInput, DriveMode, TireModel, WheeledConfig, WheeledVehicles
+from .joints import configure_wheel_axle_joints
 from .metadata import (
     VEHICLE_NAMESPACE,
     VehicleModelData,
@@ -27,6 +28,7 @@ __all__ = [
     "WheeledConfig",
     "WheeledVehicles",
     "add_wheel",
+    "configure_wheel_axle_joints",
     "configure_wheel_solver_contacts",
     "read_vehicle_model_data",
     "register_vehicle_attributes",
