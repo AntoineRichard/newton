@@ -113,6 +113,85 @@ def test_skid_steer_rotates_in_place(test, device):
     test.assertLess(math.hypot(float(q[0]), float(q[1])), 0.4, "rotation should not translate much")
 
 
+def _steer_front_axle(vehicles, steer_rad):
+    """Bake a fixed steering lock into the front wheels' tire forward axis.
+
+    The rigid test car has no steering joint, so rotate the front axle's tire
+    frame to emulate a held steering angle. The contact geometry is unchanged;
+    only the direction the tire pushes rotates.
+    """
+    fa = vehicles.data.forward_axis.numpy()
+    axle_row = vehicles.data.axle_row.numpy()
+    c, s = math.cos(steer_rad), math.sin(steer_rad)
+    for i in range(len(fa)):
+        if int(axle_row[i]) == 0:  # front axle
+            x, y, z = float(fa[i][0]), float(fa[i][1]), float(fa[i][2])
+            fa[i] = (c * x - s * y, s * x + c * y, z)
+    vehicles.data.forward_axis.assign(fa)
+
+
+def test_steered_launch_does_not_spin_out(test, device):
+    """Flooring the throttle from a held steering lock must corner, not pirouette.
+
+    A motor far stronger than the tire's traction limit spins the wheels up well
+    past the ground speed, so the whole friction circle is spent on longitudinal
+    slip and no lateral grip is left to hold the turn -- the car spins on the spot.
+    Sizing the motor near ``mu*Fz*r`` keeps the wheels rolling and the yaw bounded.
+    """
+    try:
+        solver_cls = newton.solvers.SolverMuJoCo
+    except AttributeError as exc:  # pragma: no cover - defensive
+        raise unittest.SkipTest(f"MuJoCo solver unavailable: {exc}") from exc
+
+    model, car = _build_car(device, nv.DriveMode.GENERIC)
+    # traction torque per wheel is ~mu*Fz*r ~ 1.6 N*m here; size the motor near it
+    vehicles = nv.WheeledVehicles(model, config=nv.WheeledConfig(max_wheel_speed=200.0, motor_max_torque=2.0))
+    vehicles.configure_solver_contacts()
+    _steer_front_axle(vehicles, math.radians(25.0))
+
+    try:
+        solver = solver_cls(model, use_mujoco_contacts=False, njmax=128, nconmax=64)
+    except ImportError as exc:
+        raise unittest.SkipTest(f"MuJoCo not available: {exc}") from exc
+    contacts = model.contacts()
+    state_0 = model.state()
+    state_1 = model.state()
+    control = model.control()
+    newton.eval_fk(model, model.joint_q, model.joint_qd, state_0)
+    dt = 1.0 / 240.0
+
+    def run(n):
+        nonlocal state_0, state_1
+        for _ in range(n):
+            state_0.clear_forces()
+            vehicles.update_controls(control)
+            model.collide(state_0, contacts)
+            vehicles.apply(state_0, contacts, dt)
+            solver.step(state_0, state_1, control, contacts, dt)
+            solver.update_contacts(contacts, state_0)
+            vehicles.latch_loads(contacts)
+            state_0, state_1 = state_1, state_0
+
+    vehicles.set_commands(drive=0.0, steer=0.0)
+    run(60)  # settle onto the wheels
+    prev = _heading(state_0.body_q.numpy()[car][3:7])
+    peak_yaw_rate = 0.0
+    vehicles.set_commands(drive=1.0, steer=0.0)  # steering is baked into the tire axis
+    for _ in range(300):
+        run(1)
+        heading = _heading(state_0.body_q.numpy()[car][3:7])
+        rate = abs(((heading - prev + math.pi) % (2.0 * math.pi) - math.pi) / dt)
+        prev = heading
+        peak_yaw_rate = max(peak_yaw_rate, rate)
+
+    test.assertTrue(np.isfinite(state_0.body_qd.numpy()).all())
+    # a traction-sized motor corners (~4 rad/s peak here); an over-strong motor that
+    # wheelspins pirouettes at >10 rad/s.
+    test.assertLess(peak_yaw_rate, 6.0, f"steered launch spun out (peak yaw rate {peak_yaw_rate:.1f} rad/s)")
+    q = state_0.body_q.numpy()[car]
+    test.assertGreater(math.hypot(float(q[0]), float(q[1])), 0.3, "car should travel, not pirouette in place")
+
+
 def test_controller_pipeline_runs(test, device):
     model, car = _build_car(device, nv.DriveMode.GENERIC)
     vehicles = nv.WheeledVehicles(model)
@@ -132,6 +211,12 @@ add_function_test(
     TestWheeledVehiclesController,
     "test_skid_steer_rotates_in_place",
     test_skid_steer_rotates_in_place,
+    devices=get_test_devices(),
+)
+add_function_test(
+    TestWheeledVehiclesController,
+    "test_steered_launch_does_not_spin_out",
+    test_steered_launch_does_not_spin_out,
     devices=get_test_devices(),
 )
 add_function_test(

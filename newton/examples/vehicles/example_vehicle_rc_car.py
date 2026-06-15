@@ -99,9 +99,15 @@ class Example:
 
         self.model, self._chassis = _build()
         # the asset is sprung, so the load is determinate and the band-aid is off.
-        # max_wheel_speed [rad/s] sets full-throttle wheel spin; ground speed ~= w*r,
-        # so 200 rad/s * 0.055 m radius gives a top speed of ~11 m/s.
-        self.vehicles = nv.WheeledVehicles(self.model, config=nv.WheeledConfig(max_wheel_speed=200.0, load_filter=1.0))
+        # max_wheel_speed [rad/s] sets the full-throttle wheel-speed target; ground
+        # speed ~= w*r, so 200 rad/s * 0.055 m radius caps the top speed at ~11 m/s.
+        # motor_max_torque is sized near the wheel's traction limit (mu*Fz*r ~ 0.5 N*m
+        # for this 4 kg car): a much larger motor would spin the wheels up far past the
+        # ground speed, dumping the whole friction circle into longitudinal slip and
+        # leaving no lateral grip, so flooring it from a steered standstill pirouettes.
+        self.vehicles = nv.WheeledVehicles(
+            self.model, config=nv.WheeledConfig(max_wheel_speed=200.0, motor_max_torque=2.0, load_filter=1.0)
+        )
         self.vehicles.configure_solver_contacts()
         self.solver = newton.solvers.SolverMuJoCo(self.model, use_mujoco_contacts=False, njmax=256, nconmax=128)
 
