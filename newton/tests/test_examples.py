@@ -521,6 +521,14 @@ add_example_test(
     use_viewer=True,
 )
 
+add_example_test(
+    TestVehicleExamples,
+    name="vehicles.example_vehicle_sprung",
+    devices=test_devices,
+    test_options={"num-frames": 300},
+    use_viewer=True,
+)
+
 
 class TestRobotPolicyExamples(unittest.TestCase):
     pass
