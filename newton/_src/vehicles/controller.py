@@ -178,11 +178,17 @@ class WheeledVehicles:
         """Register the ``vehicle:*`` custom attributes on ``builder``."""
         register_vehicle_attributes(builder)
 
-    def configure_solver_contacts(self, *, condim: int = 1, priority: int = 1) -> None:
-        """Make wheel-ground contacts normal-only (``condim=1``) so the tire model owns
-        tangential force. Requires ``SolverMuJoCo.register_custom_attributes(builder)``
-        before ``finalize``."""
-        configure_wheel_solver_contacts(self.model, self.data, condim=condim, priority=priority)
+    def configure_solver_contacts(
+        self, *, condim: int = 1, priority: int = 1, gap: float = 0.0, radial_stiffness: float | None = None
+    ) -> None:
+        """Configure wheel-ground contacts: normal-only (``condim=1``) so the tire model
+        owns tangential force, ``gap=0`` so the patch sits at ground level, and an
+        optional ``radial_stiffness`` for tire radial compliance. Requires
+        ``SolverMuJoCo.register_custom_attributes(builder)`` before ``finalize`` and must
+        be called before the solver is constructed."""
+        configure_wheel_solver_contacts(
+            self.model, self.data, condim=condim, priority=priority, gap=gap, radial_stiffness=radial_stiffness
+        )
 
     def set_commands(self, *, drive=None, steer=None, brake=None) -> None:
         """Set normalized per-vehicle commands.

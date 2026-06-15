@@ -413,24 +413,44 @@ def read_vehicle_model_data(model: Model, *, device: wp.context.Devicelike | Non
 
 
 def configure_wheel_solver_contacts(
-    model: Model, data: VehicleModelData, *, condim: int = 1, priority: int = 1
+    model: Model,
+    data: VehicleModelData,
+    *,
+    condim: int = 1,
+    priority: int = 1,
+    gap: float = 0.0,
+    radial_stiffness: float | None = None,
 ) -> None:
-    """Make wheel-ground contacts normal-only so the tire model owns tangential force.
+    """Configure wheel-ground contacts: normal-only, ground-level patch, optional
+    radial compliance.
 
-    Sets MuJoCo ``condim`` (contact dimensionality) and ``geom_priority`` on wheel
-    shapes. With ``condim=1`` and a higher priority than the terrain, the wrapped
-    solver provides only normal support while the tire model owns all longitudinal
-    and lateral force, avoiding double-counting (and the NaN that ``condim=3`` with
-    zero friction would produce).
+    Sets, on the wheel shapes:
 
-    Requires ``SolverMuJoCo.register_custom_attributes(builder)`` to have been
-    called before :meth:`ModelBuilder.finalize`.
+    * MuJoCo ``condim`` (default 1, normal-only) and ``geom_priority`` (default 1,
+      above the terrain) so the wrapped solver provides only normal support while
+      the tire model owns all tangential force (avoiding double-counting, and the
+      NaN that ``condim=3`` with zero friction would produce).
+    * the contact ``gap`` (default 0): a zero gap removes the spurious analytic
+      plane-cylinder margin contact, so the contact patch sits at ground level
+      instead of being biased up the wheel.
+    * optionally the contact stiffness ``shape_material_ke`` (``radial_stiffness``):
+      a lower value lets the wheel sink under load, representing tire radial
+      compliance and widening the fore-aft footprint. ``None`` leaves it unchanged.
+
+    The MuJoCo ``condim``/``geom_priority`` settings require
+    ``SolverMuJoCo.register_custom_attributes(builder)`` before
+    :meth:`ModelBuilder.finalize`; all settings must be applied before the solver
+    is constructed.
 
     Args:
         model: Finalized model carrying ``mujoco:*`` attributes.
         data: Vehicle tables from :func:`read_vehicle_model_data`.
         condim: MuJoCo contact dimensionality for wheel geoms (1 = normal-only).
         priority: MuJoCo geom priority for wheel geoms (must exceed the terrain's).
+        gap: Contact gap [m] for wheel shapes (0 keeps the patch at ground level;
+            a small positive value can help fast vehicles avoid tunneling).
+        radial_stiffness: Optional wheel contact stiffness [N/m]; lower = more
+            sink (radial compliance). ``None`` leaves the existing value.
 
     Raises:
         ValueError: If the model lacks the MuJoCo condim/priority attributes.
@@ -443,13 +463,26 @@ def configure_wheel_solver_contacts(
             "model lacks mujoco:condim/geom_priority; call "
             "SolverMuJoCo.register_custom_attributes(builder) before finalize"
         )
+    wheel_shapes = data.wheel_shape.numpy()
     condim_values = ns.condim.numpy()
     priority_values = ns.geom_priority.numpy()
-    for s in data.wheel_shape.numpy():
+    for s in wheel_shapes:
         condim_values[int(s)] = condim
         priority_values[int(s)] = priority
     ns.condim.assign(condim_values)
     ns.geom_priority.assign(priority_values)
+
+    if model.shape_gap is not None:
+        gap_values = model.shape_gap.numpy()
+        for s in wheel_shapes:
+            gap_values[int(s)] = gap
+        model.shape_gap.assign(gap_values)
+
+    if radial_stiffness is not None and model.shape_material_ke is not None:
+        ke_values = model.shape_material_ke.numpy()
+        for s in wheel_shapes:
+            ke_values[int(s)] = radial_stiffness
+        model.shape_material_ke.assign(ke_values)
 
 
 # --- helpers ---------------------------------------------------------------
