@@ -98,8 +98,10 @@ class Example:
         self._interactive = not getattr(args, "test", False)
 
         self.model, self._chassis = _build()
-        # the asset is sprung, so the load is determinate and the band-aid is off
-        self.vehicles = nv.WheeledVehicles(self.model, config=nv.WheeledConfig(max_wheel_speed=12.0, load_filter=1.0))
+        # the asset is sprung, so the load is determinate and the band-aid is off.
+        # max_wheel_speed [rad/s] sets full-throttle wheel spin; ground speed ~= w*r,
+        # so 200 rad/s * 0.055 m radius gives a top speed of ~11 m/s.
+        self.vehicles = nv.WheeledVehicles(self.model, config=nv.WheeledConfig(max_wheel_speed=200.0, load_filter=1.0))
         self.vehicles.configure_solver_contacts()
         self.solver = newton.solvers.SolverMuJoCo(self.model, use_mujoco_contacts=False, njmax=256, nconmax=128)
 
