@@ -120,6 +120,8 @@ class Example:
         self.sim_dt = self.frame_dt / self.sim_substeps
         self.sim_time = 0.0
         self.viewer = viewer
+        # drive from the keyboard interactively; fall back to a scripted path under --test
+        self._keyboard = not getattr(args, "test", False)
 
         self.model = _build()
         self.vehicles = nv.WheeledVehicles(self.model, config=nv.WheeledConfig(max_wheel_speed=14.0))
@@ -135,9 +137,21 @@ class Example:
         self._chassis = 0  # chassis is body 0
         self._initial = self.state_0.body_q.numpy()[self._chassis].copy()
         self.viewer.set_model(self.model)
+        if self._keyboard:
+            print("Drive the RC car:  W/S or Up/Down = throttle/reverse,  A/D or Left/Right = steer,  Space = brake")
+
+    def _command(self):
+        if not self._keyboard:
+            return 1.0, 0.6, 0.0  # scripted: drive forward and steer (used under --test)
+        down = self.viewer.is_key_down
+        drive = (1.0 if down("w") or down("up") else 0.0) - (1.0 if down("s") or down("down") else 0.0)
+        steer = (1.0 if down("a") or down("left") else 0.0) - (1.0 if down("d") or down("right") else 0.0)
+        brake = 1.0 if down("space") else 0.0
+        return drive, steer, brake
 
     def step(self):
-        self.vehicles.set_commands(drive=1.0, steer=0.6)  # drive forward, steer left
+        drive, steer, brake = self._command()
+        self.vehicles.set_commands(drive=drive, steer=steer, brake=brake)
         for _ in range(self.sim_substeps):
             self.state_0.clear_forces()
             self.vehicles.update_controls(self.control)
