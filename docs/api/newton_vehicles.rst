@@ -34,6 +34,7 @@ heterogeneous vehicles (Ackermann, skid-steer, generic) in a single model.
    :signatures: long
 
    add_wheel
+   configure_wheel_axle_joints
    configure_wheel_solver_contacts
    read_vehicle_model_data
    register_vehicle_attributes

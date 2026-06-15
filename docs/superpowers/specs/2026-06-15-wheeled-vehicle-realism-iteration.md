@@ -1,6 +1,6 @@
 # Wheeled Vehicle Realism Iteration (newton.vehicles)
 
-Status: Tier 1 + Items A & B done; Item C deferred; rc_car.usda asset a follow-up
+Status: Tier 1 + Items A & B done (incl. rc_car.usda real asset); Item C deferred
 Date: 2026-06-15
 Driver: **sim-to-real RL for a specific ground robot** (RC car / Clearpath AGV).
 Layer: `newton.vehicles` (the ground-up redesign).
@@ -98,17 +98,18 @@ per-wheel loads stay even (`[17,17,17,17]` in the probe) — confirming the
 band-aid was a rigid-body artifact and a sprung vehicle makes the load
 determinate. The `newton.vehicles` layer needed **no changes** for suspension.
 
-**`rc_car.usda` finding (follow-up).** The authored asset was the first choice,
-but it carries physical **axle (wheel-spin) revolute joints**, which conflict
-with the analytical-spin model: a free axle would spin instead of staying rigid
-and would pollute the contact-point velocity used for slip. Locking them is not a
-one-liner — flipping `joint_type` to FIXED post-add breaks the DOF accounting
-(`MuJoCo qpos 13 < expected 17`); it needs a proper revolute→fixed conversion
-with index remapping (a `lock_wheel_axle_joints` helper, ~codex's `joints.py`
-scale). That is the clear advantage that justified the in-code sprung car for the
-validation. Wiring `rc_car.usda` (with the axle-conversion helper, and verifying
-the wheel-body frame orientation for `forward_axis`/`axle_axis`) remains a
-follow-up if the real asset is wanted as an example.
+**`rc_car.usda` real asset (DONE).** The authored asset carries physical **axle
+(wheel-spin) revolute joints**, which conflict with the analytical-spin model: a
+free axle spins instead of staying rigid and pollutes the contact-point velocity
+used for slip. Flipping `joint_type` to FIXED post-add breaks the DOF accounting
+(`MuJoCo qpos 13 < expected 17`); the proper fix is a revolute→fixed conversion
+with coordinate/DOF/constraint index remapping. That conversion already existed in
+codex's layer (`newton/_src/wheeled/joints.py`, used by its examples), so it was
+ported into `newton.vehicles` as `configure_wheel_axle_joints` (with unit tests).
+`example_vehicle_rc_car_usd` now loads `rc_car.usda`, locks the axle joints,
+annotates wheels from the manifest, and drives + steers through the layer (even
+loads ~mg/4, rides on the authored suspension); the default wheel-frame axes are
+correct for the asset. Registered as a `usd_required` CPU+CUDA example test.
 
 Original decision (superseded by the finding):
 
