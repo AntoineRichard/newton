@@ -10,9 +10,12 @@
 # writes per-wheel Ackermann inner/outer angles. The wrapped solver owns
 # collision and normal support; the WheeledVehicles controller owns the
 # analytical wheel spin and the brush tire forces (front-wheel lateral grip
-# turns the car). The car drives forward while steering and follows a curve.
+# turns the car). A follow camera tracks the car and a UI panel shows telemetry
+# (speed, yaw rate, wheel speed); tick "Manual control" for throttle/steering/
+# brake sliders, otherwise a scripted demo loop drives it. (W/A/S/D fly the
+# camera, so driving is via the panel sliders.)
 #
-# Command: python -m newton.examples vehicle_rc_car
+# Command: python -m newton.examples vehicle_rc_car --viewer gl
 #
 ###########################################################################
 
@@ -120,8 +123,8 @@ class Example:
         self.sim_dt = self.frame_dt / self.sim_substeps
         self.sim_time = 0.0
         self.viewer = viewer
-        # drive from the keyboard interactively; fall back to a scripted path under --test
-        self._keyboard = not getattr(args, "test", False)
+        # interactive control via the UI panel; scripted path under --test
+        self._interactive = not getattr(args, "test", False)
 
         self.model = _build()
         self.vehicles = nv.WheeledVehicles(self.model, config=nv.WheeledConfig(max_wheel_speed=14.0))
@@ -136,18 +139,50 @@ class Example:
 
         self._chassis = 0  # chassis is body 0
         self._initial = self.state_0.body_q.numpy()[self._chassis].copy()
+
+        # control + telemetry state (driven from the UI panel; W/A/S/D stay with the camera)
+        self.follow_camera = True
+        self.manual = False
+        self.manual_drive = 0.0
+        self.manual_steer = 0.0
+        self.manual_brake = 0.0
+        self._speed = 0.0
+        self._yaw_rate = 0.0
+        self._omega = 0.0
+        self._prev_yaw = _yaw(self._initial)
+
         self.viewer.set_model(self.model)
-        if self._keyboard:
-            print("Drive the RC car:  W/S or Up/Down = throttle/reverse,  A/D or Left/Right = steer,  Space = brake")
+        self._set_follow_camera()
+
+    def gui(self, ui):
+        _changed, self.follow_camera = ui.checkbox("Follow camera", self.follow_camera)
+        _changed, self.manual = ui.checkbox("Manual control", self.manual)
+        if self.manual:
+            _changed, self.manual_drive = ui.slider_float("Throttle", self.manual_drive, -1.0, 1.0)
+            _changed, self.manual_steer = ui.slider_float("Steering", self.manual_steer, -1.0, 1.0)
+            _changed, self.manual_brake = ui.slider_float("Brake", self.manual_brake, 0.0, 1.0)
+        else:
+            ui.text("(scripted demo - tick 'Manual control' to drive)")
+        ui.separator()
+        ui.text("Telemetry")
+        ui.text(f"Speed: {self._speed:.2f} m/s")
+        ui.text(f"Yaw rate: {math.degrees(self._yaw_rate):.1f} deg/s")
+        ui.text(f"Wheel omega: {self._omega:.1f} rad/s")
 
     def _command(self):
-        if not self._keyboard:
-            return 1.0, 0.6, 0.0  # scripted: drive forward and steer (used under --test)
-        down = self.viewer.is_key_down
-        drive = (1.0 if down("w") or down("up") else 0.0) - (1.0 if down("s") or down("down") else 0.0)
-        steer = (1.0 if down("a") or down("left") else 0.0) - (1.0 if down("d") or down("right") else 0.0)
-        brake = 1.0 if down("space") else 0.0
-        return drive, steer, brake
+        if not self._interactive:
+            return 1.0, 0.6, 0.0  # scripted under --test: drive forward and steer
+        if self.manual:
+            return self.manual_drive, self.manual_steer, self.manual_brake
+        # gentle scripted demo loop until the user ticks "Manual control"
+        cycle = self.sim_time % 8.0
+        if cycle < 3.0:
+            return 0.7, 0.0, 0.0
+        if cycle < 5.5:
+            return 0.5, 0.7, 0.0
+        if cycle < 6.5:
+            return 0.0, 0.0, 1.0
+        return 0.6, -0.7, 0.0
 
     def step(self):
         drive, steer, brake = self._command()
@@ -162,8 +197,30 @@ class Example:
             self.vehicles.latch_loads(self.contacts)
             self.state_0, self.state_1 = self.state_1, self.state_0
         self.sim_time += self.frame_dt
+        self._update_telemetry()
+
+    def _update_telemetry(self):
+        q = self.state_0.body_q.numpy()[self._chassis]
+        qd = self.state_0.body_qd.numpy()[self._chassis]
+        self._speed = float(np.linalg.norm(qd[:2]))
+        yaw = _yaw(q)
+        self._yaw_rate = ((yaw - self._prev_yaw + math.pi) % (2.0 * math.pi) - math.pi) / self.frame_dt
+        self._prev_yaw = yaw
+        omega = self.vehicles.dynamics.omega.numpy()
+        self._omega = float(np.max(np.abs(omega))) if omega.size else 0.0
+
+    def _set_follow_camera(self):
+        if not hasattr(self.viewer, "set_camera"):
+            return
+        q = self.state_0.body_q.numpy()[self._chassis]
+        yaw = _yaw(q)
+        forward = np.array([math.cos(yaw), math.sin(yaw), 0.0], dtype=np.float32)
+        cam = q[:3] - 1.4 * forward + np.array([0.0, 0.0, 0.6], dtype=np.float32)
+        self.viewer.set_camera(pos=wp.vec3(float(cam[0]), float(cam[1]), float(cam[2])), pitch=-20.0, yaw=math.degrees(yaw))
 
     def render(self):
+        if self.follow_camera:
+            self._set_follow_camera()
         self.viewer.begin_frame(self.sim_time)
         self.viewer.log_state(self.state_0)
         self.viewer.end_frame()
