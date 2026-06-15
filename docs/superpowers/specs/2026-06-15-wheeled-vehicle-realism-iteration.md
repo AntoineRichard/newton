@@ -1,6 +1,6 @@
 # Wheeled Vehicle Realism Iteration (newton.vehicles)
 
-Status: in progress
+Status: Tier 1 + Items A & B done; Item C deferred; rc_car.usda asset a follow-up
 Date: 2026-06-15
 Driver: **sim-to-real RL for a specific ground robot** (RC car / Clearpath AGV).
 Layer: `newton.vehicles` (the ground-up redesign).
@@ -38,7 +38,13 @@ Commit: "Make default tire model canonical brush with self-aligning moment".
 
 ## Proposed work
 
-### Item A — Wheel-contact gap + radial compliance (high value, cheap)
+### Item A — Wheel-contact gap + radial compliance (DONE)
+
+Landed: `configure_wheel_solver_contacts`/`WheeledVehicles.configure_solver_contacts`
+now set wheel-shape `gap` (default 0) and an optional `radial_stiffness`. A new
+test (`test_gap_zero_centers_patch`) asserts the patch center is at the ground
+(<2 cm) with `gap=0`; the existing examples were re-verified. The patch-center
+bias (66 mm → ~0 mm) is fixed without a collision-core change.
 
 **Motivation.** A real tire is radially compliant; letting the wheel sink a few
 mm both represents that and geometrically widens the cylinder-plane footprint
@@ -82,13 +88,29 @@ contact that biases the patch center far up the wheel.
 **Risks.** `gap = 0` reduces the broad-phase detection margin; fast vehicles or
 large `dt` may need a small positive gap (CCD). Keep it tunable.
 
-### Item B — Tier 2: sprung-suspension validation via `rc_car.usda`
+### Item B — Tier 2: sprung-suspension validation (DONE, via in-code sprung car)
 
-**Decision:** use the existing `newton/examples/assets/wheeled/rc_car.usda`
-(authored suspension + steering) rather than an in-code sprung car. It matches
-the sim-to-real workflow (the real robot is a USD asset) and is the genuine test.
-The only mild edge of an in-code car is "no USD dependency in the test" — not
-worth losing the real validation.
+Landed: `example_vehicle_sprung` — a 4WD Ackermann car with real prismatic
+spring/damper suspension on every wheel + front revolute steering, registered as
+a CPU+CUDA example test. It drives, steers through a curve, and rides on the
+springs. Crucially it runs with `load_filter=1.0` (the band-aid **off**) and the
+per-wheel loads stay even (`[17,17,17,17]` in the probe) — confirming the
+band-aid was a rigid-body artifact and a sprung vehicle makes the load
+determinate. The `newton.vehicles` layer needed **no changes** for suspension.
+
+**`rc_car.usda` finding (follow-up).** The authored asset was the first choice,
+but it carries physical **axle (wheel-spin) revolute joints**, which conflict
+with the analytical-spin model: a free axle would spin instead of staying rigid
+and would pollute the contact-point velocity used for slip. Locking them is not a
+one-liner — flipping `joint_type` to FIXED post-add breaks the DOF accounting
+(`MuJoCo qpos 13 < expected 17`); it needs a proper revolute→fixed conversion
+with index remapping (a `lock_wheel_axle_joints` helper, ~codex's `joints.py`
+scale). That is the clear advantage that justified the in-code sprung car for the
+validation. Wiring `rc_car.usda` (with the axle-conversion helper, and verifying
+the wheel-body frame orientation for `forward_axis`/`axle_axis`) remains a
+follow-up if the real asset is wanted as an example.
+
+Original decision (superseded by the finding):
 
 **Context:** suspension is already handled solver-side (real prismatic joints);
 `newton.vehicles` is agnostic to it and needs no changes — it reads the wheel

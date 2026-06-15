@@ -25,13 +25,17 @@ modes, controller) implemented and verified end-to-end (49 tests, CPU + CUDA);
 `vehicle_husky` and `vehicle_rc_car` examples; Tier 1 tire realism (canonical
 `(1+kappa)` slip + self-aligning moment).
 
-**Next (realism iteration spec):**
-- Item A — wheel-contact `gap~=0` + tunable radial compliance. Empirically fixes
-  the patch-center bias (66 mm → ~0 mm) without a collision-core change.
-- Item B — Tier 2 sprung-suspension validation using `rc_car.usda` (real
-  suspension already handled solver-side; the path is unexercised).
-- Item C — collision-core `preserve_contact_footprint` deferred and largely
-  obviated for the center by Item A; only needed for non-flat-terrain patch area.
+**Realism iteration (2026-06-15):**
+- Tier 1 — canonical `(1+kappa)` brush slip + self-aligning moment. DONE.
+- Item A — wheel-contact `gap~=0` + tunable radial compliance. DONE; fixes the
+  patch-center bias (66 mm → ~0 mm) without a collision-core change.
+- Item B — sprung-suspension validation. DONE via an in-code 4WD sprung Ackermann
+  example (`vehicle_sprung`); confirms the load-smoothing band-aid is a rigid-body
+  artifact (sprung loads are even with it off). The layer needed no changes.
+- Follow-ups: wire `rc_car.usda` (needs a revolute→fixed axle-conversion helper —
+  its physical axle joints conflict with analytical spin); Item C collision-core
+  `preserve_contact_footprint` (deferred, only needed for non-flat-terrain patch
+  area). See the iteration spec.
 
 **Deviations / open items** are recorded in the report and iteration spec
 (load-normalized tire stiffness, load smoothing as a rigid-body artifact,
