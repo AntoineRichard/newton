@@ -1,5 +1,43 @@
 # Wheeled Vehicle Solver Roadmap
 
+## Status (2026-06-15): redesigned as `newton.vehicles`
+
+The layer was rebuilt from the ground up as **`newton.vehicles`**, built
+alongside the original `newton.wheeled` (codex) layer, which it will replace at
+swap. The phases in this roadmap below describe the original `newton.wheeled`
+implementation and are retained as historical context; the redesign is tracked
+in its own docs:
+
+- Design: `docs/superpowers/specs/2026-06-12-wheeled-vehicle-redesign-design.md`
+- Plan: `docs/superpowers/plans/2026-06-12-wheeled-vehicle-redesign.md`
+- Report: `docs/superpowers/reports/2026-06-12-wheeled-vehicle-redesign-report.md`
+- Realism iteration: `docs/superpowers/specs/2026-06-15-wheeled-vehicle-realism-iteration.md`
+
+**Architecture (redesign):** the wrapped MuJoCo solver owns collision + normal
+support (Newton-detected contacts, `use_mujoco_contacts=False`, `condim=1` on
+wheels); a cohesive `WheeledVehicles` controller owns analytical wheel spin and a
+brush combined-slip tire model. Heterogeneous Ackermann/skid-steer/generic drive
+modes via flat device arrays + a per-vehicle `drive_mode`. Suspension and
+steering are real solver joints.
+
+**Done:** full layer (metadata, contact patch, brush tire, analytical spin, drive
+modes, controller) implemented and verified end-to-end (49 tests, CPU + CUDA);
+`vehicle_husky` and `vehicle_rc_car` examples; Tier 1 tire realism (canonical
+`(1+kappa)` slip + self-aligning moment).
+
+**Next (realism iteration spec):**
+- Item A — wheel-contact `gap~=0` + tunable radial compliance. Empirically fixes
+  the patch-center bias (66 mm → ~0 mm) without a collision-core change.
+- Item B — Tier 2 sprung-suspension validation using `rc_car.usda` (real
+  suspension already handled solver-side; the path is unexercised).
+- Item C — collision-core `preserve_contact_footprint` deferred and largely
+  obviated for the center by Item A; only needed for non-flat-terrain patch area.
+
+**Deviations / open items** are recorded in the report and iteration spec
+(load-normalized tire stiffness, load smoothing as a rigid-body artifact,
+`apply_reaction_torque` default off, final public name at swap, the need for a
+sim-to-real validation target).
+
 ## Purpose
 
 Newton needs a wheeled-vehicle simulation layer that can run thousands of

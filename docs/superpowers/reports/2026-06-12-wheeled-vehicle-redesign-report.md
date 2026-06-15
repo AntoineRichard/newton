@@ -29,6 +29,10 @@ Not done (Tier 2/3, deferred): anisotropic combined-slip rigor, transient/
 relaxation-length dynamics, camber, full Pacejka MF. Suspension is already
 handled solver-side (real joints); see note below.
 
+Forward-looking work (wheel-contact `gap~=0` patch-center fix, Tier 2 sprung
+validation via `rc_car.usda`, the deferred collision-core fix) is tracked in
+`docs/superpowers/specs/2026-06-15-wheeled-vehicle-realism-iteration.md`.
+
 ## TL;DR
 
 A clean, ground-up wheeled-vehicle layer (`newton.vehicles`) is **implemented and
