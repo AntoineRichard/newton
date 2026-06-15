@@ -517,22 +517,6 @@ add_example_test(
     TestVehicleExamples,
     name="vehicles.example_vehicle_rc_car",
     devices=test_devices,
-    test_options={"num-frames": 300},
-    use_viewer=True,
-)
-
-add_example_test(
-    TestVehicleExamples,
-    name="vehicles.example_vehicle_sprung",
-    devices=test_devices,
-    test_options={"num-frames": 300},
-    use_viewer=True,
-)
-
-add_example_test(
-    TestVehicleExamples,
-    name="vehicles.example_vehicle_rc_car_usd",
-    devices=test_devices,
     test_options={"usd_required": True, "num-frames": 300},
     use_viewer=True,
 )

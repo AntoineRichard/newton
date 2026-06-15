@@ -2,24 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ###########################################################################
-# Example Vehicle RC Car (Ackermann)
+# Example Vehicle RC Car (Ackermann, rc_car.usda)
 #
-# A rear-wheel-drive, front-steer Ackermann car driven through the
-# newton.vehicles layer. The front wheels are mounted on real revolute steering
-# joints (PD position servos tracked by the MuJoCo solver); the command mapper
-# writes per-wheel Ackermann inner/outer angles. The wrapped solver owns
-# collision and normal support; the WheeledVehicles controller owns the
-# analytical wheel spin and the brush tire forces (front-wheel lateral grip
-# turns the car). A follow camera tracks the car and a UI panel shows telemetry
-# (speed, yaw rate, wheel speed); tick "Manual control" for throttle/steering/
-# brake sliders, otherwise a scripted demo loop drives it. (W/A/S/D fly the
-# camera, so driving is via the panel sliders.)
+# Loads the authored rc_car.usda fixture (a sprung, front-steer Ackermann RC car
+# with real prismatic suspension, revolute steering, and physical axle joints)
+# and drives it through the newton.vehicles layer. The asset's physical axle
+# (wheel-spin) joints are converted to fixed via configure_wheel_axle_joints so
+# wheel spin is analytical; suspension and steering remain solver joints. Wheels
+# are annotated from the manifest labels.
+#
+# A follow camera tracks the car and a UI panel shows telemetry; untick
+# "Cycle commands" for throttle/steering/brake sliders (W/A/S/D fly the camera).
 #
 # Command: python -m newton.examples vehicle_rc_car --viewer gl
 #
 ###########################################################################
 
+import json
 import math
+from pathlib import Path
 
 import numpy as np
 import warp as wp
@@ -28,91 +29,62 @@ import newton
 import newton.examples
 import newton.vehicles as nv
 
-_R = 0.06  # wheel radius [m]
-_HALF_WB = 0.16  # half wheelbase [m]
-_HALF_TRACK = 0.12  # half track [m]
+_ASSET_DIR = Path(newton.examples.get_asset("wheeled"))
 
 
 def _build():
+    manifest = json.loads((_ASSET_DIR / "manifest.json").read_text())
+    asset = next(a for a in manifest["assets"] if a["name"] == "rc_car")
+    rd = asset["reference_dimensions"]
+
     builder = newton.ModelBuilder()
     nv.register_vehicle_attributes(builder)
     newton.solvers.SolverMuJoCo.register_custom_attributes(builder)
-
     terrain_cfg = newton.ModelBuilder.ShapeConfig()
     terrain_cfg.mu = 1.0
     builder.add_ground_plane(cfg=terrain_cfg)
 
-    axis_q = wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), math.pi * 0.5)
-    chassis = builder.add_link(xform=wp.transform(wp.vec3(0.0, 0.0, _R), wp.quat_identity()))
-    chassis_cfg = newton.ModelBuilder.ShapeConfig()
-    chassis_cfg.has_shape_collision = False
-    builder.add_shape_box(chassis, xform=wp.transform(), hx=0.16, hy=0.1, hz=0.04, cfg=chassis_cfg)
-    chassis_free = builder.add_joint_free(child=chassis)
+    builder.add_usd(str(_ASSET_DIR / asset["file"]))
+    # physical axle (wheel-spin) joints -> fixed, so wheel spin is analytical
+    nv.configure_wheel_axle_joints(builder, axle_joint_labels=asset["axle_joint_labels"])
 
+    joint_by_label = {label: i for i, label in enumerate(builder.joint_label)}
+    shape_by_label = {label: i for i, label in enumerate(builder.shape_label)}
     nv.set_vehicle(
         builder,
         0,
         drive_mode=int(nv.DriveMode.ACKERMANN),
-        wheelbase=2.0 * _HALF_WB,
-        track_width=2.0 * _HALF_TRACK,
-        steer_limit=0.5,
+        wheelbase=rd["wheelbase_m"],
+        track_width=rd["track_width_m"],
+        steer_limit=math.radians(rd["steering_limit_deg"]),
     )
-
-    def wheel_shape(body):
-        return builder.add_shape_cylinder(
-            body, xform=wp.transform(wp.vec3(0.0, 0.0, 0.0), axis_q), radius=_R, half_height=0.025
-        )
-
-    # rear wheels: rigidly attached to the chassis, driven
-    for i, y in enumerate((_HALF_TRACK, -_HALF_TRACK)):
-        s = builder.add_shape_cylinder(
-            chassis, xform=wp.transform(wp.vec3(-_HALF_WB, y, 0.0), axis_q), radius=_R, half_height=0.025
-        )
+    steering = asset["steering_joint_labels"]
+    for wheel_id, (body_label, shape_label) in enumerate(
+        zip(asset["wheel_body_labels"], asset["wheel_shape_labels"], strict=True)
+    ):
+        name = body_label.split("/")[-1]
+        front = "front" in name
+        left = "left" in name
+        steer_joint = joint_by_label[steering[0 if left else 1]] if front else -1
         nv.add_wheel(
             builder,
-            shape=s,
+            shape=shape_by_label[shape_label],
             vehicle_id=0,
-            wheel_id=i,
-            radius=_R,
-            width=0.05,
+            wheel_id=wheel_id,
+            radius=rd["wheel_radius_m"],
+            width=rd["wheel_width_m"],
             driven=True,
-            steerable=False,
-            side=(-1 if y > 0 else 1),
-            axle_row=1,
-        )
-
-    # front wheels: separate bodies on vertical revolute steering joints (PD servo)
-    steer_joints = []
-    for j, y in enumerate((_HALF_TRACK, -_HALF_TRACK)):
-        fw = builder.add_link(xform=wp.transform(wp.vec3(_HALF_WB, y, _R), wp.quat_identity()))
-        steer_joint = builder.add_joint_revolute(
-            parent=chassis,
-            child=fw,
-            parent_xform=wp.transform(wp.vec3(_HALF_WB, y, 0.0), wp.quat_identity()),
-            child_xform=wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
-            axis=(0.0, 0.0, 1.0),
-            target_ke=40.0,
-            target_kd=4.0,
-            limit_lower=-0.7,
-            limit_upper=0.7,
-        )
-        steer_joints.append(steer_joint)
-        s = wheel_shape(fw)
-        nv.add_wheel(
-            builder,
-            shape=s,
-            vehicle_id=0,
-            wheel_id=2 + j,
-            radius=_R,
-            width=0.05,
-            driven=False,
-            steerable=True,
-            side=(-1 if y > 0 else 1),
-            axle_row=0,
+            steerable=front,
+            side=(-1 if left else 1),
+            axle_row=(0 if front else 1),
             steer_joint=steer_joint,
         )
-    builder.add_articulation([chassis_free, *steer_joints], label="rc_car")
-    return builder.finalize()
+
+    model = builder.finalize()
+    joint_type = model.joint_type.numpy()
+    joint_child = model.joint_child.numpy()
+    chassis = int(joint_child[list(joint_type).index(int(newton.JointType.FREE))])
+    return model, chassis
 
 
 class Example:
@@ -123,11 +95,11 @@ class Example:
         self.sim_dt = self.frame_dt / self.sim_substeps
         self.sim_time = 0.0
         self.viewer = viewer
-        # interactive control via the UI panel; scripted path under --test
         self._interactive = not getattr(args, "test", False)
 
-        self.model = _build()
-        self.vehicles = nv.WheeledVehicles(self.model, config=nv.WheeledConfig(max_wheel_speed=14.0))
+        self.model, self._chassis = _build()
+        # the asset is sprung, so the load is determinate and the band-aid is off
+        self.vehicles = nv.WheeledVehicles(self.model, config=nv.WheeledConfig(max_wheel_speed=12.0, load_filter=1.0))
         self.vehicles.configure_solver_contacts()
         self.solver = newton.solvers.SolverMuJoCo(self.model, use_mujoco_contacts=False, njmax=256, nconmax=128)
 
@@ -136,50 +108,50 @@ class Example:
         self.state_1 = self.model.state()
         self.control = self.model.control()
         newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state_0)
-
-        self._chassis = 0  # chassis is body 0
         self._initial = self.state_0.body_q.numpy()[self._chassis].copy()
 
-        # control + telemetry state (driven from the UI panel; W/A/S/D stay with the camera)
+        # interactive control + telemetry (driven from the UI panel)
         self.follow_camera = True
-        self.manual = False
+        self.cycle_enabled = True  # scripted demo loop; uncheck to drive with sliders
         self.manual_drive = 0.0
         self.manual_steer = 0.0
         self.manual_brake = 0.0
         self._speed = 0.0
         self._yaw_rate = 0.0
         self._omega = 0.0
+        self._slip = 0.0
         self._prev_yaw = _yaw(self._initial)
 
         self.viewer.set_model(self.model)
         self._set_follow_camera()
+        if hasattr(self.viewer, "camera") and hasattr(self.viewer.camera, "fov"):
+            self.viewer.camera.fov = 65.0
 
     def gui(self, ui):
         _changed, self.follow_camera = ui.checkbox("Follow camera", self.follow_camera)
-        _changed, self.manual = ui.checkbox("Manual control", self.manual)
-        if self.manual:
+        _changed, self.cycle_enabled = ui.checkbox("Cycle commands", self.cycle_enabled)
+        if not self.cycle_enabled:
             _changed, self.manual_drive = ui.slider_float("Throttle", self.manual_drive, -1.0, 1.0)
             _changed, self.manual_steer = ui.slider_float("Steering", self.manual_steer, -1.0, 1.0)
             _changed, self.manual_brake = ui.slider_float("Brake", self.manual_brake, 0.0, 1.0)
-        else:
-            ui.text("(scripted demo - tick 'Manual control' to drive)")
         ui.separator()
         ui.text("Telemetry")
         ui.text(f"Speed: {self._speed:.2f} m/s")
         ui.text(f"Yaw rate: {math.degrees(self._yaw_rate):.1f} deg/s")
         ui.text(f"Wheel omega: {self._omega:.1f} rad/s")
+        ui.text(f"Slip ratio: {self._slip:.2f}")
 
     def _command(self):
         if not self._interactive:
-            return 1.0, 0.6, 0.0  # scripted under --test: drive forward and steer
-        if self.manual:
+            # scripted under --test: settle, then drive forward and steer
+            return (0.0, 0.0, 0.0) if self.sim_time < 0.5 else (1.0, 0.6, 0.0)
+        if not self.cycle_enabled:
             return self.manual_drive, self.manual_steer, self.manual_brake
-        # gentle scripted demo loop until the user ticks "Manual control"
         cycle = self.sim_time % 8.0
         if cycle < 3.0:
-            return 0.7, 0.0, 0.0
+            return 0.8, 0.0, 0.0
         if cycle < 5.5:
-            return 0.5, 0.7, 0.0
+            return 0.6, 0.7, 0.0
         if cycle < 6.5:
             return 0.0, 0.0, 1.0
         return 0.6, -0.7, 0.0
@@ -207,7 +179,9 @@ class Example:
         self._yaw_rate = ((yaw - self._prev_yaw + math.pi) % (2.0 * math.pi) - math.pi) / self.frame_dt
         self._prev_yaw = yaw
         omega = self.vehicles.dynamics.omega.numpy()
+        kappa = self.vehicles.dynamics.kappa.numpy()
         self._omega = float(np.max(np.abs(omega))) if omega.size else 0.0
+        self._slip = float(np.max(np.abs(kappa))) if kappa.size else 0.0
 
     def _set_follow_camera(self):
         if not hasattr(self.viewer, "set_camera"):
@@ -215,8 +189,10 @@ class Example:
         q = self.state_0.body_q.numpy()[self._chassis]
         yaw = _yaw(q)
         forward = np.array([math.cos(yaw), math.sin(yaw), 0.0], dtype=np.float32)
-        cam = q[:3] - 1.4 * forward + np.array([0.0, 0.0, 0.6], dtype=np.float32)
-        self.viewer.set_camera(pos=wp.vec3(float(cam[0]), float(cam[1]), float(cam[2])), pitch=-20.0, yaw=math.degrees(yaw))
+        cam = q[:3] - 2.8 * forward + np.array([0.0, 0.0, 1.25], dtype=np.float32)
+        self.viewer.set_camera(
+            pos=wp.vec3(float(cam[0]), float(cam[1]), float(cam[2])), pitch=-18.0, yaw=math.degrees(yaw)
+        )
 
     def render(self):
         if self.follow_camera:
@@ -229,12 +205,15 @@ class Example:
         q = self.state_0.body_q.numpy()[self._chassis]
         if not np.isfinite(q).all():
             raise ValueError("non-finite chassis pose")
+        fz = self.vehicles.patch.fz.numpy()
+        if not np.isfinite(fz).all() or float(fz.min()) <= 0.0:
+            raise ValueError(f"unexpected wheel loads {fz}")
         dx = float(q[0] - self._initial[0])
         yaw = _yaw(q) - _yaw(self._initial)
         if dx < 0.2:
-            raise ValueError(f"car did not drive forward (dx {dx:.3f} m)")
+            raise ValueError(f"rc car did not drive forward (dx {dx:.3f} m)")
         if abs(yaw) < 0.1:
-            raise ValueError(f"car did not turn while steering (yaw {yaw:.3f} rad)")
+            raise ValueError(f"rc car did not turn while steering (yaw {yaw:.3f} rad)")
 
     @staticmethod
     def create_parser():
