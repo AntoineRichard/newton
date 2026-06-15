@@ -29,12 +29,13 @@ modes, controller) implemented and verified end-to-end (49 tests, CPU + CUDA);
 - Tier 1 — canonical `(1+kappa)` brush slip + self-aligning moment. DONE.
 - Item A — wheel-contact `gap~=0` + tunable radial compliance. DONE; fixes the
   patch-center bias (66 mm → ~0 mm) without a collision-core change.
-- Item B — sprung-suspension validation. DONE: an in-code 4WD sprung Ackermann
-  example (`vehicle_sprung`) confirms the load-smoothing band-aid is a rigid-body
-  artifact (sprung loads are even with it off), and the authored `rc_car.usda`
-  asset now runs through the layer (`vehicle_rc_car_usd`) via the ported
-  `configure_wheel_axle_joints` revolute→fixed axle-lock helper. The layer needed
-  no changes for suspension.
+- Item B — sprung-suspension validation. DONE: the authored `rc_car.usda` asset
+  (real prismatic suspension + revolute steering) runs through the layer
+  (`vehicle_rc_car`) via the ported `configure_wheel_axle_joints` revolute→fixed
+  axle-lock helper. It rides on the springs with the load-smoothing band-aid off
+  (`load_filter=1.0`), confirming the band-aid was a rigid-body artifact. The
+  layer needed no changes for suspension. (An interim in-code sprung example
+  proved this first, then was removed in favor of the real asset.)
 - Follow-up: Item C collision-core `preserve_contact_footprint` (deferred, only
   needed for non-flat-terrain patch area). See the iteration spec.
 

@@ -88,17 +88,22 @@ contact that biases the patch center far up the wheel.
 **Risks.** `gap = 0` reduces the broad-phase detection margin; fast vehicles or
 large `dt` may need a small positive gap (CCD). Keep it tunable.
 
-### Item B — Tier 2: sprung-suspension validation (DONE, via in-code sprung car)
+### Item B — Tier 2: sprung-suspension validation (DONE, via rc_car.usda)
 
-Landed: `example_vehicle_sprung` — a 4WD Ackermann car with real prismatic
-spring/damper suspension on every wheel + front revolute steering, registered as
-a CPU+CUDA example test. It drives, steers through a curve, and rides on the
+Landed and consolidated onto the authored **`rc_car.usda`** real asset
+(`example_vehicle_rc_car`). The asset has real prismatic spring/damper suspension
+and front revolute steering. It drives, steers through a curve, and rides on the
 springs. Crucially it runs with `load_filter=1.0` (the band-aid **off**) and the
-per-wheel loads stay even (`[17,17,17,17]` in the probe) — confirming the
-band-aid was a rigid-body artifact and a sprung vehicle makes the load
-determinate. The `newton.vehicles` layer needed **no changes** for suspension.
+per-wheel loads stay even (~mg/4) — confirming the band-aid was a rigid-body
+artifact and a sprung vehicle makes the load determinate. The `newton.vehicles`
+layer needed **no changes** for suspension.
 
-**`rc_car.usda` real asset (DONE).** The authored asset carries physical **axle
+An interim in-code 4WD sprung Ackermann example (`example_vehicle_sprung`) first
+proved the band-aid-off result on a synthetic spring/damper car
+(`[17,17,17,17]` even loads in the probe); it was removed once the real asset
+worked, to keep a single, faithful sprung example.
+
+**`rc_car.usda` axle-lock detail.** The authored asset carries physical **axle
 (wheel-spin) revolute joints**, which conflict with the analytical-spin model: a
 free axle spins instead of staying rigid and pollutes the contact-point velocity
 used for slip. Flipping `joint_type` to FIXED post-add breaks the DOF accounting
@@ -106,10 +111,11 @@ used for slip. Flipping `joint_type` to FIXED post-add breaks the DOF accounting
 with coordinate/DOF/constraint index remapping. That conversion already existed in
 codex's layer (`newton/_src/wheeled/joints.py`, used by its examples), so it was
 ported into `newton.vehicles` as `configure_wheel_axle_joints` (with unit tests).
-`example_vehicle_rc_car_usd` now loads `rc_car.usda`, locks the axle joints,
-annotates wheels from the manifest, and drives + steers through the layer (even
-loads ~mg/4, rides on the authored suspension); the default wheel-frame axes are
-correct for the asset. Registered as a `usd_required` CPU+CUDA example test.
+`example_vehicle_rc_car` loads `rc_car.usda`, locks the axle joints, annotates
+wheels from the manifest, and drives + steers through the layer (even loads
+~mg/4, rides on the authored suspension); the default wheel-frame axes are correct
+for the asset. It also adds the interactive UX (follow camera + telemetry HUD + UI
+control panel). Registered as a `usd_required` CPU+CUDA example test.
 
 Original decision (superseded by the finding):
 
