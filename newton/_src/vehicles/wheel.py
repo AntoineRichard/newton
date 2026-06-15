@@ -70,6 +70,7 @@ class WheelDynamics:
         self.brake_max = z(wp.float32)
         self.fallback_load = z(wp.float32)
         self.min_ref = z(wp.float32)
+        self.pneumatic_trail = z(wp.float32)
         self.apply_reaction = z(wp.int32)
         # command + state
         self.omega = z(wp.float32)
@@ -80,6 +81,7 @@ class WheelDynamics:
         self.alpha = z(wp.float32)
         self.f_long = z(wp.float32)
         self.f_lat = z(wp.float32)
+        self.mz = z(wp.float32)
         self.normal_load_used = z(wp.float32)
 
 
@@ -101,6 +103,7 @@ def apply_wheel_dynamics(model, state, data: VehicleModelData, patch, dyn: Wheel
     dyn.alpha.zero_()
     dyn.f_long.zero_()
     dyn.f_lat.zero_()
+    dyn.mz.zero_()
     dyn.normal_load_used.zero_()
     wp.launch(
         _wheel_dynamics_kernel,
@@ -130,6 +133,7 @@ def apply_wheel_dynamics(model, state, data: VehicleModelData, patch, dyn: Wheel
             dyn.tau_max,
             dyn.fallback_load,
             dyn.min_ref,
+            dyn.pneumatic_trail,
             dyn.apply_reaction,
             dyn.drive_target,
             dyn.brake_target,
@@ -139,6 +143,7 @@ def apply_wheel_dynamics(model, state, data: VehicleModelData, patch, dyn: Wheel
             dyn.alpha,
             dyn.f_long,
             dyn.f_lat,
+            dyn.mz,
             dyn.normal_load_used,
             state.body_f,
         ],
@@ -172,6 +177,7 @@ def _wheel_dynamics_kernel(
     tau_max: wp.array[wp.float32],
     fallback_load: wp.array[wp.float32],
     min_ref: wp.array[wp.float32],
+    pneumatic_trail: wp.array[wp.float32],
     apply_reaction: wp.array[wp.int32],
     drive_target: wp.array[wp.float32],
     brake_target: wp.array[wp.float32],
@@ -181,6 +187,7 @@ def _wheel_dynamics_kernel(
     out_alpha: wp.array[wp.float32],
     out_f_long: wp.array[wp.float32],
     out_f_lat: wp.array[wp.float32],
+    out_mz: wp.array[wp.float32],
     out_normal_load: wp.array[wp.float32],
     body_f: wp.array[wp.spatial_vector],
 ):
@@ -232,17 +239,20 @@ def _wheel_dynamics_kernel(
                     mu = friction_seed[w]
                 if mu < 0.0:
                     mu = 0.0
-                f = tire_force(tire_model[w], kappa, alpha, fz, mu, c_long[w], c_lat[w])
+                f = tire_force(tire_model[w], kappa, alpha, fz, mu, c_long[w], c_lat[w], pneumatic_trail[w])
                 f_long = f[0]
                 f_lat = f[1]
+                mz = f[2]
                 force_world = fwd_t * f_long + lat_t * f_lat
-                torque_world = wp.cross(offset, force_world)
+                # tire wrench at the patch + self-aligning moment about the support normal
+                torque_world = wp.cross(offset, force_world) + mz * n
                 wp.atomic_add(body_f, body, wp.spatial_vector(force_world, torque_world))
                 denom = inertia[w] + dt * c_long[w] * fz * r * r / ref
                 out_kappa[w] = kappa
                 out_alpha[w] = alpha
                 out_f_long[w] = f_long
                 out_f_lat[w] = f_lat
+                out_mz[w] = mz
                 out_normal_load[w] = fz
 
     # analytical spin: active/driving torques integrate; resistive torques brake toward zero

@@ -10,13 +10,13 @@ import warp as wp
 from newton._src.vehicles.tire import TIRE_BRUSH, TIRE_LINEAR, _eval_tire_kernel
 
 
-def _eval(model_id, kappa, alpha, fz, mu, c_long, c_lat, device="cpu"):
+def _eval(model_id, kappa, alpha, fz, mu, c_long, c_lat, trail=0.0, device="cpu"):
     n = len(kappa)
 
     def arr(values):
         return wp.array(np.asarray(values, dtype=np.float32), dtype=wp.float32, device=device)
 
-    out = wp.zeros(n, dtype=wp.vec2, device=device)
+    out = wp.zeros(n, dtype=wp.vec3, device=device)
     wp.launch(
         _eval_tire_kernel,
         dim=n,
@@ -28,6 +28,7 @@ def _eval(model_id, kappa, alpha, fz, mu, c_long, c_lat, device="cpu"):
             arr(mu),
             arr(c_long),
             arr(c_lat),
+            arr(np.full(n, trail)),
             out,
         ],
         device=device,
@@ -77,6 +78,33 @@ class TestTireForce(unittest.TestCase):
         f = _eval(TIRE_BRUSH, [5.0], [0.5], [0.0], [1.0], [20.0], [20.0])[0]
         self.assertEqual(float(f[0]), 0.0)
         self.assertEqual(float(f[1]), 0.0)
+
+    def test_braking_force_sign(self):
+        # negative slip (wheel slower than road) -> braking force, opposing motion
+        f = _eval(TIRE_BRUSH, [-0.02], [0.0], [100.0], [1.0], [20.0], [20.0])[0]
+        self.assertLess(float(f[0]), 0.0)
+
+    def test_lockup_saturates(self):
+        # beyond lock-up (kappa <= -1) the canonical (1+kappa) slip is guarded and
+        # the wheel is fully sliding -> braking force at the friction limit
+        f = _eval(TIRE_BRUSH, [-5.0], [0.0], [100.0], [1.0], [20.0], [20.0])[0]
+        self.assertAlmostEqual(float(f[0]), -100.0, delta=2.0)
+
+    def test_self_aligning_moment(self):
+        # partial lateral slip -> Mz opposes the lateral force (restoring)
+        f = _eval(TIRE_BRUSH, [0.0], [0.05], [100.0], [1.0], [20.0], [20.0], trail=0.02)[0]
+        self.assertLess(float(f[1]), 0.0)  # lateral force
+        self.assertGreater(float(f[2]), 0.05)  # aligning moment, opposite sign to F_lat
+        self.assertEqual(float(f[2]) * float(f[1]) < 0.0, True)
+
+    def test_aligning_moment_collapses_at_saturation(self):
+        # at full saturation the pneumatic trail -> 0, so Mz -> 0 even though F_lat is large
+        f = _eval(TIRE_BRUSH, [0.0], [0.8], [100.0], [1.0], [20.0], [20.0], trail=0.02)[0]
+        self.assertLess(abs(float(f[2])), 0.02)
+
+    def test_aligning_moment_zero_at_zero_slip(self):
+        f = _eval(TIRE_BRUSH, [0.0], [0.0], [100.0], [1.0], [20.0], [20.0], trail=0.02)[0]
+        self.assertEqual(float(f[2]), 0.0)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,30 @@ Branch: `antoiner/wheeled-vehicle-design`
 Spec: `docs/superpowers/specs/2026-06-12-wheeled-vehicle-redesign-design.md`
 Plan: `docs/superpowers/plans/2026-06-12-wheeled-vehicle-redesign.md`
 
+## Update 2026-06-15 — Tier 1 tire realism (sim-to-real)
+
+Made the default tire model properly textbook for the steady-state, behind the
+unchanged pluggable interface:
+
+- **Canonical theoretical slip** `sigma = slip / (1 + kappa)` (guarded at lock-up),
+  replacing the earlier symmetric `1/(1+|kappa|)`. Driving is unchanged; braking
+  and lock-up are now correct (slip → large as the wheel locks). The saturation
+  law was already the exact brush curve `F = mu*Fz*(1 - (1 - z)^3)`.
+- **Self-aligning moment** `Mz = -F_lat * t` with a pneumatic trail `t` that
+  auto-scales with wheel radius (`pneumatic_trail_ratio`, default 0.1) and
+  collapses to zero as the tire saturates, applied as a couple about the contact
+  normal into `body_f`. New `WheelDynamics.mz` diagnostic.
+
+`tire_force` now returns `vec3` `(F_long, F_lat, Mz)`. New tests cover braking
+sign, lock-up saturation, and the aligning-moment rise/zero-at-saturation/zero-at-
+zero-slip. All 49 vehicle tests (incl. examples, CPU+CUDA) pass. Note: the
+canonical slip makes a spinning skid-steer scrub slightly (asymmetric
+drive/brake slip — physically real), which is expected.
+
+Not done (Tier 2/3, deferred): anisotropic combined-slip rigor, transient/
+relaxation-length dynamics, camber, full Pacejka MF. Suspension is already
+handled solver-side (real joints); see note below.
+
 ## TL;DR
 
 A clean, ground-up wheeled-vehicle layer (`newton.vehicles`) is **implemented and

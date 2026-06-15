@@ -75,6 +75,8 @@ class WheeledConfig:
         brake_max_torque: Brake torque at unit brake command [N·m].
         fallback_normal_load: Normal load used before solver forces are latched [N].
         min_reference_speed: Speed floor for slip regularization [m/s].
+        pneumatic_trail_ratio: Pneumatic trail as a fraction of wheel radius, used for
+            the self-aligning moment (per-wheel trail = ratio * radius). 0 disables it.
         apply_reaction_torque: Whether to apply the motor axle reaction torque to the wheel
             body. Off by default; it only affects pitch/weight-transfer, not the primary
             traction, and is left opt-in pending broader validation.
@@ -94,6 +96,7 @@ class WheeledConfig:
     brake_max_torque: float = 20.0
     fallback_normal_load: float = 0.0
     min_reference_speed: float = 0.5
+    pneumatic_trail_ratio: float = 0.1
     load_filter: float = 0.2
     apply_reaction_torque: bool = False
 
@@ -167,6 +170,8 @@ class WheeledVehicles:
         fill(d.fallback_load, c.fallback_normal_load)
         fill(d.min_ref, c.min_reference_speed)
         fill(d.apply_reaction, 1 if c.apply_reaction_torque else 0)
+        # pneumatic trail auto-scales with wheel radius
+        d.pneumatic_trail.assign((self.data.radius.numpy() * c.pneumatic_trail_ratio).astype(np.float32))
 
     @staticmethod
     def register_attributes(builder: ModelBuilder) -> None:
