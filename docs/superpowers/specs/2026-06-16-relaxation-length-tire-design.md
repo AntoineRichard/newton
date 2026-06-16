@@ -1,11 +1,51 @@
 # Relaxation-Length (Transient) Tire — Design
 
-Status: Scoped (approved 2026-06-16); not yet implemented
+Status: **Implemented, evaluated, and REVERTED (2026-06-16)** — the stability premise
+was wrong. Kept as a record so it is not re-chased. See "Outcome" below.
 Date: 2026-06-16
 Layer: `newton.vehicles`
 Related:
-- Realism iteration: `docs/superpowers/specs/2026-06-15-wheeled-vehicle-realism-iteration.md` (Tier 3 item, now scoped)
-- Touches `newton/_src/vehicles/wheel.py`, `controller.py`; tests in `newton/tests/test_vehicles_wheel.py`
+- Realism iteration: `docs/superpowers/specs/2026-06-15-wheeled-vehicle-realism-iteration.md` (Tier 3 item)
+- Touched `newton/_src/vehicles/wheel.py`, `controller.py`; tests in `newton/tests/test_vehicles_wheel.py`
+
+## Outcome (2026-06-16) — reverted; high-grip is an architectural limit
+
+The relaxation tire was implemented and stress-tested. **It does not deliver the
+scoped stability win, and was reverted.** The core error in the scope below: the
+implicit update makes the slip *filter* unconditionally stable, but that is NOT the
+same as closed-loop stability — relaxation adds *phase lag* to the lateral force,
+which can *amplify* the light-wheel roll oscillation. Regime map (aggressive
+low-speed steer reversals, max wheel vertical speed): at μ=2 it was mixed
+(0.14→0.75 worse at c_lat=40; 0.29→0.19 better at c_lat=100); at μ=3 it ranged from
+no help (21→10) to catastrophic (15→218). At the shipping μ=1 the handling response
+was identical within ~1 frame (σ≈radius gives a sub-frame lag), so even the realism
+gain is negligible at this vehicle's scale.
+
+Follow-on experiments to fix high-grip stability, all evaluated and rejected:
+- **Wheel inertia / mass**: chaotic, no reliable help. Counter to intuition,
+  *heavier* wheel bodies are more stable, and the (unrealistically high) default
+  analytical spin inertia was incidentally *masking* the instability — making it
+  realistic made μ=3 worse.
+- **More substeps (smaller dt)**: μ=3 does *not* converge as dt shrinks (bounces
+  ~15) — so it is not a simple explicit-integration timestep problem.
+- **Apply tire wrench to the chassis instead of the light wheel body**: *fixes the
+  vertical hop* (μ=3: 15→0.9, confirming the light-wheel-body torque is the hop
+  driver) **but breaks cornering** — routing the lateral force straight to the
+  chassis removes the steering-joint compliance that was damping yaw, so a steered
+  launch spins out at μ=1. Net loss; reverted.
+
+**Conclusion.** High grip (μ ≳ 2) is a structural limit of injecting large explicit
+tire forces onto light articulated wheel bodies in a co-simulation; no local knob
+(relaxation, inertia, dt, application body) fixes it without breaking something
+else. The validated sweet spot is **μ ≈ 1 with the shipped wheel-application model**
+(stable, corners well, drift-free, ~17 m/s top). A real high-grip fix would be a
+much larger effort — an implicit / velocity-level coupling of the tire force into
+the solver (so the force accounts for the body's in-step response) — and its
+premise should be stress-tested before any further scoping.
+
+---
+
+(Original scope, retained for the record:)
 
 ## Purpose
 

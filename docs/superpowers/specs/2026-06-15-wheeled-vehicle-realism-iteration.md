@@ -151,14 +151,19 @@ exact traced edit set is in the redesign report (Mechanism 1 at
 field read in `post_process_axial_on_discrete_contact`). Revisit only if a future
 tire model needs contact area on non-flat terrain.
 
-## Tier 3 — transient / relaxation-length tire (scoped 2026-06-16)
+## Tier 3 — transient / relaxation-length tire (tried and rejected 2026-06-16)
 
-The transient (relaxation-length) lateral tire — once a Tier-3 "future" item —
-is now scoped in `docs/superpowers/specs/2026-06-16-relaxation-length-tire-design.md`.
-Motivation: it both adds transient realism and unconditionally stabilizes the
-explicit tire at high grip (so `mu` can be raised without shrinking `dt`). The
-interim stabilizer is the committed low-speed lateral anti-overshoot cap; the
-relaxation model supersedes the need for it in the high-grip regime.
+The transient (relaxation-length) lateral tire was implemented and evaluated, then
+**reverted** — it does not stabilize high grip (the "unconditionally stable" premise
+conflated filter stability with closed-loop stability; the added phase lag can
+*worsen* the roll oscillation). Follow-on attempts (wheel inertia/mass, more
+substeps, applying the tire wrench to the chassis) also failed to give a clean
+high-grip fix. See `docs/superpowers/specs/2026-06-16-relaxation-length-tire-design.md`
+("Outcome"). **Conclusion: high grip (mu >= ~2) is a structural limit of explicit
+tire-force injection onto light articulated wheel bodies; the validated sweet spot
+is mu ~= 1 with the shipped model.** The low-speed lateral anti-overshoot cap (which
+landed) remains the active guard. A real high-grip fix would need an implicit /
+velocity-level tire-body coupling — a much larger effort to scope separately.
 
 ## Still out of scope (future)
 
