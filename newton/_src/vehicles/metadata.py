@@ -88,6 +88,8 @@ class VehicleModelData:
         steer_dof: Steering joint DOF index, or -1, per wheel.
         forward_axis: Wheel forward axis in body frame, per wheel.
         axle_axis: Wheel spin axis in body frame, per wheel.
+        wheel_center: Wheel-shape center in the body frame [m], per wheel (used to
+            place the tire wrench at the wheel's ground contact rather than the body COM).
         drive_mode: :class:`DriveMode` value per vehicle.
         wheelbase: Wheelbase [m] per vehicle.
         track_width: Track width [m] per vehicle.
@@ -112,6 +114,7 @@ class VehicleModelData:
     steer_dof: wp.array[wp.int32]
     forward_axis: wp.array[wp.vec3]
     axle_axis: wp.array[wp.vec3]
+    wheel_center: wp.array[wp.vec3]
     drive_mode: wp.array[wp.int32]
     wheelbase: wp.array[wp.float32]
     track_width: wp.array[wp.float32]
@@ -331,6 +334,7 @@ def read_vehicle_model_data(model: Model, *, device: wp.context.Devicelike | Non
     forward_axis = _np(ns, "forward_axis")
     axle_axis = _np(ns, "axle_axis")
     shape_body = model.shape_body.numpy()
+    shape_transform = model.shape_transform.numpy()
     joint_qd_start = model.joint_qd_start.numpy()
 
     wheel_shape_indices = np.nonzero(is_wheel)[0]
@@ -356,6 +360,8 @@ def read_vehicle_model_data(model: Model, *, device: wp.context.Devicelike | Non
     w_axle = np.array([int(axle_row[s]) for s in shapes], dtype=np.int32)
     w_fwd = np.array([forward_axis[s] for s in shapes], dtype=np.float32).reshape(-1, 3)
     w_axle_axis = np.array([axle_axis[s] for s in shapes], dtype=np.float32).reshape(-1, 3)
+    # wheel-shape center in its body frame (shape_transform translation)
+    w_center = np.array([shape_transform[s][:3] for s in shapes], dtype=np.float32).reshape(-1, 3)
 
     # Resolve steering joint -> DOF index (revolute steering joints have one DOF).
     w_steer_dof = np.full(wheel_count, -1, dtype=np.int32)
@@ -404,6 +410,7 @@ def read_vehicle_model_data(model: Model, *, device: wp.context.Devicelike | Non
         steer_dof=arr(w_steer_dof, wp.int32),
         forward_axis=wp.array(w_fwd, dtype=wp.vec3, device=device),
         axle_axis=wp.array(w_axle_axis, dtype=wp.vec3, device=device),
+        wheel_center=wp.array(w_center, dtype=wp.vec3, device=device),
         drive_mode=arr(v_drive_mode, wp.int32),
         wheelbase=arr(v_wheelbase, wp.float32),
         track_width=arr(v_track, wp.float32),

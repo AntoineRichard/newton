@@ -97,6 +97,39 @@ def test_tire_reaction_and_injection(test, device):
     test.assertLess(float(dyn.omega.numpy()[0]), 5.5)
 
 
+def test_force_applied_at_ground_contact_not_biased_patch(test, device):
+    # The solver's per-wheel contact points are not symmetric about the wheel
+    # centerline, so their mean (the reported patch center) is biased sideways.
+    # The tire wrench must be applied at the geometric ground contact
+    # (center - radius*normal), not that biased center; otherwise the large drive
+    # force gets a lateral lever and injects a spurious yaw torque that makes a
+    # sprung car veer under hard acceleration. Here the patch center is deliberately
+    # offset 3 cm sideways and 2 cm fore, and the injected yaw torque must stay ~0.
+    model, data, dyn, patch, state = _setup(device, radius=0.2)
+    body = int(data.wheel_body.numpy()[0])
+    _activate_patch(patch, center=(0.02, 0.03, -0.2), normal=(0.0, 0.0, 1.0), fz=100.0)
+    _fill(dyn.drive_input, int(nv.DriveInput.TORQUE))
+    _fill(dyn.drive_target, 5.0)
+    _fill(dyn.tau_max, 100.0)
+    _fill(dyn.inertia, 0.01)
+    _fill(dyn.c_long, 20.0)
+    _fill(dyn.c_lat, 20.0)
+    _fill(dyn.mu_override, 1.0)
+    _fill(dyn.min_ref, 0.5)
+    dyn.omega.assign(np.array([5.0], dtype=np.float32))  # driving (omega*r > v_long=0)
+
+    state.clear_forces()
+    apply_wheel_dynamics(model, state, data, patch, dyn, 0.001)
+
+    bf = state.body_f.numpy()[body]  # spatial_vector: [force(3), torque(3)]
+    fx = float(bf[0])
+    yaw_torque = float(bf[5])  # torque about +Z (world up)
+    test.assertGreater(fx, 0.0)  # forward traction present
+    # offset = -radius*normal has no in-plane component, so no yaw lever; a biased
+    # center would give yaw_torque ~ -0.03 * fx (a few N*m here).
+    test.assertLess(abs(yaw_torque), 1.0e-3 * max(abs(fx), 1.0))
+
+
 class TestWheelDynamics(unittest.TestCase):
     pass
 
@@ -107,6 +140,12 @@ add_function_test(
 )
 add_function_test(
     TestWheelDynamics, "test_tire_reaction_and_injection", test_tire_reaction_and_injection, devices=get_test_devices()
+)
+add_function_test(
+    TestWheelDynamics,
+    "test_force_applied_at_ground_contact_not_biased_patch",
+    test_force_applied_at_ground_contact_not_biased_patch,
+    devices=get_test_devices(),
 )
 
 
