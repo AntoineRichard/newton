@@ -114,7 +114,21 @@ class Example:
         self.vehicles = nv.WheeledVehicles(
             self.model,
             config=nv.WheeledConfig(
-                max_wheel_speed=315.0, motor_max_torque=1.0, angular_damping=0.0005, load_filter=1.0
+                max_wheel_speed=315.0,
+                motor_max_torque=1.0,
+                angular_damping=0.0005,
+                load_filter=1.0,
+                # Grippy RC tires: mu ~ 1 (one g of grip) is a realistic, well-behaved
+                # value for a soft RC compound on a grippy surface; rubber can exceed 1
+                # and mu ~= peak lateral g, so measure it on the real car and slide up if
+                # the surface warrants (higher mu means larger tire forces, which stresses
+                # the explicit tire integration -- raise sim_substeps if you push it). The
+                # lateral slip stiffness is set ~2x longitudinal so the car turns in
+                # crisply; both still saturate at the same mu*Fz circle, so this shapes how
+                # fast grip builds, not its maximum.
+                friction=1.0,
+                longitudinal_stiffness=20.0,
+                lateral_stiffness=40.0,
             ),
         )
         self.vehicles.configure_solver_contacts()
@@ -145,7 +159,7 @@ class Example:
         self.linear_tire = False
         self.tune_c_long = cfg.longitudinal_stiffness
         self.tune_c_lat = cfg.lateral_stiffness
-        self.tune_friction = 1.0  # tire mu (the ground-plane mu is 1.0)
+        self.tune_friction = cfg.friction if cfg.friction > 0.0 else 1.0  # tire mu
         self.tune_motor_torque = cfg.motor_max_torque
         self.tune_top_speed = cfg.max_wheel_speed
 
@@ -166,7 +180,7 @@ class Example:
         _changed, self.linear_tire = ui.checkbox("Linear tire (else brush)", self.linear_tire)
         _changed, self.tune_c_long = ui.slider_float("Long. stiffness", self.tune_c_long, 1.0, 100.0)
         _changed, self.tune_c_lat = ui.slider_float("Lat. stiffness", self.tune_c_lat, 1.0, 100.0)
-        _changed, self.tune_friction = ui.slider_float("Tire mu", self.tune_friction, 0.2, 2.0)
+        _changed, self.tune_friction = ui.slider_float("Tire mu", self.tune_friction, 0.2, 3.0)
         _changed, self.tune_motor_torque = ui.slider_float("Motor torque [N*m]", self.tune_motor_torque, 0.2, 8.0)
         _changed, self.tune_top_speed = ui.slider_float("Top wheel speed [rad/s]", self.tune_top_speed, 50.0, 400.0)
         ui.separator()
