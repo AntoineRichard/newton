@@ -151,12 +151,21 @@ exact traced edit set is in the redesign report (Mechanism 1 at
 field read in `post_process_axial_on_discrete_contact`). Revisit only if a future
 tire model needs contact area on non-flat terrain.
 
-## Out of scope (Tier 3, future)
+## Tier 3 — transient / relaxation-length tire (scoped 2026-06-16)
 
-Anisotropic combined-slip rigor (exact unequal long/lat brush), transient /
-relaxation-length tire dynamics, camber thrust, full Pacejka Magic Formula
-(needs coefficient data RC/AGV users rarely have). Powertrain (motor curves,
-gearbox, differentials), aero drag.
+The transient (relaxation-length) lateral tire — once a Tier-3 "future" item —
+is now scoped in `docs/superpowers/specs/2026-06-16-relaxation-length-tire-design.md`.
+Motivation: it both adds transient realism and unconditionally stabilizes the
+explicit tire at high grip (so `mu` can be raised without shrinking `dt`). The
+interim stabilizer is the committed low-speed lateral anti-overshoot cap; the
+relaxation model supersedes the need for it in the high-grip regime.
+
+## Still out of scope (future)
+
+Anisotropic combined-slip rigor (exact unequal long/lat brush), longitudinal
+slip relaxation, camber thrust, full Pacejka Magic Formula (needs coefficient
+data RC/AGV users rarely have). Powertrain (motor curves, gearbox,
+differentials), aero drag.
 
 ## Open questions
 
