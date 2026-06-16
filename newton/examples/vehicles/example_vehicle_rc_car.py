@@ -139,6 +139,16 @@ class Example:
         self._slip = 0.0
         self._prev_yaw = _yaw(self._initial)
 
+        # live handling tuning, pushed into the controller's per-wheel arrays each
+        # interactive step (sliders in the UI panel); initialized from the config
+        cfg = self.vehicles.config
+        self.linear_tire = False
+        self.tune_c_long = cfg.longitudinal_stiffness
+        self.tune_c_lat = cfg.lateral_stiffness
+        self.tune_friction = 1.0  # tire mu (the ground-plane mu is 1.0)
+        self.tune_motor_torque = cfg.motor_max_torque
+        self.tune_top_speed = cfg.max_wheel_speed
+
         self.viewer.set_model(self.model)
         self._set_follow_camera()
         if hasattr(self.viewer, "camera") and hasattr(self.viewer.camera, "fov"):
@@ -151,6 +161,14 @@ class Example:
             _changed, self.manual_drive = ui.slider_float("Throttle", self.manual_drive, -1.0, 1.0)
             _changed, self.manual_steer = ui.slider_float("Steering", self.manual_steer, -1.0, 1.0)
             _changed, self.manual_brake = ui.slider_float("Brake", self.manual_brake, 0.0, 1.0)
+        ui.separator()
+        ui.text("Handling")
+        _changed, self.linear_tire = ui.checkbox("Linear tire (else brush)", self.linear_tire)
+        _changed, self.tune_c_long = ui.slider_float("Long. stiffness", self.tune_c_long, 1.0, 100.0)
+        _changed, self.tune_c_lat = ui.slider_float("Lat. stiffness", self.tune_c_lat, 1.0, 100.0)
+        _changed, self.tune_friction = ui.slider_float("Tire mu", self.tune_friction, 0.2, 2.0)
+        _changed, self.tune_motor_torque = ui.slider_float("Motor torque [N*m]", self.tune_motor_torque, 0.2, 8.0)
+        _changed, self.tune_top_speed = ui.slider_float("Top wheel speed [rad/s]", self.tune_top_speed, 50.0, 400.0)
         ui.separator()
         ui.text("Telemetry")
         ui.text(f"Speed: {self._speed:.2f} m/s")
@@ -173,7 +191,20 @@ class Example:
             return 0.0, 0.0, 1.0
         return 0.6, -0.7, 0.0
 
+    def _apply_tuning(self):
+        # push the UI handling values into the controller's per-wheel arrays (all
+        # wheels identical for this car); takes effect on the next substep.
+        dyn = self.vehicles.dynamics
+        dyn.tire_model.fill_(int(nv.TireModel.LINEAR if self.linear_tire else nv.TireModel.BRUSH))
+        dyn.c_long.fill_(float(self.tune_c_long))
+        dyn.c_lat.fill_(float(self.tune_c_lat))
+        dyn.mu_override.fill_(float(self.tune_friction))
+        dyn.tau_max.fill_(float(self.tune_motor_torque))
+        dyn.max_speed.fill_(float(self.tune_top_speed))
+
     def step(self):
+        if self._interactive:
+            self._apply_tuning()
         drive, steer, brake = self._command()
         self.vehicles.set_commands(drive=drive, steer=steer, brake=brake)
         for _ in range(self.sim_substeps):
