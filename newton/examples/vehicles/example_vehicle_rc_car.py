@@ -99,14 +99,23 @@ class Example:
 
         self.model, self._chassis = _build()
         # the asset is sprung, so the load is determinate and the band-aid is off.
-        # max_wheel_speed [rad/s] sets the full-throttle wheel-speed target; ground
-        # speed ~= w*r, so 200 rad/s * 0.055 m radius caps the top speed at ~11 m/s.
-        # motor_max_torque is sized near the wheel's traction limit (mu*Fz*r ~ 0.5 N*m
-        # for this 4 kg car): a much larger motor would spin the wheels up far past the
-        # ground speed, dumping the whole friction circle into longitudinal slip and
-        # leaving no lateral grip, so flooring it from a steered standstill pirouettes.
+        # Drivetrain is modelled on a Traxxas Slash 4x4 VXL: Castle 1415 2400 Kv motor
+        # (torque constant Kt = 9.55/Kv = 3.98 mN*m/A) on 4S (~14.8 V nominal) through
+        # the stock 11.82:1 final drive at ~85% efficiency.
+        #   max_wheel_speed = Kv * V * 2pi/60 / FDR = 2400 * 14.8 * 0.1047 / 11.82
+        #                   ~= 315 rad/s  -> top speed ~= w*r = 315 * 0.055 ~= 17 m/s
+        #   motor_max_torque = Kt * I_peak * FDR * eta / 4_wheels
+        #                    = 0.00398 * 100 A * 11.82 * 0.85 / 4 ~= 1.0 N*m per wheel
+        # ~100 A is a typical launch burst for this class (the 4S/90C pack is not the
+        # limit); refine from a logged peak current. angular_damping is kept low because
+        # the 85% efficiency already accounts for drivetrain loss -- a large value would
+        # cap the top speed at motor_max_torque/angular_damping rather than the no-load
+        # wheel speed.
         self.vehicles = nv.WheeledVehicles(
-            self.model, config=nv.WheeledConfig(max_wheel_speed=200.0, motor_max_torque=2.0, load_filter=1.0)
+            self.model,
+            config=nv.WheeledConfig(
+                max_wheel_speed=315.0, motor_max_torque=1.0, angular_damping=0.0005, load_filter=1.0
+            ),
         )
         self.vehicles.configure_solver_contacts()
         self.solver = newton.solvers.SolverMuJoCo(self.model, use_mujoco_contacts=False, njmax=256, nconmax=128)
