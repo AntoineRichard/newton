@@ -257,6 +257,17 @@ def _wheel_dynamics_kernel(
                 f_long = f[0]
                 f_lat = f[1]
                 mz = f[2]
+                # Anti-overshoot for explicit-integration stability at low speed: the
+                # lateral force impulse must not reverse the contact's lateral velocity
+                # within a substep. Cap |f_lat| by the supported mass (fz/g) times the
+                # lateral slip speed over dt. Without it, a stiff / high-grip tire flips
+                # the saturated lateral force each step as v_lat changes sign near
+                # standstill, pumping a roll/hop instability that launches the car.
+                lat_cap = fz / 9.81 * wp.abs(v_lat) / dt
+                if wp.abs(f_lat) > lat_cap:
+                    scl = lat_cap / wp.max(wp.abs(f_lat), 1.0e-9)
+                    f_lat = f_lat * scl
+                    mz = mz * scl
                 force_world = fwd_t * f_long + lat_t * f_lat
                 # tire wrench at the patch + self-aligning moment about the support normal
                 torque_world = wp.cross(offset, force_world) + mz * n

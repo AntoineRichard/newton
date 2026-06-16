@@ -130,6 +130,33 @@ def test_force_applied_at_ground_contact_not_biased_patch(test, device):
     test.assertLess(abs(yaw_torque), 1.0e-3 * max(abs(fx), 1.0))
 
 
+def test_low_speed_lateral_force_capped_against_overshoot(test, device):
+    # Near standstill a stiff/high-grip tire would otherwise apply the full saturated
+    # lateral force (mu*Fz) at a tiny lateral slip, reversing the velocity each step and
+    # pumping a roll/hop instability. The anti-overshoot cap limits |f_lat| to
+    # (fz/g)*|v_lat|/dt so the impulse cannot reverse the contact's lateral velocity.
+    model, data, dyn, patch, state = _setup(device, radius=0.2)
+    _activate_patch(patch, center=(0.0, 0.0, -0.2), normal=(0.0, 0.0, 1.0), fz=100.0)
+    _fill(dyn.drive_input, int(nv.DriveInput.TORQUE))
+    _fill(dyn.drive_target, 0.0)
+    _fill(dyn.tau_max, 100.0)
+    _fill(dyn.inertia, 0.01)
+    _fill(dyn.c_long, 20.0)
+    _fill(dyn.c_lat, 200.0)  # very stiff laterally -> would saturate at mu*Fz=100 N
+    _fill(dyn.mu_override, 1.0)
+    _fill(dyn.min_ref, 0.5)
+    # tiny lateral velocity (+Y), no longitudinal motion or spin; body_qd = [lin, ang]
+    state.body_qd.assign(np.array([[0.0, 0.005, 0.0, 0.0, 0.0, 0.0]], dtype=np.float32))
+
+    dt = 0.001
+    apply_wheel_dynamics(model, state, data, patch, dyn, dt)
+
+    f_lat = abs(float(dyn.f_lat.numpy()[0]))
+    expected_cap = 100.0 / 9.81 * 0.005 / dt  # ~51 N
+    test.assertLess(f_lat, 60.0)  # capped well below the saturated mu*Fz = 100 N
+    test.assertAlmostEqual(f_lat, expected_cap, delta=6.0)
+
+
 class TestWheelDynamics(unittest.TestCase):
     pass
 
@@ -145,6 +172,12 @@ add_function_test(
     TestWheelDynamics,
     "test_force_applied_at_ground_contact_not_biased_patch",
     test_force_applied_at_ground_contact_not_biased_patch,
+    devices=get_test_devices(),
+)
+add_function_test(
+    TestWheelDynamics,
+    "test_low_speed_lateral_force_capped_against_overshoot",
+    test_low_speed_lateral_force_capped_against_overshoot,
     devices=get_test_devices(),
 )
 
