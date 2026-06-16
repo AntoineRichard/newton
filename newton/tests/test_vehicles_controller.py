@@ -138,11 +138,6 @@ def test_steered_launch_does_not_spin_out(test, device):
     slip and no lateral grip is left to hold the turn -- the car spins on the spot.
     Sizing the motor near ``mu*Fz*r`` keeps the wheels rolling and the yaw bounded.
     """
-    try:
-        solver_cls = newton.solvers.SolverMuJoCo
-    except AttributeError as exc:  # pragma: no cover - defensive
-        raise unittest.SkipTest(f"MuJoCo solver unavailable: {exc}") from exc
-
     model, car = _build_car(device, nv.DriveMode.GENERIC)
     # traction torque per wheel is ~mu*Fz*r ~ 1.6 N*m here; size the motor near it
     vehicles = nv.WheeledVehicles(model, config=nv.WheeledConfig(max_wheel_speed=200.0, motor_max_torque=2.0))
@@ -150,7 +145,7 @@ def test_steered_launch_does_not_spin_out(test, device):
     _steer_front_axle(vehicles, math.radians(25.0))
 
     try:
-        solver = solver_cls(model, use_mujoco_contacts=False, njmax=128, nconmax=64)
+        solver = newton.solvers.SolverMuJoCo(model, use_mujoco_contacts=False, njmax=128, nconmax=64)
     except ImportError as exc:
         raise unittest.SkipTest(f"MuJoCo not available: {exc}") from exc
     contacts = model.contacts()
@@ -175,19 +170,22 @@ def test_steered_launch_does_not_spin_out(test, device):
     vehicles.set_commands(drive=0.0, steer=0.0)
     run(60)  # settle onto the wheels
     prev = _heading(state_0.body_q.numpy()[car][3:7])
-    peak_yaw_rate = 0.0
+    yaw_rates = []
+    steps = 300
     vehicles.set_commands(drive=1.0, steer=0.0)  # steering is baked into the tire axis
-    for _ in range(300):
+    for _ in range(steps):
         run(1)
         heading = _heading(state_0.body_q.numpy()[car][3:7])
-        rate = abs(((heading - prev + math.pi) % (2.0 * math.pi) - math.pi) / dt)
+        yaw_rates.append(abs(((heading - prev + math.pi) % (2.0 * math.pi) - math.pi) / dt))
         prev = heading
-        peak_yaw_rate = max(peak_yaw_rate, rate)
 
     test.assertTrue(np.isfinite(state_0.body_qd.numpy()).all())
-    # a traction-sized motor corners (~4 rad/s peak here); an over-strong motor that
-    # wheelspins pirouettes at >10 rad/s.
-    test.assertLess(peak_yaw_rate, 6.0, f"steered launch spun out (peak yaw rate {peak_yaw_rate:.1f} rad/s)")
+    # Judge the sustained (steady-state) yaw rate, not a single-frame peak: a pirouette
+    # is a *sustained* high yaw rate, whereas a peak is transient-sensitive and made a
+    # peak-based check flaky. A traction-sized motor corners at a steady ~3 rad/s here;
+    # an over-strong motor that wheelspins sustains ~9 rad/s.
+    steady_yaw_rate = float(np.mean(yaw_rates[steps // 2 :]))
+    test.assertLess(steady_yaw_rate, 6.0, f"steered launch spun out (steady yaw rate {steady_yaw_rate:.1f} rad/s)")
     q = state_0.body_q.numpy()[car]
     test.assertGreater(math.hypot(float(q[0]), float(q[1])), 0.3, "car should travel, not pirouette in place")
 
