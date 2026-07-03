@@ -471,8 +471,9 @@ def apply_vehicle_manifest(
 
     Resolves the asset's wheel body/shape labels against ``builder`` and stamps
     the per-vehicle drive geometry and per-wheel identity/role attributes. Wheel
-    roles are derived from the wheel body label leaf names: ``front``/``rear``
-    select the axle row and ``left``/``right`` the side; front wheels of a
+    roles are derived from the wheel body label leaf names, which must contain
+    exactly one of ``front``/``rear`` (axle row) and exactly one of
+    ``left``/``right`` (side); front wheels of a
     steering-equipped asset are steerable and bound to the steering joint whose
     label leaf contains the matching side.
 
@@ -531,7 +532,15 @@ def apply_vehicle_manifest(
 
         leaf = body_label.rsplit("/", 1)[-1]
         front = "front" in leaf
+        if front == ("rear" in leaf):
+            raise ValueError(
+                f"asset {asset.name} wheel body label {body_label} must contain exactly one of 'front' or 'rear'"
+            )
         left = "left" in leaf
+        if left == ("right" in leaf):
+            raise ValueError(
+                f"asset {asset.name} wheel body label {body_label} must contain exactly one of 'left' or 'right'"
+            )
         steer_joint = -1
         steerable = front and bool(asset.steering_joint_labels)
         if steerable:

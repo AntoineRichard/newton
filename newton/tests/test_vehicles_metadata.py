@@ -231,6 +231,48 @@ class TestVehicleManifestLoading(unittest.TestCase):
                 nv.load_vehicle_manifest(path)
 
 
+class TestVehicleManifestRoleValidation(unittest.TestCase):
+    @staticmethod
+    def _synthetic(body_labels, steering_joint_labels=()):
+        builder = newton.ModelBuilder()
+        nv.register_vehicle_attributes(builder)
+        shape_labels = []
+        for body_label in body_labels:
+            body = builder.add_body(mass=1.0, label=body_label)
+            shape_label = body_label + "/geom"
+            builder.add_shape_cylinder(body, radius=0.1, half_height=0.05, label=shape_label)
+            shape_labels.append(shape_label)
+        asset = nv.VehicleAssetMetadata(
+            name="synthetic",
+            file=_MANIFEST_PATH,
+            drive_mode=int(nv.DriveMode.GENERIC),
+            wheel_radius=0.1,
+            wheel_width=0.05,
+            wheelbase=0.0,
+            track_width=0.0,
+            steer_limit=0.0,
+            wheel_body_labels=tuple(body_labels),
+            wheel_shape_labels=tuple(shape_labels),
+            steering_joint_labels=tuple(steering_joint_labels),
+        )
+        return builder, asset
+
+    def test_label_missing_front_rear_raises(self):
+        builder, asset = self._synthetic(["/car/left_wheel"])
+        with self.assertRaisesRegex(ValueError, "synthetic.*left_wheel.*'front' or 'rear'"):
+            nv.apply_vehicle_manifest(builder, asset)
+
+    def test_label_missing_left_right_raises(self):
+        builder, asset = self._synthetic(["/car/front_wheel"])
+        with self.assertRaisesRegex(ValueError, "synthetic.*front_wheel.*'left' or 'right'"):
+            nv.apply_vehicle_manifest(builder, asset)
+
+    def test_unmatched_steering_side_raises(self):
+        builder, asset = self._synthetic(["/car/front_left_wheel"], steering_joint_labels=["/car/steer_right"])
+        with self.assertRaisesRegex(ValueError, "synthetic.*exactly one steering joint label containing 'left'"):
+            nv.apply_vehicle_manifest(builder, asset)
+
+
 @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
 class TestVehicleManifestApplication(unittest.TestCase):
     def test_apply_manifest_to_imported_rc_car(self):
