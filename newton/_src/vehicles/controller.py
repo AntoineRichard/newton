@@ -170,6 +170,7 @@ class WheeledVehicles:
         fill(d.fallback_load, c.fallback_normal_load)
         fill(d.min_ref, c.min_reference_speed)
         fill(d.apply_reaction, 1 if c.apply_reaction_torque else 0)
+        fill(d.static_mu_scale, 1.0)
         # pneumatic trail auto-scales with wheel radius
         d.pneumatic_trail.assign((self.data.radius.numpy() * c.pneumatic_trail_ratio).astype(np.float32))
 

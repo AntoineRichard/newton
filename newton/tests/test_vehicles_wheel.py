@@ -130,31 +130,72 @@ def test_force_applied_at_ground_contact_not_biased_patch(test, device):
     test.assertLess(abs(yaw_torque), 1.0e-3 * max(abs(fx), 1.0))
 
 
-def test_low_speed_lateral_force_capped_against_overshoot(test, device):
-    # Near standstill a stiff/high-grip tire would otherwise apply the full saturated
-    # lateral force (mu*Fz) at a tiny lateral slip, reversing the velocity each step and
-    # pumping a roll/hop instability. The anti-overshoot cap limits |f_lat| to
-    # (fz/g)*|v_lat|/dt so the impulse cannot reverse the contact's lateral velocity.
+def test_low_speed_impulse_never_reverses_slip(test, device):
+    # At high mu and tiny lateral velocity the tire must stick or reduce slip, never
+    # reverse it: the implicit solve either takes the stick solution (impulse that
+    # exactly zeroes the slip) or applies a passive, budget-clamped impulse. This
+    # replaces the deleted low-speed lateral-cap band-aid regression.
     model, data, dyn, patch, state = _setup(device, radius=0.2)
-    _activate_patch(patch, center=(0.0, 0.0, -0.2), normal=(0.0, 0.0, 1.0), fz=100.0)
+    fz, mu, v_lat = 40.0, 3.0, 0.01
+    _activate_patch(patch, center=(0.0, 0.0, -0.2), normal=(0.0, 0.0, 1.0), fz=fz)
     _fill(dyn.drive_input, int(nv.DriveInput.TORQUE))
     _fill(dyn.drive_target, 0.0)
     _fill(dyn.tau_max, 100.0)
     _fill(dyn.inertia, 0.01)
     _fill(dyn.c_long, 20.0)
-    _fill(dyn.c_lat, 200.0)  # very stiff laterally -> would saturate at mu*Fz=100 N
-    _fill(dyn.mu_override, 1.0)
+    _fill(dyn.c_lat, 200.0)  # very stiff laterally -> explicit force would saturate at mu*Fz
+    _fill(dyn.mu_override, mu)  # very high grip: the historic explosion regime
     _fill(dyn.min_ref, 0.5)
+    _fill(dyn.static_mu_scale, 1.0)
     # tiny lateral velocity (+Y), no longitudinal motion or spin; body_qd = [lin, ang]
-    state.body_qd.assign(np.array([[0.0, 0.005, 0.0, 0.0, 0.0, 0.0]], dtype=np.float32))
+    state.body_qd.assign(np.array([[0.0, v_lat, 0.0, 0.0, 0.0, 0.0]], dtype=np.float32))
 
-    dt = 0.001
+    dt = 1.0 / 240.0
     apply_wheel_dynamics(model, state, data, patch, dyn, dt)
 
-    f_lat = abs(float(dyn.f_lat.numpy()[0]))
-    expected_cap = 100.0 / 9.81 * 0.005 / dt  # ~51 N
-    test.assertLess(f_lat, 60.0)  # capped well below the saturated mu*Fz = 100 N
-    test.assertAlmostEqual(f_lat, expected_cap, delta=6.0)
+    f_lat = float(dyn.f_lat.numpy()[0])
+    test.assertLessEqual(f_lat * v_lat, 0.0)  # opposes the lateral slip
+    # friction circle: the impulse never exceeds the budget mu*fz*dt
+    test.assertLessEqual(abs(f_lat) * dt, mu * fz * dt * (1.0 + 1.0e-5))
+    if int(dyn.stick.numpy()[0]) != 1:
+        # not stuck: the impulse must not exceed what would reverse the contact's
+        # lateral velocity (bounded by the body mass, an upper bound on the
+        # contact's lateral effective mass)
+        mass = 1.0 / float(model.body_inv_mass.numpy()[0])
+        test.assertLessEqual(abs(f_lat) * dt, mass * v_lat * (1.0 + 1.0e-4))
+
+
+def test_hard_brake_lockup_no_lateral_kick(test, device):
+    # A locked wheel sliding straight must produce force opposing motion with a
+    # negligible lateral component (no direction chatter at kappa -> -1, where the
+    # brush model's theoretical-slip transform amplifies any lateral slip).
+    model, data, dyn, patch, state = _setup(device, radius=0.2)
+    _activate_patch(patch, center=(0.0, 0.0, -0.2), normal=(0.0, 0.0, 1.0), fz=100.0)
+    _fill(dyn.drive_input, int(nv.DriveInput.TORQUE))
+    _fill(dyn.drive_target, 0.0)
+    _fill(dyn.brake_target, 1000.0)  # far above the wheel's spin momentum: hard lock
+    _fill(dyn.tau_max, 100.0)
+    _fill(dyn.inertia, 0.01)
+    _fill(dyn.c_long, 20.0)
+    _fill(dyn.c_lat, 20.0)
+    _fill(dyn.mu_override, 2.5)
+    _fill(dyn.min_ref, 0.5)
+    _fill(dyn.static_mu_scale, 1.0)
+    # sliding straight ahead at 5 m/s with the wheel not spinning; body_qd = [lin, ang]
+    state.body_qd.assign(np.array([[5.0, 0.0, 0.0, 0.0, 0.0, 0.0]], dtype=np.float32))
+
+    dt = 1.0 / 240.0
+    state.clear_forces()
+    apply_wheel_dynamics(model, state, data, patch, dyn, dt)
+
+    f_long = float(dyn.f_long.numpy()[0])
+    f_lat = float(dyn.f_lat.numpy()[0])
+    test.assertLess(f_long, 0.0)  # opposes the slide
+    test.assertLess(abs(f_lat), 0.05 * abs(f_long))  # no lateral kick
+    # a hard slide saturates the friction-circle impulse budget
+    test.assertGreater(float(dyn.impulse_utilization.numpy()[0]), 0.9)
+    # the wheel stays locked (brake capacity exceeds any spin-up)
+    test.assertAlmostEqual(float(dyn.omega.numpy()[0]), 0.0, places=6)
 
 
 class TestWheelDynamics(unittest.TestCase):
@@ -176,8 +217,14 @@ add_function_test(
 )
 add_function_test(
     TestWheelDynamics,
-    "test_low_speed_lateral_force_capped_against_overshoot",
-    test_low_speed_lateral_force_capped_against_overshoot,
+    "test_low_speed_impulse_never_reverses_slip",
+    test_low_speed_impulse_never_reverses_slip,
+    devices=get_test_devices(),
+)
+add_function_test(
+    TestWheelDynamics,
+    "test_hard_brake_lockup_no_lateral_kick",
+    test_hard_brake_lockup_no_lateral_kick,
     devices=get_test_devices(),
 )
 

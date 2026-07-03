@@ -8,10 +8,10 @@ One batched kernel per step (replacing separate drive/tire/moment paths):
 1. resolve drive torque from the command (torque-limited speed servo or torque),
 2. read the contact patch, compute longitudinal/lateral slip from the wheel
    body motion and the analytical spin,
-3. evaluate the tire force and accumulate the wrench at the patch into
-   ``state.body_f``,
-4. integrate the analytical spin ``omega`` semi-implicitly in the slip↔spin
-   coupling, with a resistive (brake/rolling) term that cannot reverse the wheel,
+3. solve the implicit tire impulse against the contact effective mass, project
+   onto the friction circle, and accumulate the wrench into ``state.body_f``,
+4. integrate the analytical spin ``omega`` from the resolved impulse, with a
+   resistive (brake/rolling) term that cannot reverse the wheel,
 5. optionally apply the drivetrain reaction torque to the wheel body.
 """
 
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import warp as wp
 
+from .impulse import solve_tire_impulse, wheel_effective_mass
 from .metadata import VehicleModelData
 from .tire import tire_force
 
@@ -72,6 +73,7 @@ class WheelDynamics:
         self.min_ref = z(wp.float32)
         self.pneumatic_trail = z(wp.float32)
         self.apply_reaction = z(wp.int32)
+        self.static_mu_scale = z(wp.float32)
         # command + state
         self.omega = z(wp.float32)
         self.drive_target = z(wp.float32)
@@ -83,6 +85,8 @@ class WheelDynamics:
         self.f_lat = z(wp.float32)
         self.mz = z(wp.float32)
         self.normal_load_used = z(wp.float32)
+        self.stick = z(wp.int32)
+        self.impulse_utilization = z(wp.float32)
 
 
 def apply_wheel_dynamics(model, state, data: VehicleModelData, patch, dyn: WheelDynamics, dt: float) -> None:
@@ -105,6 +109,8 @@ def apply_wheel_dynamics(model, state, data: VehicleModelData, patch, dyn: Wheel
     dyn.f_lat.zero_()
     dyn.mz.zero_()
     dyn.normal_load_used.zero_()
+    dyn.stick.zero_()
+    dyn.impulse_utilization.zero_()
     wp.launch(
         _wheel_dynamics_kernel,
         dim=data.wheel_count,
@@ -112,6 +118,8 @@ def apply_wheel_dynamics(model, state, data: VehicleModelData, patch, dyn: Wheel
             state.body_q,
             state.body_qd,
             model.body_com,
+            model.body_inv_mass,
+            model.body_inv_inertia,
             data.wheel_body,
             data.radius,
             data.forward_axis,
@@ -135,6 +143,7 @@ def apply_wheel_dynamics(model, state, data: VehicleModelData, patch, dyn: Wheel
             dyn.min_ref,
             dyn.pneumatic_trail,
             dyn.apply_reaction,
+            dyn.static_mu_scale,
             dyn.drive_target,
             dyn.brake_target,
             dt,
@@ -145,6 +154,8 @@ def apply_wheel_dynamics(model, state, data: VehicleModelData, patch, dyn: Wheel
             dyn.f_lat,
             dyn.mz,
             dyn.normal_load_used,
+            dyn.stick,
+            dyn.impulse_utilization,
             state.body_f,
         ],
         device=dyn.device,
@@ -156,6 +167,8 @@ def _wheel_dynamics_kernel(
     body_q: wp.array[wp.transform],
     body_qd: wp.array[wp.spatial_vector],
     body_com: wp.array[wp.vec3],
+    body_inv_mass: wp.array[wp.float32],
+    body_inv_inertia: wp.array[wp.mat33],
     wheel_body: wp.array[wp.int32],
     radius: wp.array[wp.float32],
     forward_axis: wp.array[wp.vec3],
@@ -179,6 +192,7 @@ def _wheel_dynamics_kernel(
     min_ref: wp.array[wp.float32],
     pneumatic_trail: wp.array[wp.float32],
     apply_reaction: wp.array[wp.int32],
+    static_mu_scale: wp.array[wp.float32],
     drive_target: wp.array[wp.float32],
     brake_target: wp.array[wp.float32],
     dt: float,
@@ -189,6 +203,8 @@ def _wheel_dynamics_kernel(
     out_f_lat: wp.array[wp.float32],
     out_mz: wp.array[wp.float32],
     out_normal_load: wp.array[wp.float32],
+    out_stick: wp.array[wp.int32],
+    out_utilization: wp.array[wp.float32],
     body_f: wp.array[wp.spatial_vector],
 ):
     w = wp.tid()
@@ -206,8 +222,7 @@ def _wheel_dynamics_kernel(
         tau_drive = drive_target[w]
     tau_drive = wp.clamp(tau_drive, -tau_max[w], tau_max[w])
 
-    f_long = float(0.0)
-    denom = inertia[w]
+    handled = int(0)
 
     if active[w]:
         X_wb = body_q[body]
@@ -239,58 +254,101 @@ def _wheel_dynamics_kernel(
             v_contact = v_lin + wp.cross(w_ang, offset)
             v_long = wp.dot(v_contact, fwd_t)
             v_lat = wp.dot(v_contact, lat_t)
-
             ref = wp.max(wp.abs(v_long), wp.max(min_ref[w], 1.0e-4))
-            kappa = (om * r - v_long) / ref
-            alpha = wp.atan2(v_lat, ref)
 
             fz = fz_latched[w]
             if fz <= 0.0:
                 fz = fallback_load[w]
             if fz > 0.0:
+                handled = 1
                 mu = mu_override[w]
                 if mu < 0.0:
                     mu = friction_seed[w]
-                if mu < 0.0:
-                    mu = 0.0
-                f = tire_force(tire_model[w], kappa, alpha, fz, mu, c_long[w], c_lat[w], pneumatic_trail[w])
-                f_long = f[0]
-                f_lat = f[1]
-                mz = f[2]
-                # Anti-overshoot for explicit-integration stability at low speed: the
-                # lateral force impulse must not reverse the contact's lateral velocity
-                # within a substep. Cap |f_lat| by the supported mass (fz/g) times the
-                # lateral slip speed over dt. Without it, a stiff / high-grip tire flips
-                # the saturated lateral force each step as v_lat changes sign near
-                # standstill, pumping a roll/hop instability that launches the car.
-                lat_cap = fz / 9.81 * wp.abs(v_lat) / dt
-                if wp.abs(f_lat) > lat_cap:
-                    scl = lat_cap / wp.max(wp.abs(f_lat), 1.0e-9)
-                    f_lat = f_lat * scl
-                    mz = mz * scl
+                mu = wp.max(mu, 0.0)
+
+                # --- free velocities (drive torque advances spin; brake handled below)
+                omega_free = om + dt * (tau_drive - damping[w] * om) * inv_i
+                # brake locks the wheel this substep if its impulse capacity
+                # exceeds the free spin momentum (conservative: ignores the
+                # tire's own spin-up torque)
+                locked = brake_target[w] * dt * inv_i >= wp.abs(omega_free)
+
+                # --- slip state and operating-point tire force (for the secant)
+                if locked:
+                    u_long = v_long  # wheel surface is stationary: slip = ground speed
+                else:
+                    u_long = v_long - omega_free * r
+                u_lat = v_lat
+                kappa = -u_long / ref
+                alpha = wp.atan2(u_lat, ref)
+                f0 = tire_force(tire_model[w], kappa, alpha, fz, mu, c_long[w], c_lat[w], 0.0)
+
+                # secant impulse stiffness dt*C, capped by the linear-regime slope
+                k_lin_long = dt * c_long[w] * fz / ref
+                k_lin_lat = dt * c_lat[w] * fz / ref
+                k_long = wp.min(dt * wp.abs(f0[0]) / wp.max(wp.abs(u_long), 1.0e-6), k_lin_long)
+                k_lat = wp.min(dt * wp.abs(f0[1]) / wp.max(wp.abs(u_lat), 1.0e-6), k_lin_lat)
+
+                # --- slip-space effective mass: free-body Delassus + spin mobility
+                rot_m = wp.quat_to_matrix(rot)
+                i_inv_w = rot_m * body_inv_inertia[body] * wp.transpose(rot_m)
+                dela = wheel_effective_mass(body_inv_mass[body], i_inv_w, offset, fwd_t, lat_t)
+                a11 = dela[0]
+                a12 = dela[1]
+                a22 = dela[2]
+                if not locked:
+                    a11 = a11 + r * r * inv_i  # spinning wheel adds slip mobility
+
+                budget = mu * fz * dt
+                sol = solve_tire_impulse(
+                    u_long, u_lat, a11, a12, a22, k_long, k_lat, budget, static_mu_scale[w] * budget
+                )
+                f_long = sol[0] / dt
+                f_lat = sol[1] / dt
+
+                # self-aligning moment from the *resolved* lateral force
+                util = sol[5]
+                mz = -f_lat * pneumatic_trail[w] * wp.max(1.0 - util, 0.0)
+
                 force_world = fwd_t * f_long + lat_t * f_lat
-                # tire wrench at the patch + self-aligning moment about the support normal
                 torque_world = wp.cross(offset, force_world) + mz * n
                 wp.atomic_add(body_f, body, wp.spatial_vector(force_world, torque_world))
-                denom = inertia[w] + dt * c_long[w] * fz * r * r / ref
+
+                # --- spin update from the resolved impulse
+                if locked:
+                    om_new = 0.0
+                else:
+                    om_new = omega_free - sol[0] * r * inv_i
+                    # residual resistive torques (brake below capacity + rolling)
+                    # brake toward zero without reversing
+                    resist = (brake_target[w] + rolling_resistance[w]) * dt * inv_i
+                    if om_new > 0.0:
+                        om_new = wp.max(om_new - resist, 0.0)
+                    elif om_new < 0.0:
+                        om_new = wp.min(om_new + resist, 0.0)
+                omega[w] = om_new
+
                 out_kappa[w] = kappa
                 out_alpha[w] = alpha
                 out_f_long[w] = f_long
                 out_f_lat[w] = f_lat
                 out_mz[w] = mz
                 out_normal_load[w] = fz
+                out_stick[w] = wp.int32(sol[4])
+                out_utilization[w] = util
 
-    # analytical spin: active/driving torques integrate; resistive torques brake toward zero
-    tau_active = tau_drive - f_long * r - damping[w] * om
-    omega_mid = om + dt * tau_active / wp.max(denom, 1.0e-9)
-    resist = (brake_target[w] + rolling_resistance[w]) * dt * inv_i
-    if omega_mid > 0.0:
-        om_new = wp.max(omega_mid - resist, 0.0)
-    elif omega_mid < 0.0:
-        om_new = wp.min(omega_mid + resist, 0.0)
-    else:
-        om_new = 0.0
-    omega[w] = om_new
+    if handled == 0:
+        # no contact (or no load): drive/damping integrate the free spin;
+        # resistive torques (brake + rolling) brake toward zero without reversing
+        omega_mid = om + dt * (tau_drive - damping[w] * om) * inv_i
+        resist = (brake_target[w] + rolling_resistance[w]) * dt * inv_i
+        if omega_mid > 0.0:
+            om_new = wp.max(omega_mid - resist, 0.0)
+        elif omega_mid < 0.0:
+            om_new = wp.min(omega_mid + resist, 0.0)
+        else:
+            om_new = 0.0
+        omega[w] = om_new
 
     # drivetrain reaction torque on the wheel body about the axle (optional)
     if apply_reaction[w] != 0:

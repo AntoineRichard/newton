@@ -192,8 +192,14 @@ class Example:
 
     def _command(self):
         if not self._interactive:
-            # scripted under --test: settle, then drive forward and steer
-            return (0.0, 0.0, 0.0) if self.sim_time < 0.5 else (1.0, 0.6, 0.0)
+            # scripted under --test: settle, launch straight, then steer. Steering
+            # starts late so test_final's world-frame dx check measures the straight
+            # launch, not how far around a circle the car happens to end up.
+            if self.sim_time < 0.5:
+                return 0.0, 0.0, 0.0
+            if self.sim_time < 3.0:
+                return 1.0, 0.0, 0.0
+            return 1.0, 0.6, 0.0
         if not self.cycle_enabled:
             return self.manual_drive, self.manual_steer, self.manual_brake
         cycle = self.sim_time % 8.0
