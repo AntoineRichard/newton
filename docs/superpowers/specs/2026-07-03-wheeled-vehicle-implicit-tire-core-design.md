@@ -137,9 +137,26 @@ Build the contact-frame effective mass at the contact point from the **coupled
 tangential mass**, not the free wheel body:
 
 ```
-m_c = m_wheel + Fz / |g|     # wheel body + supported chassis share
-A   = diag(1 / m_c)          # 2×2 tangential Delassus (slip mobility)
+m_c = max(Fz / (−g·n), m_wheel)   # supported mass (exact statics identity),
+                                  # floored at the wheel body mass
+A   = diag(1 / m_c)               # 2×2 tangential Delassus (slip mobility)
 ```
+
+(`Fz/(−g·n)` rather than `m_wheel + Fz/|g|`: the latched Fz already carries the
+wheel body's own weight, so adding `m_wheel` double-counts it — measured as
+uphill creep in Task 4 round 3. The floor preserves stick passivity
+`k_stick ≤ m_c` when Fz transients dip below the wheel's own weight.)
+
+The stick branch splits its impulse into **feedforward at the coupled mass,
+feedback at the local mass**: `p_stick = −(k_stick·u + m_c·dt·g_t)` with
+`k_stick = m_wheel`. The gravity-hold feedforward is velocity-independent (a
+steady force the rigid in-plane joint constraint transmits without ringing);
+the velocity feedback is bounded by the light wheel body's own local stability
+limit, so it cannot overshoot and pump the suspension. A single coupled-gain
+deadbeat stick (`p = −m_c·u_free`) was falsified in Task 4 round 2: it rings
+the suspension through the contact lever arm at μ ≥ 2 (measured 1.31×/substep
+force growth, budget-clamped limit cycle), and no `static_mu_scale` value
+satisfies both slope capture and rest stability with it.
 
 plus the scalar spin inertia `I` coupled to `u_long` through the wheel radius.
 
