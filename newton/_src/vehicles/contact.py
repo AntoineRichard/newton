@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import warp as wp
 
+from newton._src.geometry.types import GeoType
+
 from .metadata import VehicleModelData
 
 _BIG_F = 1.0e20
@@ -98,7 +100,15 @@ class WheelContactPatch:
         self._v_max = z(wp.float32)
 
 
-def update_wheel_contact_patches(model, state, contacts, data: VehicleModelData, patch: WheelContactPatch) -> None:
+def update_wheel_contact_patches(
+    model,
+    state,
+    contacts,
+    data: VehicleModelData,
+    patch: WheelContactPatch,
+    *,
+    enable_analytic_plane_patches: bool = False,
+) -> None:
     """Extract per-wheel contact patches from ``contacts`` (geometry only).
 
     Reads the Newton rigid contacts and ``state.body_q`` to compute, per wheel,
@@ -111,6 +121,12 @@ def update_wheel_contact_patches(model, state, contacts, data: VehicleModelData,
         contacts: Newton contacts populated by ``model.collide``.
         data: Vehicle tables.
         patch: Patch state to update in place.
+        enable_analytic_plane_patches: Replace the measured footprint of active
+            wheel-cylinder-on-plane pairs with the closed-form flat
+            cylinder-plane footprint (sink-depth chord math). Diagnostic only:
+            it overwrites ``tangent_u``/``tangent_v``/``tangent_extent``/``area``
+            and never touches the rigid contacts or anything the force path
+            reads (``center``, ``normal``, ``fz``, ``friction_seed``).
     """
     if data.wheel_count == 0:
         return
@@ -204,6 +220,27 @@ def update_wheel_contact_patches(model, state, contacts, data: VehicleModelData,
         inputs=[patch.active, patch._u_min, patch._u_max, patch._v_min, patch._v_max, patch.tangent_extent, patch.area],
         device=patch.device,
     )
+    if enable_analytic_plane_patches:
+        wp.launch(
+            _apply_analytic_plane_patches,
+            dim=data.wheel_count,
+            inputs=[
+                model.shape_type,
+                model.shape_body,
+                model.shape_transform,
+                state.body_q,
+                data.wheel_shape,
+                data.radius,
+                data.width,
+                patch.active,
+                patch.terrain_shape,
+                patch.tangent_u,
+                patch.tangent_v,
+                patch.tangent_extent,
+                patch.area,
+            ],
+            device=patch.device,
+        )
 
 
 def latch_wheel_loads(model, contacts, data: VehicleModelData, patch: WheelContactPatch) -> None:
@@ -395,6 +432,83 @@ def _finalize_extents(
     ev = wp.max(v_max[w] - v_min[w], 0.0)
     tangent_extent[w] = wp.vec2(eu, ev)
     area[w] = eu * ev
+
+
+@wp.func
+def _shape_transform_world(
+    shape: int,
+    shape_body: wp.array[wp.int32],
+    shape_transform: wp.array[wp.transform],
+    body_q: wp.array[wp.transform],
+) -> wp.transform:
+    body = shape_body[shape]
+    if body >= 0:
+        return wp.transform_multiply(body_q[body], shape_transform[shape])
+    return shape_transform[shape]
+
+
+@wp.kernel
+def _apply_analytic_plane_patches(
+    shape_type: wp.array[wp.int32],
+    shape_body: wp.array[wp.int32],
+    shape_transform: wp.array[wp.transform],
+    body_q: wp.array[wp.transform],
+    wheel_shape: wp.array[wp.int32],
+    wheel_radius: wp.array[wp.float32],
+    wheel_width: wp.array[wp.float32],
+    active: wp.array[wp.bool],
+    terrain_shape: wp.array[wp.int32],
+    tangent_u: wp.array[wp.vec3],
+    tangent_v: wp.array[wp.vec3],
+    tangent_extent: wp.array[wp.vec2],
+    area: wp.array[wp.float32],
+):
+    # Closed-form flat cylinder-on-plane footprint (diagnostic): a wheel of
+    # radius r sunk a depth d into the plane touches along a chord of length
+    # 2*sqrt(2*r*d - d^2) fore-aft and its full width laterally.
+    w = wp.tid()
+    if not active[w]:
+        return
+    terrain = terrain_shape[w]
+    shape = wheel_shape[w]
+    if terrain < 0 or shape < 0:
+        return
+    if shape_type[terrain] != wp.static(int(GeoType.PLANE)):
+        return
+    if shape_type[shape] != wp.static(int(GeoType.CYLINDER)):
+        return
+
+    radius = wheel_radius[w]
+    width = wheel_width[w]
+    if radius <= 0.0 or width <= 0.0:
+        return
+
+    X_ws_plane = _shape_transform_world(terrain, shape_body, shape_transform, body_q)
+    X_ws_wheel = _shape_transform_world(shape, shape_body, shape_transform, body_q)
+    plane_normal = wp.transform_vector(X_ws_plane, wp.vec3(0.0, 0.0, 1.0))
+    axle_axis = wp.transform_vector(X_ws_wheel, wp.vec3(0.0, 0.0, 1.0))
+
+    # The closed-form footprint assumes the wheel axle is parallel to the plane.
+    axle_normal_dot = wp.dot(axle_axis, plane_normal)
+    if wp.abs(axle_normal_dot) > 0.1:
+        return
+
+    plane_origin = wp.transform_get_translation(X_ws_plane)
+    wheel_center = wp.transform_get_translation(X_ws_wheel)
+    signed_height = wp.dot(wheel_center - plane_origin, plane_normal)
+    sink_depth = wp.clamp(radius - signed_height, 0.0, 2.0 * radius)
+    chord_term = wp.max(0.0, 2.0 * radius * sink_depth - sink_depth * sink_depth)
+    chord = 2.0 * wp.sqrt(chord_term)
+    if chord <= 0.0:
+        return
+
+    lateral = _safe_normalize(axle_axis - axle_normal_dot * plane_normal)
+    longitudinal = _safe_normalize(wp.cross(lateral, plane_normal))
+
+    tangent_u[w] = longitudinal
+    tangent_v[w] = lateral
+    tangent_extent[w] = wp.vec2(chord, width)
+    area[w] = chord * width
 
 
 @wp.kernel

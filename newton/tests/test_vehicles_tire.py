@@ -36,6 +36,72 @@ def _eval(model_id, kappa, alpha, fz, mu, c_long, c_lat, trail=0.0, device="cpu"
     return out.numpy()
 
 
+def _brush_reference(kappa, alpha, fz, mu, c_long, c_lat, trail):
+    """Independent NumPy implementation of the brush law (golden-curve reference).
+
+    Canonical theoretical slip ``sigma = slip / (1 + kappa)`` (guarded at
+    lock-up) feeding the parabolic-pressure magnitude law
+    ``F = 3*mu*Fz*phi*(1 - phi + phi^2/3)`` with ``phi = F_lin / (3*mu*Fz)``,
+    saturating at ``mu*Fz``. Written directly from the textbook formulas so a
+    regression in the Warp kernel cannot hide in a shared implementation.
+    """
+    kappa = np.asarray(kappa, dtype=np.float64)
+    alpha = np.asarray(alpha, dtype=np.float64)
+    limit = mu * fz
+    k = np.maximum(kappa, -0.9999)
+    inv = 1.0 / (1.0 + k)
+    fx_lin = c_long * fz * k * inv
+    fy_lin = c_lat * fz * np.tan(alpha) * inv
+    f_lin = np.hypot(fx_lin, fy_lin)
+    phi = f_lin / (3.0 * limit)
+    f_mag = np.where(phi < 1.0, 3.0 * limit * phi * (1.0 - phi + phi * phi / 3.0), limit)
+    scale = np.divide(f_mag, f_lin, out=np.zeros_like(f_lin), where=f_lin >= 1.0e-9)
+    fx = scale * fx_lin
+    fy = -scale * fy_lin
+    util = f_mag / limit
+    mz = -fy * trail * np.maximum(1.0 - util, 0.0)
+    return fx, fy, mz
+
+
+class TestBrushGoldenCurves(unittest.TestCase):
+    """Compare the brush kernel against an independent NumPy reference on a slip grid."""
+
+    def test_brush_matches_reference_over_slip_grid(self):
+        fz, mu, c_long, c_lat, trail = 1500.0, 0.9, 15.0, 12.0, 0.03
+        kappa_grid, alpha_grid = np.meshgrid(
+            np.linspace(-0.95, 1.5, 26),
+            np.linspace(-1.0, 1.0, 21),
+        )
+        kappa = kappa_grid.ravel()
+        alpha = alpha_grid.ravel()
+        n = kappa.size
+
+        forces = _eval(
+            TIRE_BRUSH, kappa, alpha, np.full(n, fz), np.full(n, mu), np.full(n, c_long), np.full(n, c_lat), trail=trail
+        )
+        fx_ref, fy_ref, mz_ref = _brush_reference(kappa, alpha, fz, mu, c_long, c_lat, trail)
+
+        limit = mu * fz
+        tol = 2.0e-4 * limit  # float32 kernel vs float64 reference
+        np.testing.assert_allclose(forces[:, 0], fx_ref, atol=tol)
+        np.testing.assert_allclose(forces[:, 1], fy_ref, atol=tol)
+        np.testing.assert_allclose(forces[:, 2], mz_ref, atol=tol * trail)
+
+        # Golden-curve invariants: the force never leaves the friction circle,
+        # and pure-slip curves are odd in their slip argument.
+        mag = np.hypot(forces[:, 0], forces[:, 1])
+        self.assertLessEqual(float(mag.max()), limit * (1.0 + 1.0e-4))
+
+    def test_brush_pure_lateral_curve_is_odd(self):
+        alpha = np.linspace(-0.8, 0.8, 17)
+        n = alpha.size
+        forces = _eval(
+            TIRE_BRUSH, np.zeros(n), alpha, np.full(n, 800.0), np.full(n, 1.0), np.full(n, 20.0), np.full(n, 20.0)
+        )
+        np.testing.assert_allclose(forces[:, 1], -forces[::-1, 1], atol=1.0e-3)
+        np.testing.assert_allclose(forces[:, 0], np.zeros(n), atol=1.0e-3)
+
+
 class TestTireForce(unittest.TestCase):
     def test_zero_slip_zero_force(self):
         f = _eval(TIRE_BRUSH, [0.0], [0.0], [100.0], [1.0], [20.0], [20.0])[0]

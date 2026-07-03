@@ -2826,5 +2826,58 @@ class TestMPREnlargeCorrection(_NarrowPhaseSetupMixin, unittest.TestCase):
         )
 
 
+class TestNarrowPhaseCylinderPlaneDiagnostics(_NarrowPhaseSetupMixin, unittest.TestCase):
+    """Cylinder-plane contact-quality diagnostic toggles.
+
+    With ``enable_plane_cylinder_contact_collapse=False`` the pair routes through
+    GJK/MPR multi-contact instead of the analytical primitive set, and with
+    ``enable_axial_contact_projection=False`` the resulting footprint is not
+    projected back onto the cylinder axis, so a side-lying cylinder resting on a
+    plane keeps a full area-like contact footprint (more than two contacts).
+    """
+
+    def setUp(self):
+        self.narrow_phase = NarrowPhase(
+            max_candidate_pairs=10000,
+            max_triangle_pairs=100000,
+            device=None,
+            enable_axial_contact_projection=False,
+            enable_plane_cylinder_contact_collapse=False,
+        )
+
+    def test_plane_cylinder_gjk_footprint_has_multiple_contacts(self):
+        """A side-lying cylinder penetrating a plane yields >2 contacts via GJK/MPR."""
+        radius = 0.5
+        half_height = 0.1
+        sink = 0.01
+        # Rotate the cylinder's local Z axis onto world Y so it lies on its side.
+        axis_q = wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), np.pi * 0.5)
+
+        geom_list = [
+            {
+                "type": GeoType.PLANE,
+                "transform": ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]),
+                "data": ([0.0, 0.0, 0.0], 0.0),
+            },
+            {
+                "type": GeoType.CYLINDER,
+                "transform": ([0.0, 0.0, radius - sink], list(axis_q)),
+                "data": ([radius, half_height, 0.0], 0.0),
+            },
+        ]
+
+        count, _pairs, positions, normals, penetrations, _tangents = self._run_narrow_phase(geom_list, [(0, 1)])
+
+        self.assertGreater(count, 2, "GJK/MPR cylinder-plane footprint should keep more than two contacts")
+        penetrating = 0
+        for i in range(count):
+            self.assertAlmostEqual(np.linalg.norm(normals[i]), 1.0, places=5, msg=f"Contact {i} normal unit length")
+            self.assertGreater(normals[i][2], 0.9, msg=f"Contact {i} normal should point up (+Z)")
+            self.assertLess(positions[i][2], radius, msg=f"Contact {i} should sit near the plane")
+            if penetrations[i] < 0.0:
+                penetrating += 1
+        self.assertGreater(penetrating, 0, "A sunk cylinder must report penetrating contacts")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2, failfast=True)
