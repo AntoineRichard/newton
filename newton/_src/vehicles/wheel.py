@@ -323,32 +323,34 @@ def _wheel_dynamics_kernel(
                 # cos(theta); either error turns the stick feedforward into a
                 # steady net push and the car creeps, measured 8.8 mm/s uphill
                 # at 15 deg from the double count alone.) Floored at m_wheel so
-                # a nearly unloaded wheel keeps the local feedback gain
-                # k_stick = m_wheel <= m_c (the stick passivity condition).
+                # a nearly unloaded wheel keeps the coupled mass at least its
+                # own body mass.
                 g_mag = wp.length(gravity)
                 inv_m = body_inv_mass[body]
+                m_wheel_mass = 1.0e9  # kinematic wheel body: effectively immovable
+                if inv_m > 0.0:
+                    m_wheel_mass = 1.0 / inv_m
                 if inv_m > 0.0 and g_mag > 1.0e-6:
-                    m_wheel = 1.0 / inv_m
                     g_normal = wp.max(-wp.dot(gravity, n), 0.1 * g_mag)
-                    m_c = wp.max(m_wheel, fz / g_normal)
-                elif inv_m > 0.0:
-                    m_c = 1.0 / inv_m  # no gravity field: fall back to the wheel body
+                    m_c = wp.max(m_wheel_mass, fz / g_normal)
                 else:
-                    m_c = 1.0e9  # kinematic wheel body: effectively immovable
+                    m_c = m_wheel_mass  # no gravity field: fall back to the wheel body
                 a11 = 1.0 / m_c
                 a12 = 0.0
                 a22 = 1.0 / m_c
                 if not locked:
                     a11 = a11 + r * r * inv_i  # spinning wheel adds slip mobility
 
-                # Stick FEEDBACK gain: the wheel body's own mass (local deadbeat,
-                # no overshoot). A coupled-mass gain overshoots the light wheel's
-                # local response ~m_c/m_wheel and rings the suspension into a
+                # Stick FEEDBACK gain, bounded by the local deadbeat limit
+                # k_stick <= 1/a11 INCLUDING spin mobility: a gain above 1/a11
+                # overshoots and reverses the local slip response. On the locked
+                # branch 1/a11 = m_c >= m_wheel so this reduces to the wheel
+                # body mass; on the rolling branch the spin term makes 1/a11
+                # smaller than m_wheel and must be the binding bound. A
+                # coupled-mass gain (m_c) overshoots the light wheel's local
+                # response ~m_c/m_wheel and rings the suspension into a
                 # budget-bounded limit cycle at high grip.
-                if inv_m > 0.0:
-                    k_stick = 1.0 / inv_m
-                else:
-                    k_stick = m_c  # kinematic wheel body: gain moot, A ~ 0
+                k_stick = wp.min(m_wheel_mass, 1.0 / a11)
 
                 budget = mu * fz * dt
                 sol = solve_tire_impulse(

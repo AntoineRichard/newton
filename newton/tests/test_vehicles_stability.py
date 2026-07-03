@@ -275,13 +275,12 @@ def test_low_speed_steer_reversals(test, device):
         test.assertLess(
             np.abs(rec.arr("roll")).max(), 0.35, f"mu={mu}: chassis roll blew up ({np.abs(rec.arr('roll')).max():.3f})"
         )
-        test.assertLessEqual(rec.arr("util").max(), 1.0 + 1e-4, f"mu={mu}: impulse over budget")
         # Raw friction-circle invariant: the applied tire force must never exceed
         # the static budget mu_s*mu*Fz (the stick branch may legitimately use up
         # to static_mu_scale times the kinetic circle). This is what actually
         # gates a disabled impulse clamp (the mutation check in the task brief);
-        # ``util`` alone cannot, since it is normalized by the same budget it is
-        # meant to police.
+        # the ``impulse_utilization`` diagnostic cannot -- it is clamped to
+        # [0, 1] in-kernel by construction, so it is recorded but not asserted.
         circle_bound = vehicles.config.static_mu_scale + 1e-2
         test.assertLessEqual(
             rec.arr("circle").max(),
