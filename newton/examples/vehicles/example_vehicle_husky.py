@@ -200,6 +200,17 @@ class Example:
         self.viewer.log_state(self.state_0)
         self.viewer.end_frame()
 
+    def test_post_step(self):
+        if not np.isfinite(self.state_0.body_q.numpy()).all():
+            raise ValueError("non-finite body poses")
+        if not np.isfinite(self.state_0.body_qd.numpy()).all():
+            raise ValueError("non-finite body velocities")
+        utilization = self.vehicles.dynamics.impulse_utilization.numpy()
+        if not np.isfinite(utilization).all():
+            raise ValueError(f"non-finite impulse utilization {utilization}")
+        if float(utilization.min()) < 0.0 or float(utilization.max()) > 1.0 + 1e-4:
+            raise ValueError(f"impulse utilization outside [0, 1]: {utilization}")
+
     def test_final(self):
         qd = self.state_0.body_qd.numpy()
         if not np.isfinite(qd).all():

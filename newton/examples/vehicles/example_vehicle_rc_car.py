@@ -116,15 +116,15 @@ class Example:
                 max_wheel_speed=315.0,
                 motor_max_torque=1.0,
                 angular_damping=0.0005,
-                # Grippy RC tires: mu ~ 1 (one g of grip) is a realistic, well-behaved
-                # value for a soft RC compound on a grippy surface; rubber can exceed 1
-                # and mu ~= peak lateral g, so measure it on the real car and slide up if
-                # the surface warrants (higher mu means larger tire forces, which stresses
-                # the explicit tire integration -- raise sim_substeps if you push it). The
+                # Grippy RC tires: soft-compound RC rubber on a prepared surface reaches
+                # mu ~ 2 (mu ~= peak lateral g, so measure it on the real car and adjust).
+                # The implicit impulse-budget tire core stays stable at this grip level --
+                # the regime-map acceptance suite (newton/tests/test_vehicles_stability.py)
+                # validates it up to mu = 2.5, which is also the UI slider ceiling. The
                 # lateral slip stiffness is set ~2x longitudinal so the car turns in
                 # crisply; both still saturate at the same mu*Fz circle, so this shapes how
                 # fast grip builds, not its maximum.
-                friction=1.0,
+                friction=2.0,
                 longitudinal_stiffness=20.0,
                 lateral_stiffness=40.0,
             ),
@@ -149,6 +149,8 @@ class Example:
         self._yaw_rate = 0.0
         self._omega = 0.0
         self._slip = 0.0
+        self._stick_count = 0
+        self._max_utilization = 0.0
         self._prev_yaw = _yaw(self._initial)
 
         # live handling tuning, pushed into the controller's per-wheel arrays each
@@ -157,7 +159,7 @@ class Example:
         self.linear_tire = False
         self.tune_c_long = cfg.longitudinal_stiffness
         self.tune_c_lat = cfg.lateral_stiffness
-        self.tune_friction = cfg.friction if cfg.friction > 0.0 else 1.0  # tire mu
+        self.tune_friction = cfg.friction if cfg.friction > 0.0 else 2.0  # tire mu
         self.tune_motor_torque = cfg.motor_max_torque
         self.tune_top_speed = cfg.max_wheel_speed
 
@@ -178,7 +180,7 @@ class Example:
         _changed, self.linear_tire = ui.checkbox("Linear tire (else brush)", self.linear_tire)
         _changed, self.tune_c_long = ui.slider_float("Long. stiffness", self.tune_c_long, 1.0, 100.0)
         _changed, self.tune_c_lat = ui.slider_float("Lat. stiffness", self.tune_c_lat, 1.0, 100.0)
-        _changed, self.tune_friction = ui.slider_float("Tire mu", self.tune_friction, 0.2, 3.0)
+        _changed, self.tune_friction = ui.slider_float("Tire mu", self.tune_friction, 0.2, 2.5)
         _changed, self.tune_motor_torque = ui.slider_float("Motor torque [N*m]", self.tune_motor_torque, 0.2, 8.0)
         _changed, self.tune_top_speed = ui.slider_float("Top wheel speed [rad/s]", self.tune_top_speed, 50.0, 400.0)
         ui.separator()
@@ -187,17 +189,25 @@ class Example:
         ui.text(f"Yaw rate: {math.degrees(self._yaw_rate):.1f} deg/s")
         ui.text(f"Wheel omega: {self._omega:.1f} rad/s")
         ui.text(f"Slip ratio: {self._slip:.2f}")
+        ui.text(f"Stick wheels: {self._stick_count}/4")
+        ui.text(f"Impulse utilization: {self._max_utilization:.2f}")
 
     def _command(self):
         if not self._interactive:
-            # scripted under --test: settle, launch straight, then steer. Steering
-            # starts late so test_final's world-frame dx check measures the straight
-            # launch, not how far around a circle the car happens to end up.
+            # scripted under --test: settle, launch straight, brake, then corner
+            # gently. Steering starts late so test_final's world-frame dx check
+            # measures the straight launch, not how far around a circle the car
+            # happens to end up. The corner is taken slowly (0.2 throttle caps the
+            # wheel speed at ~3.5 m/s): at mu = 2 a fast tight corner demands
+            # multiple g laterally and parks the inner wheels in the air, which
+            # would trip test_final's all-wheels-loaded check.
             if self.sim_time < 0.5:
                 return 0.0, 0.0, 0.0
-            if self.sim_time < 3.0:
+            if self.sim_time < 2.5:
                 return 1.0, 0.0, 0.0
-            return 1.0, 0.6, 0.0
+            if self.sim_time < 3.5:
+                return 0.0, 0.0, 1.0
+            return 0.2, 0.3, 0.0
         if not self.cycle_enabled:
             return self.manual_drive, self.manual_steer, self.manual_brake
         cycle = self.sim_time % 8.0
@@ -244,10 +254,15 @@ class Example:
         yaw = _yaw(q)
         self._yaw_rate = ((yaw - self._prev_yaw + math.pi) % (2.0 * math.pi) - math.pi) / self.frame_dt
         self._prev_yaw = yaw
-        omega = self.vehicles.dynamics.omega.numpy()
-        kappa = self.vehicles.dynamics.kappa.numpy()
+        dyn = self.vehicles.dynamics
+        omega = dyn.omega.numpy()
+        kappa = dyn.kappa.numpy()
+        stick = dyn.stick.numpy()
+        utilization = dyn.impulse_utilization.numpy()
         self._omega = float(np.max(np.abs(omega))) if omega.size else 0.0
         self._slip = float(np.max(np.abs(kappa))) if kappa.size else 0.0
+        self._stick_count = int(np.count_nonzero(stick)) if stick.size else 0
+        self._max_utilization = float(np.max(utilization)) if utilization.size else 0.0
 
     def _set_follow_camera(self):
         if not hasattr(self.viewer, "set_camera"):
@@ -266,6 +281,17 @@ class Example:
         self.viewer.begin_frame(self.sim_time)
         self.viewer.log_state(self.state_0)
         self.viewer.end_frame()
+
+    def test_post_step(self):
+        if not np.isfinite(self.state_0.body_q.numpy()).all():
+            raise ValueError("non-finite body poses")
+        if not np.isfinite(self.state_0.body_qd.numpy()).all():
+            raise ValueError("non-finite body velocities")
+        utilization = self.vehicles.dynamics.impulse_utilization.numpy()
+        if not np.isfinite(utilization).all():
+            raise ValueError(f"non-finite impulse utilization {utilization}")
+        if float(utilization.min()) < 0.0 or float(utilization.max()) > 1.0 + 1e-4:
+            raise ValueError(f"impulse utilization outside [0, 1]: {utilization}")
 
     def test_final(self):
         q = self.state_0.body_q.numpy()[self._chassis]
