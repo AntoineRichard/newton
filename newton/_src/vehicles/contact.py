@@ -206,22 +206,21 @@ def update_wheel_contact_patches(model, state, contacts, data: VehicleModelData,
     )
 
 
-def latch_wheel_loads(model, contacts, data: VehicleModelData, patch: WheelContactPatch, alpha: float = 0.2) -> None:
+def latch_wheel_loads(model, contacts, data: VehicleModelData, patch: WheelContactPatch) -> None:
     """Latch solver-reported per-wheel normal load into ``patch.fz``.
 
     Call after ``solver.update_contacts`` so ``contacts.force`` is populated.
-    The raw measured load is written to ``patch.normal_load`` and exponentially
-    smoothed into ``patch.fz`` (``fz += alpha * (measured - fz)``) so that the
-    statically-indeterminate per-wheel load of a rigid multi-wheel body does not
-    inject force jitter into the tire model. No-op if contact forces are
+    The measured per-wheel load is written to ``patch.normal_load`` and latched
+    directly into ``patch.fz``. A wheel with no solver-reported normal force
+    this step gets ``fz = 0``, so airborne wheels decay immediately and the
+    tire model never fires with a stale load. No-op if contact forces are
     unavailable (leaves the previous ``fz``).
 
     Args:
         model: Finalized model.
         contacts: Contacts with ``force`` populated.
         data: Vehicle tables.
-        patch: Patch state; ``normal_load`` (raw) and ``fz`` (smoothed) updated in place.
-        alpha: Smoothing factor in (0, 1]; 1.0 disables smoothing.
+        patch: Patch state; ``normal_load`` and ``fz`` updated in place.
     """
     if data.wheel_count == 0 or contacts.force is None:
         return
@@ -241,9 +240,7 @@ def latch_wheel_loads(model, contacts, data: VehicleModelData, patch: WheelConta
         ],
         device=patch.device,
     )
-    wp.launch(
-        _blend_loads, dim=data.wheel_count, inputs=[patch.normal_load, float(alpha), patch.fz], device=patch.device
-    )
+    wp.copy(patch.fz, patch.normal_load)
 
 
 # --- kernels ---------------------------------------------------------------
@@ -437,9 +434,3 @@ def _latch_loads(
     projected = wp.dot(force_on_wheel, support_normal)
     if projected > 0.0:
         wp.atomic_add(fz, wheel_id, projected)
-
-
-@wp.kernel
-def _blend_loads(measured: wp.array[wp.float32], alpha: float, fz: wp.array[wp.float32]):
-    w = wp.tid()
-    fz[w] = fz[w] + alpha * (measured[w] - fz[w])

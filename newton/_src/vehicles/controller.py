@@ -77,6 +77,8 @@ class WheeledConfig:
         min_reference_speed: Speed floor for slip regularization [m/s].
         pneumatic_trail_ratio: Pneumatic trail as a fraction of wheel radius, used for
             the self-aligning moment (per-wheel trail = ratio * radius). 0 disables it.
+        static_mu_scale: Static friction budget as a multiple of the kinetic ``mu``
+            (stick engages when the stopping impulse fits ``static_mu_scale * mu * Fz * dt``).
         apply_reaction_torque: Whether to apply the motor axle reaction torque to the wheel
             body. Off by default; it only affects pitch/weight-transfer, not the primary
             traction, and is left opt-in pending broader validation.
@@ -97,7 +99,7 @@ class WheeledConfig:
     fallback_normal_load: float = 0.0
     min_reference_speed: float = 0.5
     pneumatic_trail_ratio: float = 0.1
-    load_filter: float = 0.2
+    static_mu_scale: float = 1.0
     apply_reaction_torque: bool = False
 
 
@@ -170,7 +172,7 @@ class WheeledVehicles:
         fill(d.fallback_load, c.fallback_normal_load)
         fill(d.min_ref, c.min_reference_speed)
         fill(d.apply_reaction, 1 if c.apply_reaction_torque else 0)
-        fill(d.static_mu_scale, 1.0)
+        fill(d.static_mu_scale, c.static_mu_scale)
         # pneumatic trail auto-scales with wheel radius
         d.pneumatic_trail.assign((self.data.radius.numpy() * c.pneumatic_trail_ratio).astype(np.float32))
 
@@ -219,4 +221,4 @@ class WheeledVehicles:
     def latch_loads(self, contacts) -> None:
         """Latch solver-reported normal loads for the next step. Call after
         ``solver.update_contacts``."""
-        latch_wheel_loads(self.model, contacts, self.data, self.patch, alpha=self.config.load_filter)
+        latch_wheel_loads(self.model, contacts, self.data, self.patch)

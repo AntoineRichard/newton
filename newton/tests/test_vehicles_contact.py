@@ -88,6 +88,48 @@ def test_normal_load_matches_weight(test, device):
     test.assertLess(abs(fz - expected), 0.2 * expected, f"fz={fz} expected~{expected}")
 
 
+def test_latched_load_zeroes_when_airborne(test, device):
+    """fz must not persist across contact loss: a landing wheel starts from the
+    fresh measured load, not a stale airborne latch."""
+    model, wheel_body = _build_wheel_on_plane(device)
+    try:
+        solver = newton.solvers.SolverMuJoCo(model, use_mujoco_contacts=False, njmax=64, nconmax=32)
+    except ImportError as exc:
+        test.skipTest(f"MuJoCo not available: {exc}")
+
+    data = nv.read_vehicle_model_data(model)
+    patch = WheelContactPatch(data.wheel_count, device=model.device)
+    contacts = model.contacts()
+    state_0 = model.state()
+    state_1 = model.state()
+    control = model.control()
+    newton.eval_fk(model, model.joint_q, model.joint_qd, state_0)
+
+    dt = 1.0 / 240.0
+    # Settle on the ground so a nonzero load is latched.
+    for _ in range(200):
+        state_0.clear_forces()
+        model.collide(state_0, contacts)
+        update_wheel_contact_patches(model, state_0, contacts, data, patch)
+        solver.step(state_0, state_1, control, contacts, dt)
+        solver.update_contacts(contacts, state_0)
+        latch_wheel_loads(model, contacts, data, patch)
+        state_0, state_1 = state_1, state_0
+    test.assertGreater(float(patch.fz.numpy()[0]), 0.0)
+
+    # Teleport the wheel 1 m up so it loses contact, then run one latch cycle.
+    body_q = state_0.body_q.numpy()
+    body_q[wheel_body][2] += 1.0
+    state_0.body_q.assign(body_q)
+    state_0.clear_forces()
+    model.collide(state_0, contacts)
+    update_wheel_contact_patches(model, state_0, contacts, data, patch)
+    solver.step(state_0, state_1, control, contacts, dt)
+    solver.update_contacts(contacts, state_0)
+    latch_wheel_loads(model, contacts, data, patch)
+    test.assertEqual(float(patch.fz.numpy()[0]), 0.0, "airborne wheel must latch fz = 0, not a stale load")
+
+
 def test_gap_zero_centers_patch(test, device):
     # With configure_solver_contacts (gap=0, condim=1) the spurious analytic
     # plane-cylinder margin contact is gone, so the patch center sits at the
@@ -146,6 +188,12 @@ add_function_test(
 )
 add_function_test(
     TestVehicleContact, "test_gap_zero_centers_patch", test_gap_zero_centers_patch, devices=get_test_devices()
+)
+add_function_test(
+    TestVehicleContact,
+    "test_latched_load_zeroes_when_airborne",
+    test_latched_load_zeroes_when_airborne,
+    devices=get_test_devices(),
 )
 
 

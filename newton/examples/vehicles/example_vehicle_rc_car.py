@@ -98,7 +98,6 @@ class Example:
         self._interactive = not getattr(args, "test", False)
 
         self.model, self._chassis = _build()
-        # the asset is sprung, so the load is determinate and the band-aid is off.
         # Drivetrain is modelled on a Traxxas Slash 4x4 VXL: Castle 1415 2400 Kv motor
         # (torque constant Kt = 9.55/Kv = 3.98 mN*m/A) on 4S (~14.8 V nominal) through
         # the stock 11.82:1 final drive at ~85% efficiency.
@@ -117,7 +116,6 @@ class Example:
                 max_wheel_speed=315.0,
                 motor_max_torque=1.0,
                 angular_damping=0.0005,
-                load_filter=1.0,
                 # Grippy RC tires: mu ~ 1 (one g of grip) is a realistic, well-behaved
                 # value for a soft RC compound on a grippy surface; rubber can exceed 1
                 # and mu ~= peak lateral g, so measure it on the real car and slide up if
