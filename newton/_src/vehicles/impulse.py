@@ -143,3 +143,112 @@ def solve_tire_impulse(
         p_norm = budget
     util = wp.min(p_norm / budget, 1.0)
     return vec6(p1, p2, un1, un2, 0.0, util)
+
+
+@wp.func
+def solve_tire_impulse_relaxed(
+    u_long: float,
+    u_lat: float,
+    s_long: float,
+    s_lat: float,
+    beta: float,
+    a11: float,
+    a12: float,
+    a22: float,
+    k_long: float,
+    k_lat: float,
+    k_long_stick: float,
+    k_lat_stick: float,
+    u_ff_long: float,
+    u_ff_lat: float,
+    budget: float,
+    budget_stick: float,
+) -> vec6:
+    """:func:`solve_tire_impulse` with an implicit relaxation-length transient slip state.
+
+    The transient slip ``s`` lags the total instantaneous slip with a first-order
+    filter integrated implicitly *inside* the solve, ``s+ = (1-beta)*s + beta*u_total+``
+    with ``beta = dt*V / (sigma + dt*V)`` for relaxation length ``sigma``, and the
+    tire force law sees ``s+`` instead of ``u_total+``. On the slip branch
+    ``p = -K s+ = p0 - (K beta) u_total+`` with the constant history force
+    ``p0 = -K (1-beta) s``, so the implicit system becomes
+    ``(I + A K beta) u_total+ = u_total + A p0``; the resulting impulse is clamped
+    to the friction circle exactly as in the instant solve. The stick branch is a
+    velocity-level hold and is unchanged; the transient state simply relaxes
+    toward its outcome.
+
+    The function does NOT return ``s+``: the caller updates the persistent state
+    from the returned post-solve slip, ``s+ = (1-beta)*s + beta*u_new``, using the
+    same ``u_new`` components of the returned vector on every branch.
+
+    At ``beta = 1`` every branch reduces exactly (bitwise, up to signed zeros) to
+    :func:`solve_tire_impulse`: the history force vanishes and the system,
+    clamp, and stick test coincide term by term.
+
+    Args:
+        u_long: Velocity part of the free longitudinal slip [m/s].
+        u_lat: Velocity part of the free lateral slip [m/s].
+        s_long: Transient longitudinal slip state [m/s].
+        s_lat: Transient lateral slip state [m/s].
+        beta: Implicit filter gain ``dt*V / (sigma + dt*V)`` in (0, 1].
+        a11: Coupled slip-space Delassus (1,1) [(m/s)/(N·s)] (includes spin mobility).
+        a12: Coupled slip-space Delassus (1,2).
+        a22: Coupled slip-space Delassus (2,2).
+        k_long: Longitudinal secant impulse stiffness ``dt*C`` [N·s/(m/s)].
+        k_lat: Lateral secant impulse stiffness [N·s/(m/s)].
+        k_long_stick: Longitudinal stick feedback impulse gain [N·s/(m/s)].
+        k_lat_stick: Lateral stick feedback impulse gain [N·s/(m/s)].
+        u_ff_long: Feedforward longitudinal slip contribution ``dt*(g·t_fwd)`` [m/s].
+        u_ff_lat: Feedforward lateral slip contribution ``dt*(g·t_lat)`` [m/s].
+        budget: Kinetic friction-circle impulse budget ``mu*Fz*dt`` [N·s].
+        budget_stick: Static budget ``mu_s*Fz*dt`` [N·s].
+
+    Returns:
+        ``(p_long, p_lat, u_long_new, u_lat_new, stick, utilization)`` as in
+        :func:`solve_tire_impulse`.
+    """
+    ut1 = u_long + u_ff_long
+    ut2 = u_lat + u_ff_lat
+    if budget <= 0.0:
+        return vec6(0.0, 0.0, ut1, ut2, 0.0, 0.0)
+
+    # Stick: identical to the instant solve (a velocity-level hold; the
+    # transient state just relaxes toward its outcome in the caller).
+    det_a = a11 * a22 - a12 * a12
+    det_a = wp.max(det_a, 1.0e-12)
+    ps1 = -k_long_stick * u_long - (a22 * u_ff_long - a12 * u_ff_lat) / det_a
+    ps2 = -k_lat_stick * u_lat - (a11 * u_ff_lat - a12 * u_ff_long) / det_a
+    ps_norm = wp.sqrt(ps1 * ps1 + ps2 * ps2)
+    if ps_norm <= budget_stick:
+        un1 = ut1 + a11 * ps1 + a12 * ps2
+        un2 = ut2 + a12 * ps1 + a22 * ps2
+        util = wp.min(ps_norm / budget, 1.0)
+        return vec6(ps1, ps2, un1, un2, 1.0, util)
+
+    # Slip: p = -K s+ = p0 - K beta u_new, (I + A K beta) u_new = u_total + A p0.
+    kb1 = k_long * beta
+    kb2 = k_lat * beta
+    p01 = -k_long * (1.0 - beta) * s_long
+    p02 = -k_lat * (1.0 - beta) * s_lat
+    r1 = ut1 + a11 * p01 + a12 * p02
+    r2 = ut2 + a12 * p01 + a22 * p02
+    b11 = 1.0 + a11 * kb1
+    b12 = a12 * kb2
+    b21 = a12 * kb1
+    b22 = 1.0 + a22 * kb2
+    det_b = wp.max(b11 * b22 - b12 * b21, 1.0e-12)
+    un1 = (b22 * r1 - b12 * r2) / det_b
+    un2 = (b11 * r2 - b21 * r1) / det_b
+    p1 = p01 - kb1 * un1
+    p2 = p02 - kb2 * un2
+    p_norm = wp.sqrt(p1 * p1 + p2 * p2)
+    if p_norm > budget:
+        s = budget / wp.max(p_norm, 1.0e-12)
+        p1 = p1 * s
+        p2 = p2 * s
+        # Recompute the post-impulse slip consistently with the clamped impulse.
+        un1 = ut1 + a11 * p1 + a12 * p2
+        un2 = ut2 + a12 * p1 + a22 * p2
+        p_norm = budget
+    util = wp.min(p_norm / budget, 1.0)
+    return vec6(p1, p2, un1, un2, 0.0, util)

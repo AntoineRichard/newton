@@ -84,6 +84,12 @@ class WheeledConfig:
             widens the stick *capture* window so a slowly creeping contact (e.g. a
             braked car settling on a slope) is absorbed into stick instead of hanging
             in a slip-branch creep equilibrium just above the capture threshold.
+        relaxation_length_ratio: Tire relaxation length as a fraction of wheel radius
+            (per-wheel relaxation length ``sigma = ratio * radius`` [m]). Adds a
+            first-order transient lag on the slip the tire force law sees, integrated
+            implicitly inside the impulse solve. Ships off (0.0, no lag: the solve
+            reduces exactly to the instantaneous one) pending validation against the
+            acceptance suite (spec §4.5).
         apply_reaction_torque: Whether to apply the motor axle reaction torque to the wheel
             body. Off by default; it only affects pitch/weight-transfer, not the primary
             traction, and is left opt-in pending broader validation.
@@ -105,6 +111,7 @@ class WheeledConfig:
     min_reference_speed: float = 0.5
     pneumatic_trail_ratio: float = 0.1
     static_mu_scale: float = 1.2
+    relaxation_length_ratio: float = 0.0
     apply_reaction_torque: bool = False
 
 
@@ -181,6 +188,7 @@ class WheeledVehicles:
         fill(d.min_ref, c.min_reference_speed)
         fill(d.apply_reaction, 1 if c.apply_reaction_torque else 0)
         fill(d.static_mu_scale, c.static_mu_scale)
+        fill(d.relaxation_ratio, c.relaxation_length_ratio)
         # pneumatic trail auto-scales with wheel radius
         d.pneumatic_trail.assign((self.data.radius.numpy() * c.pneumatic_trail_ratio).astype(np.float32))
 

@@ -6,7 +6,11 @@ import unittest
 import numpy as np
 import warp as wp
 
-from newton._src.vehicles.impulse import solve_tire_impulse, vec6, wheel_effective_mass
+import newton
+import newton.vehicles as nv
+from newton._src.vehicles.contact import WheelContactPatch
+from newton._src.vehicles.impulse import solve_tire_impulse, solve_tire_impulse_relaxed, vec6, wheel_effective_mass
+from newton._src.vehicles.wheel import WheelDynamics, apply_wheel_dynamics
 from newton.tests.unittest_utils import add_function_test, get_test_devices
 
 
@@ -44,6 +48,37 @@ def _effmass_kernel(out: wp.array[wp.vec3]):
     out[0] = wheel_effective_mass(1.0, i_inv, wp.vec3(0.0, 0.0, -0.05), wp.vec3(1.0, 0.0, 0.0), wp.vec3(0.0, 1.0, 0.0))
 
 
+@wp.kernel
+def _solve_relaxed_kernel(
+    inp: wp.array[vec6],
+    budgets: wp.array[wp.vec2],
+    stiff: wp.array[wp.vec4],
+    uff: wp.array[wp.vec2],
+    srel: wp.array[wp.vec3],
+    out: wp.array[vec6],
+):
+    i = wp.tid()
+    v = inp[i]
+    out[i] = solve_tire_impulse_relaxed(
+        v[0],
+        v[1],
+        srel[i][0],
+        srel[i][1],
+        srel[i][2],
+        v[2],
+        v[3],
+        v[4],
+        stiff[i][0],
+        stiff[i][1],
+        stiff[i][2],
+        stiff[i][3],
+        uff[i][0],
+        uff[i][1],
+        budgets[i][0],
+        budgets[i][1],
+    )
+
+
 def _solve(device, u, a, k, budget, budget_stick, k_stick=(1.0, 1.0), u_ff=(0.0, 0.0)):
     inp = wp.array([vec6(u[0], u[1], a[0], a[1], a[2], 0.0)], dtype=vec6, device=device)
     budgets = wp.array([wp.vec2(budget, budget_stick)], dtype=wp.vec2, device=device)
@@ -51,6 +86,17 @@ def _solve(device, u, a, k, budget, budget_stick, k_stick=(1.0, 1.0), u_ff=(0.0,
     uff = wp.array([wp.vec2(u_ff[0], u_ff[1])], dtype=wp.vec2, device=device)
     out = wp.zeros(1, dtype=vec6, device=device)
     wp.launch(_solve_kernel, dim=1, inputs=[inp, budgets, stiff, uff, out], device=device)
+    return out.numpy()[0]
+
+
+def _solve_relaxed(device, u, s, beta, a, k, budget, budget_stick, k_stick=(1.0, 1.0), u_ff=(0.0, 0.0)):
+    inp = wp.array([vec6(u[0], u[1], a[0], a[1], a[2], 0.0)], dtype=vec6, device=device)
+    budgets = wp.array([wp.vec2(budget, budget_stick)], dtype=wp.vec2, device=device)
+    stiff = wp.array([wp.vec4(k[0], k[1], k_stick[0], k_stick[1])], dtype=wp.vec4, device=device)
+    uff = wp.array([wp.vec2(u_ff[0], u_ff[1])], dtype=wp.vec2, device=device)
+    srel = wp.array([wp.vec3(s[0], s[1], beta)], dtype=wp.vec3, device=device)
+    out = wp.zeros(1, dtype=vec6, device=device)
+    wp.launch(_solve_relaxed_kernel, dim=1, inputs=[inp, budgets, stiff, uff, srel, out], device=device)
     return out.numpy()[0]
 
 
@@ -156,6 +202,126 @@ def test_passivity_random_inputs(test, device):
             test.assertLessEqual(float(p @ u_new), 1.0e-5)
 
 
+def test_relaxed_solve_reduces_to_instant_at_beta_one(test, device):
+    # At beta = 1 the transient slip state is fully replaced by the instantaneous
+    # slip each substep, so solve_tire_impulse_relaxed must reproduce
+    # solve_tire_impulse EXACTLY for any stored state s: the history force
+    # p0 = -K(1-beta)s vanishes and the linear system, clamp, and stick branch
+    # all coincide term by term. The random sweep covers stick, slip, clamped,
+    # and zero-budget branches.
+    rng = np.random.default_rng(7)
+    for i in range(200):
+        u = rng.uniform(-5.0, 5.0, 2)
+        a11, a22 = rng.uniform(0.1, 20.0, 2)
+        a12 = rng.uniform(-1.0, 1.0) * np.sqrt(a11 * a22) * 0.5
+        k = rng.uniform(0.0, 100.0, 2)
+        ks = rng.uniform(0.0, 1.0) / (max(a11, a22) + abs(a12))
+        budget = 0.0 if i % 10 == 0 else rng.uniform(0.01, 5.0)
+        budget_stick = budget * rng.uniform(1.0, 1.5)
+        u_ff = rng.uniform(-0.5, 0.5, 2) if i % 2 == 1 else (0.0, 0.0)
+        s = rng.uniform(-5.0, 5.0, 2)  # arbitrary transient state: must not matter
+        r0 = _solve(device, u, (a11, a12, a22), k, budget, budget_stick, k_stick=(ks, ks), u_ff=u_ff)
+        r1 = _solve_relaxed(device, u, s, 1.0, (a11, a12, a22), k, budget, budget_stick, k_stick=(ks, ks), u_ff=u_ff)
+        np.testing.assert_allclose(np.asarray(r1), np.asarray(r0), atol=1.0e-6)
+
+
+def test_relaxed_solve_is_passive(test, device):
+    # Two structural invariants of the relaxed solve over random beta in (0, 1]:
+    # 1. Budget: |p| <= max(budget, budget_stick) on ALL draws -- the friction
+    #    circle bounds the impulse regardless of the transient state.
+    # 2. Passivity p . u_new <= 0, checked ONLY on draws with s = u_total (and
+    #    u_ff = 0). With an arbitrary transient state s the history force
+    #    p0 = -K(1-beta)s is stored energy, not damping, so the slip-branch
+    #    impulse is not dissipative w.r.t. u_new for arbitrary s (a stale s can
+    #    push the slip past zero while still opposing s+). At the transient
+    #    equilibrium s = u_total the relaxed slip solve is the instant solve with
+    #    the tire gain scaled by beta (s+ = (I + beta*A*K)^-1 u_total), which is
+    #    passive under the same draw structure as test_passivity_random_inputs
+    #    (k_stick below the local stability bound, budget_stick >= budget).
+    rng = np.random.default_rng(11)
+    for i in range(200):
+        u = rng.uniform(-5.0, 5.0, 2)
+        a11, a22 = rng.uniform(0.1, 20.0, 2)
+        a12 = rng.uniform(-1.0, 1.0) * np.sqrt(a11 * a22) * 0.5
+        k = rng.uniform(0.0, 100.0, 2)
+        ks = rng.uniform(0.0, 1.0) / (max(a11, a22) + abs(a12))  # <= 1/lambda_max(A)
+        budget = rng.uniform(0.01, 5.0)
+        budget_stick = budget * rng.uniform(1.0, 1.5)
+        beta = rng.uniform(1.0e-3, 1.0)
+        in_equilibrium = i % 2 == 0
+        s = u if in_equilibrium else rng.uniform(-5.0, 5.0, 2)
+        r = _solve_relaxed(device, u, s, beta, (a11, a12, a22), k, budget, budget_stick, k_stick=(ks, ks))
+        p = np.array([float(r[0]), float(r[1])])
+        u_new = np.array([float(r[2]), float(r[3])])
+        test.assertLessEqual(np.hypot(*p), max(budget, budget_stick) * (1.0 + 1.0e-4))
+        if in_equilibrium:
+            test.assertLessEqual(float(p @ u_new), 1.0e-5)
+
+
+def test_relaxed_transient_state_converges_to_slip(test, device):
+    # End-to-end: a locked wheel sliding at constant speed with
+    # relaxation_length_ratio = 1 must stay finite and its transient slip state
+    # must converge toward the instantaneous post-solve slip u_new = u + a11*p
+    # (steady conditions: s+ = (1-beta)s + beta*u_new is a contraction to u_new).
+    builder = newton.ModelBuilder()
+    nv.register_vehicle_attributes(builder)
+    body = builder.add_body()
+    shape = builder.add_shape_cylinder(body, radius=0.2, half_height=0.05)
+    nv.set_vehicle(builder, 0, drive_mode=int(nv.DriveMode.GENERIC))
+    nv.add_wheel(builder, shape=shape, vehicle_id=0, wheel_id=0, radius=0.2, width=0.1)
+    model = builder.finalize(device=device)
+    data = nv.read_vehicle_model_data(model)
+    dyn = WheelDynamics(data.wheel_count, device=model.device)
+    patch = WheelContactPatch(data.wheel_count, device=model.device)
+    state = model.state()
+    state.body_q.assign(np.array([[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]], dtype=np.float32))
+    # slide straight ahead at 5 m/s; the wheel stays locked (huge brake), so the
+    # instantaneous slip is the constant ground speed
+    v_long = 5.0
+    state.body_qd.assign(np.array([[v_long, 0.0, 0.0, 0.0, 0.0, 0.0]], dtype=np.float32))
+    patch.active.assign(np.array([True]))
+    patch.normal.assign(np.array([[0.0, 0.0, 1.0]], dtype=np.float32))
+    fz = 100.0
+    patch.fz.assign(np.array([fz], dtype=np.float32))
+
+    def fill(arr, value):
+        host = arr.numpy()
+        host[...] = value
+        arr.assign(host)
+
+    fill(dyn.drive_input, int(nv.DriveInput.TORQUE))
+    fill(dyn.brake_target, 1000.0)  # lock the wheel: slip = ground speed, steady
+    fill(dyn.tau_max, 100.0)
+    fill(dyn.inertia, 0.01)
+    fill(dyn.c_long, 20.0)
+    fill(dyn.c_lat, 20.0)
+    fill(dyn.mu_override, 1.0)
+    fill(dyn.min_ref, 0.5)
+    fill(dyn.static_mu_scale, 1.0)
+    fill(dyn.relaxation_ratio, 1.0)  # sigma = radius = 0.2 m
+
+    dt = 1.0 / 240.0
+    history = []
+    for _ in range(300):
+        state.clear_forces()
+        apply_wheel_dynamics(model, state, data, patch, dyn, dt)
+        history.append(float(dyn.trans_long.numpy()[0]))
+    s_hist = np.array(history)
+    test.assertTrue(np.all(np.isfinite(s_hist)))
+    # first substep only moves a fraction beta of the way (transient lag exists)
+    beta = dt * v_long / (0.2 + dt * v_long)
+    test.assertLess(s_hist[0], 0.5 * v_long)
+    test.assertAlmostEqual(s_hist[0] / v_long, beta, delta=0.5 * beta)
+    # monotone approach toward the steady slip, converged after 300 substeps to
+    # the instantaneous post-solve slip u_new = u + a11 * p (locked branch:
+    # a11 = 1/m_c with m_c = fz / g_normal)
+    test.assertTrue(np.all(np.diff(s_hist) > -1.0e-6))
+    g_normal = 9.81
+    p_long = float(dyn.f_long.numpy()[0]) * dt
+    u_new = v_long + (g_normal / fz) * p_long
+    test.assertAlmostEqual(s_hist[-1], u_new, delta=0.01 * v_long)
+
+
 def test_zero_stiffness_zero_impulse(test, device):
     r = _solve(device, (1.0, 1.0), (1.0, 0.0, 1.0), (0.0, 0.0), 1.0, 0.0)
     test.assertAlmostEqual(float(r[0]), 0.0, places=6)
@@ -174,6 +340,9 @@ for _name, _fn in (
     ("test_slip_solve_reduces_slip_without_reversal", test_slip_solve_reduces_slip_without_reversal),
     ("test_clamped_impulse_on_budget_boundary", test_clamped_impulse_on_budget_boundary),
     ("test_passivity_random_inputs", test_passivity_random_inputs),
+    ("test_relaxed_solve_reduces_to_instant_at_beta_one", test_relaxed_solve_reduces_to_instant_at_beta_one),
+    ("test_relaxed_solve_is_passive", test_relaxed_solve_is_passive),
+    ("test_relaxed_transient_state_converges_to_slip", test_relaxed_transient_state_converges_to_slip),
     ("test_zero_stiffness_zero_impulse", test_zero_stiffness_zero_impulse),
 ):
     add_function_test(TestVehiclesImpulse, _name, _fn, devices=get_test_devices())

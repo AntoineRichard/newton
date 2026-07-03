@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import warp as wp
 
-from .impulse import solve_tire_impulse
+from .impulse import solve_tire_impulse_relaxed
 from .metadata import VehicleModelData
 from .tire import tire_force
 
@@ -74,10 +74,14 @@ class WheelDynamics:
         self.pneumatic_trail = z(wp.float32)
         self.apply_reaction = z(wp.int32)
         self.static_mu_scale = z(wp.float32)
+        self.relaxation_ratio = z(wp.float32)
         # command + state
         self.omega = z(wp.float32)
         self.drive_target = z(wp.float32)
         self.brake_target = z(wp.float32)
+        # transient (relaxation-length) slip state [m/s]; zeroed at contact loss
+        self.trans_long = z(wp.float32)
+        self.trans_lat = z(wp.float32)
         # diagnostics
         self.kappa = z(wp.float32)
         self.alpha = z(wp.float32)
@@ -152,10 +156,13 @@ def apply_wheel_dynamics(
             dyn.pneumatic_trail,
             dyn.apply_reaction,
             dyn.static_mu_scale,
+            dyn.relaxation_ratio,
             dyn.drive_target,
             dyn.brake_target,
             dt,
             dyn.omega,
+            dyn.trans_long,
+            dyn.trans_lat,
             dyn.kappa,
             dyn.alpha,
             dyn.f_long,
@@ -201,10 +208,13 @@ def _wheel_dynamics_kernel(
     pneumatic_trail: wp.array[wp.float32],
     apply_reaction: wp.array[wp.int32],
     static_mu_scale: wp.array[wp.float32],
+    relaxation_ratio: wp.array[wp.float32],
     drive_target: wp.array[wp.float32],
     brake_target: wp.array[wp.float32],
     dt: float,
     omega: wp.array[wp.float32],
+    trans_long: wp.array[wp.float32],
+    trans_lat: wp.array[wp.float32],
     out_kappa: wp.array[wp.float32],
     out_alpha: wp.array[wp.float32],
     out_f_long: wp.array[wp.float32],
@@ -352,10 +362,23 @@ def _wheel_dynamics_kernel(
                 # budget-bounded limit cycle at high grip.
                 k_stick = wp.min(m_wheel_mass, 1.0 / a11)
 
+                # Optional relaxation-length transient slip (spec §4.5, default
+                # off). sigma = ratio * r; beta = dt*V/(sigma + dt*V) is the
+                # implicit first-order filter gain at the slip reference speed.
+                # With ratio 0, beta = 1 exactly and the relaxed solve reduces
+                # bit-identically to the instant solve_tire_impulse.
+                sigma = relaxation_ratio[w] * r
+                beta = dt * ref / wp.max(sigma + dt * ref, 1.0e-9)
+                s_long = trans_long[w]
+                s_lat = trans_lat[w]
+
                 budget = mu * fz * dt
-                sol = solve_tire_impulse(
+                sol = solve_tire_impulse_relaxed(
                     u_long,
                     u_lat,
+                    s_long,
+                    s_lat,
+                    beta,
                     a11,
                     a12,
                     a22,
@@ -370,6 +393,10 @@ def _wheel_dynamics_kernel(
                 )
                 f_long = sol[0] / dt
                 f_lat = sol[1] / dt
+
+                # transient slip relaxes toward the post-solve total slip
+                trans_long[w] = (1.0 - beta) * s_long + beta * sol[2]
+                trans_lat[w] = (1.0 - beta) * s_lat + beta * sol[3]
 
                 # self-aligning moment from the *resolved* lateral force
                 util = sol[5]
@@ -403,6 +430,9 @@ def _wheel_dynamics_kernel(
                 out_utilization[w] = util
 
     if handled == 0:
+        # contact lost: the tire carries no transient slip state in the air
+        trans_long[w] = 0.0
+        trans_lat[w] = 0.0
         # no contact (or no load): drive/damping integrate the free spin;
         # resistive torques (brake + rolling) brake toward zero without reversing
         omega_mid = om + dt * (tau_drive - damping[w] * om) * inv_i
