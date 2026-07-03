@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import warp as wp
 
-from .impulse import solve_tire_impulse, wheel_effective_mass
+from .impulse import solve_tire_impulse
 from .metadata import VehicleModelData
 from .tire import tire_force
 
@@ -94,7 +94,7 @@ def apply_wheel_dynamics(model, state, data: VehicleModelData, patch, dyn: Wheel
     integrate analytical wheel spin.
 
     Args:
-        model: Finalized model (provides ``body_com``).
+        model: Finalized model (provides ``body_com`` and ``gravity``).
         state: State; reads ``body_q``/``body_qd``, accumulates into ``body_f``.
         data: Vehicle tables.
         patch: Contact patch state from :func:`update_wheel_contact_patches`.
@@ -103,6 +103,9 @@ def apply_wheel_dynamics(model, state, data: VehicleModelData, patch, dyn: Wheel
     """
     if data.wheel_count == 0:
         return
+    # World gravity vector [m/s^2]: used for the supported-mass estimate and to
+    # anticipate gravity's in-substep slip contribution (see the kernel).
+    gravity = wp.vec3(*(model.gravity.numpy()[0].tolist()))
     dyn.kappa.zero_()
     dyn.alpha.zero_()
     dyn.f_long.zero_()
@@ -119,7 +122,7 @@ def apply_wheel_dynamics(model, state, data: VehicleModelData, patch, dyn: Wheel
             state.body_qd,
             model.body_com,
             model.body_inv_mass,
-            model.body_inv_inertia,
+            gravity,
             data.wheel_body,
             data.radius,
             data.forward_axis,
@@ -168,7 +171,7 @@ def _wheel_dynamics_kernel(
     body_qd: wp.array[wp.spatial_vector],
     body_com: wp.array[wp.vec3],
     body_inv_mass: wp.array[wp.float32],
-    body_inv_inertia: wp.array[wp.mat33],
+    gravity: wp.vec3,
     wheel_body: wp.array[wp.int32],
     radius: wp.array[wp.float32],
     forward_axis: wp.array[wp.vec3],
@@ -274,11 +277,17 @@ def _wheel_dynamics_kernel(
                 locked = brake_target[w] * dt * inv_i >= wp.abs(omega_free)
 
                 # --- slip state and operating-point tire force (for the secant)
+                # Anticipate gravity's in-substep tangential contribution (spec
+                # §4.2): without it a stick impulse zeroes slip at the start of
+                # the substep and gravity re-accelerates the vehicle during it,
+                # leaving a structural creep of ~g*sin(theta)*dt/2 on slopes.
+                g_long = dt * wp.dot(gravity, fwd_t)
+                g_lat = dt * wp.dot(gravity, lat_t)
                 if locked:
-                    u_long = v_long  # wheel surface is stationary: slip = ground speed
+                    u_long = v_long + g_long  # wheel surface is stationary: slip = ground speed
                 else:
-                    u_long = v_long - omega_free * r
-                u_lat = v_lat
+                    u_long = v_long - omega_free * r + g_long
+                u_lat = v_lat + g_lat
                 kappa = -u_long / ref
                 alpha = wp.atan2(u_lat, ref)
                 f0 = tire_force(tire_model[w], kappa, alpha, fz, mu, c_long[w], c_lat[w], 0.0)
@@ -289,13 +298,25 @@ def _wheel_dynamics_kernel(
                 k_long = wp.min(dt * wp.abs(f0[0]) / wp.max(wp.abs(u_long), 1.0e-6), k_lin_long)
                 k_lat = wp.min(dt * wp.abs(f0[1]) / wp.max(wp.abs(u_lat), 1.0e-6), k_lin_lat)
 
-                # --- slip-space effective mass: free-body Delassus + spin mobility
-                rot_m = wp.quat_to_matrix(rot)
-                i_inv_w = rot_m * body_inv_inertia[body] * wp.transpose(rot_m)
-                dela = wheel_effective_mass(body_inv_mass[body], i_inv_w, offset, fwd_t, lat_t)
-                a11 = dela[0]
-                a12 = dela[1]
-                a22 = dela[2]
+                # --- slip-space effective mass: coupled tangential mass + spin mobility
+                # The wheel body's axle joint is FIXED (spin is analytical) and its
+                # suspension is prismatic, so in the tangential plane the wheel is
+                # rigidly coupled to its corner of the chassis. The free-body
+                # Delassus overstated slip mobility ~15x (spurious rotational term
+                # included), which made the stick impulse under-correct into a
+                # steady, mu-independent slope creep. Use the supported-mass
+                # estimate m_c = m_wheel + Fz/|g| instead (spec §4.2, amended).
+                g_mag = wp.length(gravity)
+                inv_m = body_inv_mass[body]
+                if inv_m > 0.0 and g_mag > 1.0e-6:
+                    m_c = 1.0 / inv_m + fz / g_mag
+                elif inv_m > 0.0:
+                    m_c = 1.0 / inv_m
+                else:
+                    m_c = 1.0e9  # kinematic wheel body: effectively immovable
+                a11 = 1.0 / m_c
+                a12 = 0.0
+                a22 = 1.0 / m_c
                 if not locked:
                     a11 = a11 + r * r * inv_i  # spinning wheel adds slip mobility
 
