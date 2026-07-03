@@ -133,21 +133,33 @@ the solver's averaged patch centroid caused a spurious yaw torque):
 
 ### 4.2 Effective mass
 
-Build the contact-frame effective mass of the wheel body from `body_inv_mass` and
-`body_inv_inertia` (world-frame, at the contact point):
+Build the contact-frame effective mass at the contact point from the **coupled
+tangential mass**, not the free wheel body:
 
 ```
-W  = J M⁻¹ Jᵀ            # 2×2 tangential Delassus block of the free wheel body
-Mw = W⁻¹                 # contact effective mass, 2×2
+m_c = m_wheel + Fz / |g|     # wheel body + supported chassis share
+A   = diag(1 / m_c)          # 2×2 tangential Delassus (slip mobility)
 ```
 
 plus the scalar spin inertia `I` coupled to `u_long` through the wheel radius.
 
-The free-body Delassus ignores the suspension and steering joint constraints.
-Constraints can only *increase* effective mass, so `Mw` is a lower bound: the solve
-computes impulses the wheel body can definitely absorb. The error is one substep of
-slight under-grip — always on the stable side. This is a deliberate accuracy/
-stability trade and must be documented in the kernel.
+Rationale (amended 2026-07-03 after Task 4 falsified the free-body draft): the
+wheel body's axle joint is FIXED (spin is analytical) and its suspension is
+prismatic, so in the tangential plane the wheel body is rigidly coupled to its
+corner of the chassis — the free-body Delassus overstates slip mobility by an
+order of magnitude (0.06 kg free vs ~0.9 kg coupled on the rc_car), which makes
+the stick impulse under-correct by the same factor and produces a steady,
+μ-independent creep on slopes (`creep ≈ F_hold·dt·A`, measured 0.16 m/s at 15°).
+The wheel body's rotational Delassus term is likewise spurious (its rotation is
+locked to the chassis by the fixed axle) and is dropped. `Fz/|g|` is the
+supported-mass estimate; it errs toward the true coupled inertia and is validated
+empirically by the regime-map suite (§7), which gates chatter at all μ.
+
+The free slip velocity also anticipates gravity's in-substep tangential
+contribution: `u_free += dt · (g·t_fwd, g·t_lat)`. Without it, a stick impulse
+zeroes slip at the start of the substep and gravity re-accelerates the vehicle
+during it, leaving a structural creep of ~`g·sinθ·dt/2` even with the correct
+mass.
 
 ### 4.3 The solve
 
@@ -307,10 +319,15 @@ registered in the example test suite and `README.md`.
 
 ## 8. Risks and mitigations
 
-- *Free-body effective mass is too soft when suspension is near its travel limit
-  or steering drives are stiff* → transient under-grip. Mitigation: acceptance
-  test 4 (steered launch) bounds the behavioral impact; if needed later, augment
-  `Mw` with a joint-space correction — explicitly out of scope for v1.
+- *The coupled-mass estimate `m_wheel + Fz/|g|` overestimates effective mass in
+  directions where a joint really does allow relative motion* (steering-yaw
+  compliance on steered wheels) → the solve can overshoot the wheel body's local
+  response and, in the worst case, chatter. Mitigations: the impulse budget bounds
+  any chatter amplitude at `μ·Fz·dt`; acceptance tests 1 (steer reversals at
+  μ = 2.5) and 4 (steered launch) gate it empirically. A true articulated
+  (ABA-style) Delassus remains the exact fix — out of scope for v1. History note:
+  the first draft used the free-body wheel mass to stay on the stable side; Task 4
+  falsified it (slope creep, §4.2) and it was replaced by this estimate.
 - *Boundary re-solve (clamped-impulse case) introduces a second linear solve per
   wheel* → negligible cost (3×3, closed form) but must be branch-light for warp
   divergence; both paths are straight-line algebra.
