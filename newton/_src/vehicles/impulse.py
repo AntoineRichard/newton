@@ -56,49 +56,80 @@ def solve_tire_impulse(
     a22: float,
     k_long: float,
     k_lat: float,
+    k_long_stick: float,
+    k_lat_stick: float,
+    u_ff_long: float,
+    u_ff_lat: float,
     budget: float,
     budget_stick: float,
 ) -> vec6:
-    """Implicit tire impulse with stick test and friction-circle projection.
+    """Implicit tire impulse with a split-gain stick test and friction-circle projection.
+
+    The total free slip over the substep is ``u_total = u + u_ff``: ``u`` is the
+    *velocity* part (what the contact is doing now) and ``u_ff`` the *feedforward*
+    part (velocity the external field, i.e. gravity, adds during the substep,
+    ``dt * g_t``). The stick branch treats them differently:
+
+    - the feedforward is cancelled at the coupled mass, ``p_ff = -A^-1 u_ff``:
+      it is velocity-independent — a steady force the in-plane joint constraint
+      transmits without ringing;
+    - the velocity feedback is applied at the *local* gain,
+      ``p_fb = -diag(k_long_stick, k_lat_stick) u`` (typically the wheel body
+      mass). A coupled-mass feedback gain on a light wheel body overshoots its
+      local response by ~``m_c/m_wheel`` and rings the suspension into a
+      budget-bounded limit cycle; the local gain is a deadbeat on the wheel body
+      itself, so ``u`` decays geometrically over a few substeps instead.
+
+    Stick is taken when ``|p_fb + p_ff| <= budget_stick`` and the post-solve slip
+    is reported honestly as ``u_total + A p`` (not forced to zero). The slip
+    branch is unchanged and operates on ``u_total``.
 
     Args:
-        u_long: Free longitudinal slip velocity [m/s].
-        u_lat: Free lateral slip velocity [m/s].
-        a11: Slip-space Delassus (1,1) [(m/s)/(N·s)] (includes spin mobility).
-        a12: Slip-space Delassus (1,2).
-        a22: Slip-space Delassus (2,2).
+        u_long: Velocity part of the free longitudinal slip [m/s].
+        u_lat: Velocity part of the free lateral slip [m/s].
+        a11: Coupled slip-space Delassus (1,1) [(m/s)/(N·s)] (includes spin mobility).
+        a12: Coupled slip-space Delassus (1,2).
+        a22: Coupled slip-space Delassus (2,2).
         k_long: Longitudinal secant impulse stiffness ``dt*C`` [N·s/(m/s)].
         k_lat: Lateral secant impulse stiffness [N·s/(m/s)].
+        k_long_stick: Longitudinal stick feedback impulse gain [N·s/(m/s)].
+        k_lat_stick: Lateral stick feedback impulse gain [N·s/(m/s)].
+        u_ff_long: Feedforward longitudinal slip contribution ``dt*(g·t_fwd)`` [m/s].
+        u_ff_lat: Feedforward lateral slip contribution ``dt*(g·t_lat)`` [m/s].
         budget: Kinetic friction-circle impulse budget ``mu*Fz*dt`` [N·s].
         budget_stick: Static budget ``mu_s*Fz*dt`` [N·s].
 
     Returns:
         ``(p_long, p_lat, u_long_new, u_lat_new, stick, utilization)``:
-        tire impulse on the wheel body [N·s], post-solve slip velocities [m/s],
-        stick flag (1.0 when the stick solution was taken), and
+        tire impulse on the wheel body [N·s], post-solve *total* slip velocities
+        [m/s], stick flag (1.0 when the stick solution was taken), and
         ``|p| / budget`` clamped to [0, 1].
     """
+    ut1 = u_long + u_ff_long
+    ut2 = u_lat + u_ff_lat
     if budget <= 0.0:
-        return vec6(0.0, 0.0, u_long, u_lat, 0.0, 0.0)
+        return vec6(0.0, 0.0, ut1, ut2, 0.0, 0.0)
 
-    # Stick first: the impulse that zeroes the slip velocity, A p = -u.
+    # Stick first: coupled-mass feedforward + local-gain velocity feedback.
     det_a = a11 * a22 - a12 * a12
     det_a = wp.max(det_a, 1.0e-12)
-    ps1 = -(a22 * u_long - a12 * u_lat) / det_a
-    ps2 = -(a11 * u_lat - a12 * u_long) / det_a
+    ps1 = -k_long_stick * u_long - (a22 * u_ff_long - a12 * u_ff_lat) / det_a
+    ps2 = -k_lat_stick * u_lat - (a11 * u_ff_lat - a12 * u_ff_long) / det_a
     ps_norm = wp.sqrt(ps1 * ps1 + ps2 * ps2)
     if ps_norm <= budget_stick:
+        un1 = ut1 + a11 * ps1 + a12 * ps2
+        un2 = ut2 + a12 * ps1 + a22 * ps2
         util = wp.min(ps_norm / budget, 1.0)
-        return vec6(ps1, ps2, 0.0, 0.0, 1.0, util)
+        return vec6(ps1, ps2, un1, un2, 1.0, util)
 
-    # Slip: p = -K u_new, (I + A K) u_new = u, K = diag(k_long, k_lat).
+    # Slip: p = -K u_new, (I + A K) u_new = u_total, K = diag(k_long, k_lat).
     b11 = 1.0 + a11 * k_long
     b12 = a12 * k_lat
     b21 = a12 * k_long
     b22 = 1.0 + a22 * k_lat
     det_b = wp.max(b11 * b22 - b12 * b21, 1.0e-12)
-    un1 = (b22 * u_long - b12 * u_lat) / det_b
-    un2 = (b11 * u_lat - b21 * u_long) / det_b
+    un1 = (b22 * ut1 - b12 * ut2) / det_b
+    un2 = (b11 * ut2 - b21 * ut1) / det_b
     p1 = -k_long * un1
     p2 = -k_lat * un2
     p_norm = wp.sqrt(p1 * p1 + p2 * p2)
@@ -107,8 +138,8 @@ def solve_tire_impulse(
         p1 = p1 * s
         p2 = p2 * s
         # Recompute the post-impulse slip consistently with the clamped impulse.
-        un1 = u_long + a11 * p1 + a12 * p2
-        un2 = u_lat + a12 * p1 + a22 * p2
+        un1 = ut1 + a11 * p1 + a12 * p2
+        un2 = ut2 + a12 * p1 + a22 * p2
         p_norm = budget
     util = wp.min(p_norm / budget, 1.0)
     return vec6(p1, p2, un1, un2, 0.0, util)

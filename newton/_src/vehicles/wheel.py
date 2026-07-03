@@ -89,7 +89,9 @@ class WheelDynamics:
         self.impulse_utilization = z(wp.float32)
 
 
-def apply_wheel_dynamics(model, state, data: VehicleModelData, patch, dyn: WheelDynamics, dt: float) -> None:
+def apply_wheel_dynamics(
+    model, state, data: VehicleModelData, patch, dyn: WheelDynamics, dt: float, gravity: wp.vec3 | None = None
+) -> None:
     """Compute tire forces, accumulate the wrench into ``state.body_f``, and
     integrate analytical wheel spin.
 
@@ -100,12 +102,15 @@ def apply_wheel_dynamics(model, state, data: VehicleModelData, patch, dyn: Wheel
         patch: Contact patch state from :func:`update_wheel_contact_patches`.
         dyn: Wheel dynamics parameters/state to read and update.
         dt: Substep timestep [s].
+        gravity: World gravity vector [m/s²] used for the supported-mass estimate
+            and the in-substep slip anticipation (see the kernel). Pass a cached
+            value to avoid a per-substep device-to-host read; ``None`` reads
+            world 0 of ``model.gravity`` (single-world assumption).
     """
     if data.wheel_count == 0:
         return
-    # World gravity vector [m/s^2]: used for the supported-mass estimate and to
-    # anticipate gravity's in-substep slip contribution (see the kernel).
-    gravity = wp.vec3(*(model.gravity.numpy()[0].tolist()))
+    if gravity is None:
+        gravity = wp.vec3(*(model.gravity.numpy()[0].tolist()))
     dyn.kappa.zero_()
     dyn.alpha.zero_()
     dyn.f_long.zero_()
@@ -277,26 +282,31 @@ def _wheel_dynamics_kernel(
                 locked = brake_target[w] * dt * inv_i >= wp.abs(omega_free)
 
                 # --- slip state and operating-point tire force (for the secant)
-                # Anticipate gravity's in-substep tangential contribution (spec
-                # §4.2): without it a stick impulse zeroes slip at the start of
-                # the substep and gravity re-accelerates the vehicle during it,
+                # Gravity's in-substep tangential contribution dt*g_t is kept
+                # separate as the FEEDFORWARD part of the free slip (spec §4.2):
+                # the solve cancels it at the coupled mass while applying velocity
+                # feedback at the local (wheel-body) gain. Without the
+                # anticipation a stick impulse zeroes slip at the start of the
+                # substep and gravity re-accelerates the vehicle during it,
                 # leaving a structural creep of ~g*sin(theta)*dt/2 on slopes.
-                g_long = dt * wp.dot(gravity, fwd_t)
-                g_lat = dt * wp.dot(gravity, lat_t)
+                u_ff_long = dt * wp.dot(gravity, fwd_t)
+                u_ff_lat = dt * wp.dot(gravity, lat_t)
                 if locked:
-                    u_long = v_long + g_long  # wheel surface is stationary: slip = ground speed
+                    u_long = v_long  # wheel surface is stationary: slip = ground speed
                 else:
-                    u_long = v_long - omega_free * r + g_long
-                u_lat = v_lat + g_lat
-                kappa = -u_long / ref
-                alpha = wp.atan2(u_lat, ref)
+                    u_long = v_long - omega_free * r
+                u_lat = v_lat
+                ut_long = u_long + u_ff_long  # total slip over the substep
+                ut_lat = u_lat + u_ff_lat
+                kappa = -ut_long / ref
+                alpha = wp.atan2(ut_lat, ref)
                 f0 = tire_force(tire_model[w], kappa, alpha, fz, mu, c_long[w], c_lat[w], 0.0)
 
                 # secant impulse stiffness dt*C, capped by the linear-regime slope
                 k_lin_long = dt * c_long[w] * fz / ref
                 k_lin_lat = dt * c_lat[w] * fz / ref
-                k_long = wp.min(dt * wp.abs(f0[0]) / wp.max(wp.abs(u_long), 1.0e-6), k_lin_long)
-                k_lat = wp.min(dt * wp.abs(f0[1]) / wp.max(wp.abs(u_lat), 1.0e-6), k_lin_lat)
+                k_long = wp.min(dt * wp.abs(f0[0]) / wp.max(wp.abs(ut_long), 1.0e-6), k_lin_long)
+                k_lat = wp.min(dt * wp.abs(f0[1]) / wp.max(wp.abs(ut_lat), 1.0e-6), k_lin_lat)
 
                 # --- slip-space effective mass: coupled tangential mass + spin mobility
                 # The wheel body's axle joint is FIXED (spin is analytical) and its
@@ -304,14 +314,25 @@ def _wheel_dynamics_kernel(
                 # rigidly coupled to its corner of the chassis. The free-body
                 # Delassus overstated slip mobility ~15x (spurious rotational term
                 # included), which made the stick impulse under-correct into a
-                # steady, mu-independent slope creep. Use the supported-mass
-                # estimate m_c = m_wheel + Fz/|g| instead (spec §4.2, amended).
+                # steady, mu-independent slope creep. Use the supported mass
+                # instead: statics give Fz = m_supported * (-g·n), so
+                # m_c = Fz / (-g·n) recovers the wheel + chassis-share mass
+                # EXACTLY on any incline. (This refines spec §4.2's
+                # ``m_wheel + Fz/|g|``, which double-counts the wheel body --
+                # Fz already carries its weight -- and ignores the incline's
+                # cos(theta); either error turns the stick feedforward into a
+                # steady net push and the car creeps, measured 8.8 mm/s uphill
+                # at 15 deg from the double count alone.) Floored at m_wheel so
+                # a nearly unloaded wheel keeps the local feedback gain
+                # k_stick = m_wheel <= m_c (the stick passivity condition).
                 g_mag = wp.length(gravity)
                 inv_m = body_inv_mass[body]
                 if inv_m > 0.0 and g_mag > 1.0e-6:
-                    m_c = 1.0 / inv_m + fz / g_mag
+                    m_wheel = 1.0 / inv_m
+                    g_normal = wp.max(-wp.dot(gravity, n), 0.1 * g_mag)
+                    m_c = wp.max(m_wheel, fz / g_normal)
                 elif inv_m > 0.0:
-                    m_c = 1.0 / inv_m
+                    m_c = 1.0 / inv_m  # no gravity field: fall back to the wheel body
                 else:
                     m_c = 1.0e9  # kinematic wheel body: effectively immovable
                 a11 = 1.0 / m_c
@@ -320,9 +341,30 @@ def _wheel_dynamics_kernel(
                 if not locked:
                     a11 = a11 + r * r * inv_i  # spinning wheel adds slip mobility
 
+                # Stick FEEDBACK gain: the wheel body's own mass (local deadbeat,
+                # no overshoot). A coupled-mass gain overshoots the light wheel's
+                # local response ~m_c/m_wheel and rings the suspension into a
+                # budget-bounded limit cycle at high grip.
+                if inv_m > 0.0:
+                    k_stick = 1.0 / inv_m
+                else:
+                    k_stick = m_c  # kinematic wheel body: gain moot, A ~ 0
+
                 budget = mu * fz * dt
                 sol = solve_tire_impulse(
-                    u_long, u_lat, a11, a12, a22, k_long, k_lat, budget, static_mu_scale[w] * budget
+                    u_long,
+                    u_lat,
+                    a11,
+                    a12,
+                    a22,
+                    k_long,
+                    k_lat,
+                    k_stick,
+                    k_stick,
+                    u_ff_long,
+                    u_ff_lat,
+                    budget,
+                    static_mu_scale[w] * budget,
                 )
                 f_long = sol[0] / dt
                 f_lat = sol[1] / dt

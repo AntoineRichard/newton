@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import IntEnum
 
 import numpy as np
+import warp as wp
 
 from newton._src.sim import Model, ModelBuilder
 
@@ -79,6 +80,10 @@ class WheeledConfig:
             the self-aligning moment (per-wheel trail = ratio * radius). 0 disables it.
         static_mu_scale: Static friction budget as a multiple of the kinetic ``mu``
             (stick engages when the stopping impulse fits ``static_mu_scale * mu * Fz * dt``).
+            Rubber's static/kinetic friction ratio is ~1.1-1.3; the 1.2 default also
+            widens the stick *capture* window so a slowly creeping contact (e.g. a
+            braked car settling on a slope) is absorbed into stick instead of hanging
+            in a slip-branch creep equilibrium just above the capture threshold.
         apply_reaction_torque: Whether to apply the motor axle reaction torque to the wheel
             body. Off by default; it only affects pitch/weight-transfer, not the primary
             traction, and is left opt-in pending broader validation.
@@ -99,7 +104,7 @@ class WheeledConfig:
     fallback_normal_load: float = 0.0
     min_reference_speed: float = 0.5
     pneumatic_trail_ratio: float = 0.1
-    static_mu_scale: float = 1.0
+    static_mu_scale: float = 1.2
     apply_reaction_torque: bool = False
 
 
@@ -143,6 +148,9 @@ class WheeledVehicles:
         self.patch = WheelContactPatch(self.wheel_count, device=device)
         self.dynamics = WheelDynamics(self.wheel_count, device=device)
         self.commands = VehicleCommands(self.vehicle_count, device=device)
+        # World gravity, cached once for the tire solve's supported-mass estimate
+        # and slip anticipation (world 0: the vehicle layer assumes a single world).
+        self._gravity = wp.vec3(*(model.gravity.numpy()[0].tolist()))
         self._init_params()
 
         # Ensure contact forces are allocated for load latching.
@@ -216,7 +224,7 @@ class WheeledVehicles:
         integrate analytical wheel spin. Call after ``model.collide`` and before
         ``solver.step``."""
         update_wheel_contact_patches(self.model, state, contacts, self.data, self.patch)
-        apply_wheel_dynamics(self.model, state, self.data, self.patch, self.dynamics, dt)
+        apply_wheel_dynamics(self.model, state, self.data, self.patch, self.dynamics, dt, gravity=self._gravity)
 
     def latch_loads(self, contacts) -> None:
         """Latch solver-reported normal loads for the next step. Call after

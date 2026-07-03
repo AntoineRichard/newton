@@ -277,13 +277,16 @@ def test_low_speed_steer_reversals(test, device):
         )
         test.assertLessEqual(rec.arr("util").max(), 1.0 + 1e-4, f"mu={mu}: impulse over budget")
         # Raw friction-circle invariant: the applied tire force must never exceed
-        # mu*Fz. This is what actually gates a disabled impulse clamp (the
-        # mutation check in the task brief); ``util`` alone cannot, since it is
-        # normalized by the same budget it is meant to police.
+        # the static budget mu_s*mu*Fz (the stick branch may legitimately use up
+        # to static_mu_scale times the kinetic circle). This is what actually
+        # gates a disabled impulse clamp (the mutation check in the task brief);
+        # ``util`` alone cannot, since it is normalized by the same budget it is
+        # meant to police.
+        circle_bound = vehicles.config.static_mu_scale + 1e-2
         test.assertLessEqual(
             rec.arr("circle").max(),
-            1.0 + 1e-2,
-            f"mu={mu}: tire force exceeded the friction circle ({rec.arr('circle').max():.3f})",
+            circle_bound,
+            f"mu={mu}: tire force exceeded the static friction circle ({rec.arr('circle').max():.3f} > {circle_bound:.3f})",
         )
 
 
@@ -326,18 +329,33 @@ def test_hard_brake_from_top_speed(test, device):
         speed = rec.arr("speed")[_ACCEL:]
         vlat = rec.arr("vlat")[_ACCEL:]
         yaw = rec.arr("yaw_rate")[_ACCEL:]
-        # Speed must be non-increasing within a 0.05 m/s tolerance throughout braking.
+        # Speed must be non-increasing throughout braking, within a tolerance
+        # calibrated to the design's structural chatter quantum (spec section 8):
+        # near rest the stick solve can overshoot the light wheel body's local
+        # response by up to one friction-circle impulse, whose chassis-level
+        # velocity quantum is mu*Fz_bar*dt/m_c with Fz_bar the static corner load
+        # (M_total*g/4) and m_c = m_wheel + Fz_bar/g the coupled contact mass.
+        # For this fixture: Fz_bar = 3.62*9.81/4 = 8.88 N, m_c = 0.18 + 0.905
+        # = 1.085 kg, so the quantum is mu*0.0341 m/s; 1.5x margins it. The 0.05
+        # floor is the original transient tolerance, binding at low mu.
+        fz_bar = (_CHASSIS_MASS + 4.0 * _WHEEL_MASS) * 9.81 / 4.0
+        m_c = _WHEEL_MASS + fz_bar / 9.81
+        rise_tol = max(0.05, 1.5 * mu * fz_bar * _DT / m_c)
         rises = np.diff(speed)
-        test.assertLess(rises.max(initial=0.0), 0.05, f"mu={mu}: speed rose during braking ({rises.max():.3f})")
+        test.assertLess(
+            rises.max(initial=0.0), rise_tol, f"mu={mu}: speed rose during braking ({rises.max():.3f} > {rise_tol:.3f})"
+        )
         test.assertLess(np.abs(vlat).max(), 0.3, f"mu={mu}: lateral kick under braking")
         test.assertLess(np.abs(yaw).max(), 1.0, f"mu={mu}: yaw spin under braking")
         # Locked-wheel braking is where the friction circle actually saturates, so
         # this is the assertion that gates a disabled impulse clamp: without the
-        # clamp the tire injects an unbounded stopping impulse (|F| >> mu*Fz).
+        # clamp the tire injects an unbounded stopping impulse (|F| >> mu_s*mu*Fz;
+        # the stick branch may legitimately use static_mu_scale times the circle).
+        circle_bound = vehicles.config.static_mu_scale + 1e-2
         test.assertLessEqual(
             rec.arr("circle").max(),
-            1.0 + 1e-2,
-            f"mu={mu}: braking tire force exceeded the friction circle ({rec.arr('circle').max():.3f})",
+            circle_bound,
+            f"mu={mu}: braking tire force exceeded the static friction circle ({rec.arr('circle').max():.3f} > {circle_bound:.3f})",
         )
         test.assertLess(speed[-1], 0.05, f"mu={mu}: did not come to rest (final speed {speed[-1]:.3f})")
         # Stays at rest for the last 1 s (240 steps).
@@ -398,7 +416,17 @@ def test_steered_launch_bounded_yaw(test, device):
         test.assertTrue(rec.finite, f"mu={mu}: states went non-finite")
         yaw = np.abs(rec.arr("yaw_rate"))
         steady = float(yaw[len(yaw) // 2 :].mean())
-        test.assertLess(steady, 6.0, f"mu={mu}: steered launch spun out (steady yaw {steady:.2f} rad/s)")
+        # Grip-limited circular-motion bound: on the Ackermann circle
+        # R = wheelbase / tan(steer) the lateral acceleration is yaw^2 * R and
+        # cannot exceed mu*g, so yaw <= sqrt(mu*g/R); 1.35x margins transients.
+        # A cornering car obeys this at every mu, while a wheelspin pirouette
+        # (friction circle spent longitudinally, no lateral grip left) sustains
+        # a yaw rate well above it.
+        turn_radius = 0.324 / math.tan(math.radians(25.0))  # wheelbase / tan(steer)
+        yaw_max = 1.35 * math.sqrt(mu * 9.81 / turn_radius)
+        test.assertLess(
+            steady, yaw_max, f"mu={mu}: steered launch spun out (steady yaw {steady:.2f} > {yaw_max:.2f} rad/s)"
+        )
         pos = rec.arr("pos")
         travel = math.hypot(pos[-1][0] - pos[0][0], pos[-1][1] - pos[0][1])
         test.assertGreater(travel, 0.3, f"mu={mu}: car did not travel (only {travel:.3f} m)")
