@@ -17,7 +17,10 @@ vehicle ids remain correct when template builders are replicated/merged
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import warp as wp
@@ -122,6 +125,39 @@ class VehicleModelData:
     vehicle_wheel_count: wp.array[wp.int32]
 
 
+@dataclass(frozen=True)
+class VehicleAssetMetadata:
+    """Vehicle asset metadata loaded from a fixture manifest.
+
+    Args:
+        name: Stable asset name.
+        file: Absolute USD asset path.
+        drive_mode: :class:`DriveMode` value parsed from the manifest vehicle type.
+        wheel_radius: Wheel radius [m].
+        wheel_width: Wheel width [m].
+        wheelbase: Front-to-rear axle distance [m] (0 if not specified).
+        track_width: Left-to-right wheel distance [m] (0 if not specified).
+        steer_limit: Maximum steering angle [rad] (0 if not specified).
+        wheel_body_labels: Wheel body labels, one per wheel.
+        wheel_shape_labels: Wheel collision shape labels, one per wheel.
+        steering_joint_labels: Optional steering joint labels.
+        axle_joint_labels: Optional physical axle (wheel-spin) joint labels.
+    """
+
+    name: str
+    file: Path
+    drive_mode: int
+    wheel_radius: float
+    wheel_width: float
+    wheelbase: float
+    track_width: float
+    steer_limit: float
+    wheel_body_labels: tuple[str, ...]
+    wheel_shape_labels: tuple[str, ...]
+    steering_joint_labels: tuple[str, ...] = ()
+    axle_joint_labels: tuple[str, ...] = ()
+
+
 def register_vehicle_attributes(builder: ModelBuilder) -> None:
     """Register the ``vehicle:*`` custom attributes on ``builder``.
 
@@ -131,7 +167,13 @@ def register_vehicle_attributes(builder: ModelBuilder) -> None:
     Args:
         builder: Model builder to receive the attributes.
     """
-    builder.add_custom_frequency(ModelBuilder.CustomFrequency(name="vehicle", namespace=VEHICLE_NAMESPACE))
+    builder.add_custom_frequency(
+        ModelBuilder.CustomFrequency(
+            name="vehicle",
+            namespace=VEHICLE_NAMESPACE,
+            usd_prim_filter=_usd_is_vehicle_prim,
+        )
+    )
     builder.add_custom_attribute(
         ModelBuilder.CustomAttribute(
             name="vehicle_index",
@@ -141,9 +183,16 @@ def register_vehicle_attributes(builder: ModelBuilder) -> None:
             default=-1,
             namespace=VEHICLE_NAMESPACE,
             references=_VEHICLE_FREQUENCY,
+            usd_attribute_name="newton:vehicle:vehicle_id",
         )
     )
-    builder.add_custom_frequency(ModelBuilder.CustomFrequency(name="wheel", namespace=VEHICLE_NAMESPACE))
+    builder.add_custom_frequency(
+        ModelBuilder.CustomFrequency(
+            name="wheel",
+            namespace=VEHICLE_NAMESPACE,
+            usd_prim_filter=_usd_is_wheel_prim,
+        )
+    )
     builder.add_custom_attribute(
         ModelBuilder.CustomAttribute(
             name="wheel_index",
@@ -153,6 +202,7 @@ def register_vehicle_attributes(builder: ModelBuilder) -> None:
             default=-1,
             namespace=VEHICLE_NAMESPACE,
             references=_WHEEL_FREQUENCY,
+            usd_attribute_name="newton:vehicle:wheel_id",
         )
     )
     for name, dtype, default, references in _SHAPE_SPECS:
@@ -301,6 +351,216 @@ def add_wheel(
 
     # Preserve the full contact footprint for this wheel's rolling contacts.
     builder.shape_flags[shape] |= int(ShapeFlags.PRESERVE_CONTACT_FOOTPRINT)
+
+
+def load_vehicle_manifest(path: str | Path) -> tuple[VehicleAssetMetadata, ...]:
+    """Load a vehicle fixture manifest.
+
+    The manifest is a JSON file with an ``assets`` list. Each asset names a USD
+    file (relative to the manifest), the wheel body/shape labels, reference
+    dimensions (wheel radius/width [m], and optionally wheelbase/track width [m]
+    and steering limit [deg]), and optional steering/axle joint labels. The
+    asset's ``vehicle_type`` (``"generic"``, ``"ackermann"``, or ``"skid_steer"``)
+    maps to a :class:`DriveMode` value.
+
+    Args:
+        path: Manifest path.
+
+    Returns:
+        Parsed vehicle asset metadata entries in manifest order.
+
+    Raises:
+        ValueError: If the manifest does not match the metadata contract.
+    """
+    from .controller import DriveMode  # noqa: PLC0415  (deferred: controller imports this module)
+
+    drive_modes = {
+        "generic": int(DriveMode.GENERIC),
+        "ackermann": int(DriveMode.ACKERMANN),
+        "skid_steer": int(DriveMode.SKID_STEER),
+    }
+
+    manifest_path = Path(path)
+    try:
+        data = json.loads(manifest_path.read_text())
+    except OSError as exc:
+        raise ValueError(f"vehicle manifest file is not readable: {manifest_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"vehicle manifest file is not valid JSON: {manifest_path}") from exc
+
+    assets = data.get("assets")
+    if not isinstance(assets, list):
+        raise ValueError("vehicle manifest requires an assets list")
+
+    seen_names: set[str] = set()
+    parsed: list[VehicleAssetMetadata] = []
+    for raw_asset in assets:
+        if not isinstance(raw_asset, dict):
+            raise ValueError("vehicle manifest asset entries must be objects")
+
+        name = _require_str(raw_asset, "name", "<unknown>")
+        if name in seen_names:
+            raise ValueError(f"duplicate vehicle asset name: {name}")
+        seen_names.add(name)
+
+        file_name = _require_str(raw_asset, "file", name)
+        asset_file = manifest_path.parent / file_name
+        if not asset_file.exists():
+            raise ValueError(f"asset {name} has invalid file: {asset_file}")
+
+        vehicle_type = raw_asset.get("vehicle_type", "generic")
+        if vehicle_type not in drive_modes:
+            raise ValueError(
+                f"asset {name} has unknown vehicle_type {vehicle_type!r}; expected one of {sorted(drive_modes)}"
+            )
+
+        wheel_body_labels = _require_str_tuple(raw_asset, "wheel_body_labels", name)
+        wheel_shape_labels = _require_str_tuple(raw_asset, "wheel_shape_labels", name)
+        steering_joint_labels = _optional_str_tuple(raw_asset, "steering_joint_labels", name)
+        axle_joint_labels = _optional_str_tuple(raw_asset, "axle_joint_labels", name)
+        if len(wheel_body_labels) != len(wheel_shape_labels):
+            raise ValueError(
+                f"asset {name} wheel_shape_labels length must match wheel_body_labels length "
+                f"({len(wheel_shape_labels)} != {len(wheel_body_labels)})"
+            )
+        if not wheel_body_labels:
+            raise ValueError(f"asset {name} wheel_body_labels must not be empty")
+        if axle_joint_labels and len(axle_joint_labels) != len(wheel_body_labels):
+            raise ValueError(
+                f"asset {name} axle_joint_labels length must match wheel_body_labels length "
+                f"({len(axle_joint_labels)} != {len(wheel_body_labels)})"
+            )
+
+        reference_dimensions = raw_asset.get("reference_dimensions")
+        if not isinstance(reference_dimensions, dict):
+            raise ValueError(f"asset {name} reference_dimensions must be an object")
+        wheel_radius = _require_positive_float(reference_dimensions, "wheel_radius_m", name)
+        wheel_width = _require_positive_float(reference_dimensions, "wheel_width_m", name)
+        wheelbase = _optional_positive_float(reference_dimensions, "wheelbase_m", name)
+        track_width = _optional_positive_float(reference_dimensions, "track_width_m", name)
+        steer_limit = np.radians(_optional_positive_float(reference_dimensions, "steering_limit_deg", name))
+
+        parsed.append(
+            VehicleAssetMetadata(
+                name=name,
+                file=asset_file,
+                drive_mode=drive_modes[vehicle_type],
+                wheel_radius=wheel_radius,
+                wheel_width=wheel_width,
+                wheelbase=wheelbase,
+                track_width=track_width,
+                steer_limit=float(steer_limit),
+                wheel_body_labels=wheel_body_labels,
+                wheel_shape_labels=wheel_shape_labels,
+                steering_joint_labels=steering_joint_labels,
+                axle_joint_labels=axle_joint_labels,
+            )
+        )
+
+    return tuple(parsed)
+
+
+def apply_vehicle_manifest(
+    builder: ModelBuilder,
+    asset: VehicleAssetMetadata,
+    *,
+    vehicle_id: int | None = None,
+    wheel_id_start: int | None = None,
+) -> None:
+    """Annotate an already-imported manifest asset via :func:`set_vehicle`/:func:`add_wheel`.
+
+    Resolves the asset's wheel body/shape labels against ``builder`` and stamps
+    the per-vehicle drive geometry and per-wheel identity/role attributes. Wheel
+    roles are derived from the wheel body label leaf names: ``front``/``rear``
+    select the axle row and ``left``/``right`` the side; front wheels of a
+    steering-equipped asset are steerable and bound to the steering joint whose
+    label leaf contains the matching side.
+
+    Call once per asset in vehicle order; ``vehicle_id``/``wheel_id_start``
+    default to continuing from the rows already annotated on ``builder``.
+
+    Args:
+        builder: Builder with registered ``vehicle:*`` attributes containing the
+            imported asset.
+        asset: Manifest metadata for the asset.
+        vehicle_id: Flat vehicle id. Defaults to the next unused id.
+        wheel_id_start: First flat wheel id. Defaults to the next unused id.
+
+    Raises:
+        ValueError: If labels are missing or inconsistent.
+    """
+    _require_registered(builder)
+    if vehicle_id is None:
+        vehicle_id = int(builder._custom_frequency_counts.get(_VEHICLE_FREQUENCY, 0))
+    if wheel_id_start is None:
+        wheel_id_start = int(builder._custom_frequency_counts.get(_WHEEL_FREQUENCY, 0))
+    if wheel_id_start < 0:
+        raise ValueError(f"asset {asset.name} wheel_id_start must be non-negative")
+
+    body_by_label = _label_lookup(builder.body_label, asset.name, "body")
+    shape_by_label = _label_lookup(builder.shape_label, asset.name, "shape")
+    joint_by_label = _label_lookup(builder.joint_label, asset.name, "joint")
+
+    set_vehicle(
+        builder,
+        vehicle_id,
+        drive_mode=asset.drive_mode,
+        wheelbase=asset.wheelbase,
+        track_width=asset.track_width,
+        steer_limit=asset.steer_limit,
+    )
+
+    for offset, (body_label, shape_label) in enumerate(
+        zip(asset.wheel_body_labels, asset.wheel_shape_labels, strict=True)
+    ):
+        try:
+            body_index = body_by_label[body_label]
+        except KeyError as exc:
+            raise ValueError(f"asset {asset.name} missing wheel body label: {body_label}") from exc
+        try:
+            shape_index = shape_by_label[shape_label]
+        except KeyError as exc:
+            raise ValueError(f"asset {asset.name} missing wheel shape label: {shape_label}") from exc
+
+        attached_body = int(builder.shape_body[shape_index])
+        if attached_body != body_index:
+            raise ValueError(
+                f"asset {asset.name} wheel shape {shape_label} is attached to body {attached_body}, "
+                f"not manifest wheel body {body_label} ({body_index})"
+            )
+
+        leaf = body_label.rsplit("/", 1)[-1]
+        front = "front" in leaf
+        left = "left" in leaf
+        steer_joint = -1
+        steerable = front and bool(asset.steering_joint_labels)
+        if steerable:
+            side_key = "left" if left else "right"
+            matches = [label for label in asset.steering_joint_labels if side_key in label.rsplit("/", 1)[-1]]
+            if len(matches) != 1:
+                raise ValueError(
+                    f"asset {asset.name} needs exactly one steering joint label containing "
+                    f"{side_key!r}, found {matches}"
+                )
+            try:
+                steer_joint = joint_by_label[matches[0]]
+            except KeyError as exc:
+                raise ValueError(f"asset {asset.name} missing steering joint label: {matches[0]}") from exc
+
+        add_wheel(
+            builder,
+            shape=shape_index,
+            vehicle_id=vehicle_id,
+            wheel_id=wheel_id_start + offset,
+            radius=asset.wheel_radius,
+            width=asset.wheel_width,
+            body=body_index,
+            driven=True,
+            steerable=steerable,
+            side=(-1 if left else 1),
+            axle_row=(0 if front else 1),
+            steer_joint=steer_joint,
+        )
 
 
 def read_vehicle_model_data(model: Model, *, device: wp.context.Devicelike | None = None) -> VehicleModelData:
@@ -493,6 +753,80 @@ def configure_wheel_solver_contacts(
 
 
 # --- helpers ---------------------------------------------------------------
+
+
+def _usd_is_vehicle_prim(prim: Any, _context: dict[str, Any]) -> bool:
+    return _usd_has_true_attribute(prim, "newton:vehicle:is_vehicle")
+
+
+def _usd_is_wheel_prim(prim: Any, _context: dict[str, Any]) -> bool:
+    return _usd_has_true_attribute(prim, "newton:vehicle:is_wheel")
+
+
+def _usd_has_true_attribute(prim: Any, attribute_name: str) -> bool:
+    if not prim or prim.IsPseudoRoot():
+        return False
+    attr = prim.GetAttribute(attribute_name)
+    if not attr or not attr.HasAuthoredValueOpinion():
+        return False
+    return bool(attr.Get())
+
+
+def _require_str(raw: dict[str, Any], key: str, asset_name: str) -> str:
+    value = raw.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"asset {asset_name} requires non-empty {key}")
+    return value
+
+
+def _require_str_tuple(raw: dict[str, Any], key: str, asset_name: str) -> tuple[str, ...]:
+    value = raw.get(key)
+    if not isinstance(value, list):
+        raise ValueError(f"asset {asset_name} requires list {key}")
+    return _str_tuple(value, key, asset_name)
+
+
+def _optional_str_tuple(raw: dict[str, Any], key: str, asset_name: str) -> tuple[str, ...]:
+    value = raw.get(key)
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError(f"asset {asset_name} {key} must be a list when provided")
+    return _str_tuple(value, key, asset_name)
+
+
+def _str_tuple(value: list[Any], key: str, asset_name: str) -> tuple[str, ...]:
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item:
+            raise ValueError(f"asset {asset_name} {key} entries must be non-empty strings")
+        out.append(item)
+    return tuple(out)
+
+
+def _require_positive_float(raw: dict[str, Any], key: str, asset_name: str) -> float:
+    value = raw.get(key)
+    if not isinstance(value, int | float):
+        raise ValueError(f"asset {asset_name} requires numeric reference_dimensions.{key}")
+    value = float(value)
+    if value <= 0.0:
+        raise ValueError(f"asset {asset_name} reference_dimensions.{key} must be positive")
+    return value
+
+
+def _optional_positive_float(raw: dict[str, Any], key: str, asset_name: str) -> float:
+    if raw.get(key) is None:
+        return 0.0
+    return _require_positive_float(raw, key, asset_name)
+
+
+def _label_lookup(labels: list[str], asset_name: str, label_kind: str) -> dict[str, int]:
+    lookup: dict[str, int] = {}
+    for index, label in enumerate(labels):
+        if label in lookup:
+            raise ValueError(f"asset {asset_name} has duplicate {label_kind} label in builder: {label}")
+        lookup[label] = index
+    return lookup
 
 
 def _require_registered(builder: ModelBuilder) -> None:
