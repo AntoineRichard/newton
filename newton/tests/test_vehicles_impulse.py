@@ -52,7 +52,7 @@ def test_effective_mass_positive_definite(test, device):
 def test_stick_when_impulse_fits_budget(test, device):
     # tiny slip velocity, huge budget: stick, slip zeroed exactly
     r = _solve(device, (0.02, -0.01), (1.0, 0.0, 1.0), (100.0, 100.0), 10.0, 10.0)
-    p_long, p_lat, u1, u2, stick, util = (float(x) for x in r)
+    p_long, p_lat, u1, u2, stick, _util = (float(x) for x in r)
     test.assertEqual(stick, 1.0)
     test.assertAlmostEqual(u1, 0.0, places=6)
     test.assertAlmostEqual(u2, 0.0, places=6)
@@ -64,7 +64,7 @@ def test_stick_when_impulse_fits_budget(test, device):
 def test_slip_solve_reduces_slip_without_reversal(test, device):
     # stiff tire, big slip, budget too small to stick: implicit solve, no sign flip
     r = _solve(device, (2.0, 0.0), (1.0, 0.0, 1.0), (50.0, 50.0), 0.5, 0.5)
-    p_long, p_lat, u1, u2, stick, util = (float(x) for x in r)
+    p_long, _p_lat, u1, _u2, stick, util = (float(x) for x in r)
     test.assertEqual(stick, 0.0)
     test.assertLess(p_long, 0.0)  # opposes slip
     test.assertGreater(u1, 0.0)  # reduced but NOT reversed
@@ -74,7 +74,7 @@ def test_slip_solve_reduces_slip_without_reversal(test, device):
 
 def test_clamped_impulse_on_budget_boundary(test, device):
     r = _solve(device, (5.0, 5.0), (2.0, 0.1, 2.0), (30.0, 30.0), 0.3, 0.3)
-    p_long, p_lat, u1, u2, stick, util = (float(x) for x in r)
+    p_long, p_lat, u1, u2, _stick, _util = (float(x) for x in r)
     p_norm = np.hypot(p_long, p_lat)
     test.assertAlmostEqual(p_norm, 0.3, places=4)
     # clamped u+ must be consistent: u+ = u + A p

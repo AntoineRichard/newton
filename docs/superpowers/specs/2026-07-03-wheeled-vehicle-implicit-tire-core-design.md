@@ -199,7 +199,7 @@ the brush curve evaluation for the force *magnitude* shaping.
     cannot fire the tire with a stale airborne load;
   - `fallback_load` behavior on the first step is unchanged.
 - One-substep staleness of Fz is accepted: because the tangential impulse is
-  bounded by μ·Fz·dt, a stale Fz mis-scales grip for one substep but cannot
+  bounded by μ·Fz·dt, a stale Fz misestimates grip for one substep but cannot
   destabilize.
 
 ### 4.5 Removed and demoted mechanisms
