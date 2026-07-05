@@ -69,6 +69,14 @@ GMETER_G_EDGE = 2.5  # [g] acceleration magnitude mapped to the widget edge
 GMETER_TRAIL_MAX = 20  # G-dot history length (faint trail)
 GMETER_EMA = 0.3  # blend for the exponential-moving-average dot smoothing
 GRAVITY = 9.81  # [m/s^2] used to express accelerations in g units
+# system Noto faces for the HUD text, in preference order; the HUD falls
+# back to the default imgui font when none of these are installed
+HUD_FONT_CANDIDATES = (
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
+    "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
+)
 
 
 @wp.func
@@ -546,6 +554,8 @@ class Example:
         self._accel_car_g = (0.0, 0.0)  # (right, forward) EMA-smoothed [g]
         self._gmeter_trail = deque(maxlen=GMETER_TRAIL_MAX)
         self._hud_ok = True
+        self._hud_font = None  # system Noto face, loaded lazily on first draw
+        self._hud_font_tried = False
         self.ui_temperature = float(self.planner.config.temperature)
         self.ui_sigma_drive, self.ui_sigma_steer = (float(v) for v in self.planner.config.sigma)
         self.ui_cost = list(self.cost_params.numpy())
@@ -893,21 +903,41 @@ class Example:
         self._draw_gmeter(ui)
         self._draw_hud_bars(ui)
 
-    @staticmethod
-    def _hud_caption(imgui, draw, x, y, text, align="left", span=0.0):
+    def _hud_get_font(self, imgui):
+        """Return the HUD font: a system Noto face, or the imgui default."""
+        if not self._hud_font_tried:
+            self._hud_font_tried = True
+            for path in HUD_FONT_CANDIDATES:
+                if Path(path).is_file():
+                    try:
+                        self._hud_font = imgui.get_io().fonts.add_font_from_file_ttf(path, imgui.get_font_size())
+                    except Exception:
+                        self._hud_font = None
+                    if self._hud_font is not None:
+                        break
+        return self._hud_font if self._hud_font is not None else imgui.get_font()
+
+    def _hud_text_size(self, imgui, text, font_size):
+        """Measure ``text`` in the HUD font at ``font_size`` pixels."""
+        imgui.push_font(self._hud_get_font(imgui), font_size)
+        try:
+            return imgui.calc_text_size(text).x
+        finally:
+            imgui.pop_font()
+
+    def _hud_caption(self, imgui, draw, x, y, text, align="left", span=0.0):
         """Small muted uppercase caption in the broadcast style (0.9x font).
 
         ``align`` is "left", "right" (text ends at ``x``), or "center"
         (centered within ``span`` pixels starting at ``x``).
         """
-        scale = 0.9
-        text_w = imgui.calc_text_size(text).x * scale  # calc is at base font size
+        font_size = 0.9 * imgui.get_font_size()
         if align == "right":
-            x -= text_w
+            x -= self._hud_text_size(imgui, text, font_size)
         elif align == "center":
-            x += 0.5 * (span - text_w)
+            x += 0.5 * (span - self._hud_text_size(imgui, text, font_size))
         col = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.78, 0.78, 0.82, 0.6))
-        draw.add_text(imgui.get_font(), scale * imgui.get_font_size(), imgui.ImVec2(x, y), col, text)
+        draw.add_text(self._hud_get_font(imgui), font_size, imgui.ImVec2(x, y), col, text)
 
     @staticmethod
     def _hud_window_flags(imgui):
@@ -970,7 +1000,7 @@ class Example:
 
         draw = imgui.get_window_draw_list()
         gray = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.55, 0.55, 0.6, 0.9))
-        green = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.1, 0.9, 0.3, 0.9))
+        blue = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.0, 0.66, 1.0, 0.9))  # electric blue
         orange = imgui.color_convert_float4_to_u32(imgui.ImVec4(1.0, 0.55, 0.1, 1.0))
 
         # static boundary loops: pixel coords only depend on the window corner
@@ -985,7 +1015,7 @@ class Example:
             trail = list(self._trail)[::step]
             if trail[-1] != self._trail[-1]:
                 trail.append(self._trail[-1])
-            draw.add_polyline([to_px(p) for p in trail], green, imgui.ImDrawFlags_.none, 1.5)
+            draw.add_polyline([to_px(p) for p in trail], blue, imgui.ImDrawFlags_.none, 1.5)
 
         car = to_px(self._hero_xy)
         tick = 9.0
@@ -1093,12 +1123,12 @@ class Example:
         draw = imgui.get_window_draw_list()
         white = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.96, 0.96, 0.96, 1.0))
         outline = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.7, 0.7, 0.75, 0.5))
-        green = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.15, 0.85, 0.25, 0.95))
+        blue = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.0, 0.66, 1.0, 0.95))  # electric blue
         red = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.9, 0.15, 0.15, 0.95))
 
         pad = 10.0
         # left label column sized to the widest bar caption ("THROTTLE")
-        label_col = imgui.calc_text_size("THROTTLE").x * 0.9 + 10.0
+        label_col = self._hud_text_size(imgui, "THROTTLE", 0.9 * imgui.get_font_size()) + 10.0
         bx = x0 + pad + label_col
         bw = width - 2.0 * pad - label_col
 
@@ -1106,10 +1136,11 @@ class Example:
         # via the font+size draw-list overload (set_window_font_scale is
         # absent in this imgui binding)
         label = f"{int(round(speed_kmh))} km/h"
-        scale = 2.0
-        font_size = scale * imgui.get_font_size()
-        text_w = imgui.calc_text_size(label).x * scale  # calc is at base font size
-        draw.add_text(imgui.get_font(), font_size, imgui.ImVec2(x0 + 0.5 * (width - text_w), y0 + 3.0), white, label)
+        font_size = 2.0 * imgui.get_font_size()
+        text_w = self._hud_text_size(imgui, label, font_size)
+        draw.add_text(
+            self._hud_get_font(imgui), font_size, imgui.ImVec2(x0 + 0.5 * (width - text_w), y0 + 3.0), white, label
+        )
         self._hud_caption(imgui, draw, x0 + pad, y0 + 6.0, "SPEED")
 
         bar_h = 12.0
@@ -1121,7 +1152,7 @@ class Example:
         # segments grow left->right (the last segment fills proportionally)
         seg_gap = 3.0
         seg_w = (bw - (HUD_BAR_SEGMENTS - 1) * seg_gap) / HUD_BAR_SEGMENTS
-        for y, frac, fill, name in ((ty, throttle, green, "THROTTLE"), (by, brake, red, "BRAKE")):
+        for y, frac, fill, name in ((ty, throttle, blue, "THROTTLE"), (by, brake, red, "BRAKE")):
             self._hud_caption(imgui, draw, x0 + pad, y + label_dy, name)
             for i in range(HUD_BAR_SEGMENTS):
                 sx = bx + i * (seg_w + seg_gap)
