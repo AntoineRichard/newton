@@ -1148,20 +1148,23 @@ class Example:
         bx = x0 + pad
         bw = width - 2.0 * pad
 
-        # top row: SPEED caption left, km/h readout right, drawn at 2x scale
-        # via the font+size draw-list overload (set_window_font_scale is
-        # absent in this imgui binding)
+        # top row: SPEED caption + km/h readout centered as one group, the
+        # readout drawn at 2x scale via the font+size draw-list overload
+        # (set_window_font_scale is absent in this imgui binding)
         label = f"{int(round(speed_kmh))} km/h"
         font_size = 2.0 * imgui.get_font_size()
-        text_w = self._hud_text_size(imgui, label, font_size, bold=True)
+        cap_gap = 14.0
+        num_w = self._hud_text_size(imgui, label, font_size, bold=True)
+        cap_w = self._hud_text_size(imgui, "SPEED", 1.1 * imgui.get_font_size(), bold=True)
+        gx = x0 + 0.5 * (width - cap_w - cap_gap - num_w)
+        self._hud_caption(imgui, draw, gx, y0 + 14.0, "SPEED")
         draw.add_text(
             self._hud_get_font(imgui, bold=True),
             font_size,
-            imgui.ImVec2(x0 + width - pad - text_w, y0 + 8.0),
+            imgui.ImVec2(gx + cap_w + cap_gap, y0 + 8.0),
             white,
             label,
         )
-        self._hud_caption(imgui, draw, x0 + pad, y0 + 14.0, "SPEED")
 
         # labels above full-width segmented LED bars: dim outlines mark the
         # full range, lit segments grow left->right (the last one fills
