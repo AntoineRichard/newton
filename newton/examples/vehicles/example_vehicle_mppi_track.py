@@ -54,6 +54,11 @@ A_ACC = 6.0  # [m/s^2] forward pass acceleration limit
 A_BRK = 14.0  # [m/s^2] backward pass braking limit
 V_CAP = 17.0  # [m/s] profile ceiling (full motor speed; the profile does the discipline)
 PROX_MARGIN = 0.15  # [m] graded wall-proximity band
+# multiplier on the t=0 command-rate term that couples each new plan to the
+# previously executed command (the within-rollout w_rate alone is far too
+# weak to suppress replan-to-replan steering flicker)
+EXEC_COUPLING = 25.0
+STEER_SPEED_REF = 12.0  # [m/s] dual-rate reference: steer authority halves at this speed^2 ratio
 
 MINIMAP_SIZE = 240.0  # [px] minimap window edge length
 MINIMAP_MARGIN = 12.0  # [px] gap to the viewport's bottom-right corner
@@ -153,30 +158,42 @@ def _broadcast_slice_f32(snap: wp.array[float], n_per: int, dst: wp.array[float]
     dst[w * n_per + i] = snap[i]
 
 
+@wp.func
+def _steer_scale(speed: float) -> float:
+    # speed-sensitive steering (RC dual-rate analog): at speed, large steering
+    # angles only saturate the front tires, so commands beyond a few degrees
+    # are physically indistinguishable to the cost and the planner's noise
+    # accumulates freely in the saturated region (straight-line wobble).
+    # Scaling the command keeps the explored range meaningful at every speed.
+    return 1.0 / (1.0 + (speed / STEER_SPEED_REF) ** 2.0)
+
+
 @wp.kernel
 def _apply_sample_commands(
     samples: wp.array3d[float],
     t: int,
+    speed: wp.array[float],
     drive: wp.array[wp.float32],
     steer: wp.array[wp.float32],
     brake: wp.array[wp.float32],
 ):
     v = wp.tid()
     drive[v] = samples[v, t, 0]
-    steer[v] = samples[v, t, 1]
+    steer[v] = samples[v, t, 1] * _steer_scale(speed[v])
     brake[v] = 0.0
 
 
 @wp.kernel
 def _apply_nominal_command(
     nominal: wp.array2d[float],
+    speed: wp.array[float],
     drive: wp.array[wp.float32],
     steer: wp.array[wp.float32],
     brake: wp.array[wp.float32],
 ):
     v = wp.tid()
     drive[v] = nominal[0, 0]
-    steer[v] = nominal[0, 1]
+    steer[v] = nominal[0, 1] * _steer_scale(speed[v])
     brake[v] = 0.0
 
 
@@ -206,7 +223,8 @@ def _accumulate_cost(
     t: int,
     horizon: int,
     total_len: float,
-    params: wp.array[float],  # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term]
+    params: wp.array[float],  # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term, w_center]
+    u_prev: wp.array[float],
     s_prev: wp.array[float],
     back_dist: wp.array[float],
     dead: wp.array[wp.int32],
@@ -256,13 +274,31 @@ def _accumulate_cost(
         dd = samples[e, t, 0] - samples[e, t - 1, 0]
         dst = samples[e, t, 1] - samples[e, t - 1, 1]
         c += params[4] * (dd * dd + dst * dst)
+    else:
+        # couple the plan's first command to the command the hero just
+        # executed: without this, replans are free to flick the steering
+        # every frame (the dominant straight-line wobble mode — the
+        # within-rollout rate penalty cannot see across replan boundaries)
+        dd = samples[e, 0, 0] - u_prev[0]
+        dst = samples[e, 0, 1] - u_prev[1]
+        c += params[4] * EXEC_COUPLING * (dd * dd + dst * dst)
     # graded wall proximity: a gradient before contact instead of a cliff at it
     c += params[5] * wp.max(0.0, PROX_MARGIN - clearance[e])
+    # light clearance reward (AutoRally-style sloped track cost): breaks the
+    # cost tie between centered-straight and swerving samples on straights,
+    # so the softmax average stops being noise-dominated there
+    c += -params[7] * wp.max(0.0, clearance[e])
     if start_oob[e] == 1:
         # recovery mode (rollout began outside the band, e.g. after a crash):
         # no kills; penalize distance outside the band so plans steer back in
         c += params[0] * wp.max(0.0, -clearance[e])
     costs[e] = costs[e] + c
+
+
+@wp.kernel
+def _store_executed_command(nominal: wp.array2d[float], u_prev: wp.array[float]):
+    u_prev[0] = nominal[0, 0]
+    u_prev[1] = nominal[0, 1]
 
 
 @wp.kernel
@@ -488,10 +524,11 @@ class Example:
         self.costs = wp.zeros(E, dtype=wp.float32, device=device)
         self.dead = wp.zeros(E, dtype=wp.int32, device=device)
         self.s_prev = wp.zeros(E, dtype=wp.float32, device=device)
+        self.u_prev = wp.zeros(2, dtype=wp.float32, device=device)
         self.start_oob = wp.zeros(E, dtype=wp.int32, device=device)
         self.back_dist = wp.zeros(E, dtype=wp.float32, device=device)
-        # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term]
-        self.cost_params = wp.array([30.0, 2.0, 0.05, 1000.0, 2.0, 10.0, 20.0], dtype=wp.float32, device=device)
+        # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term, w_center]
+        self.cost_params = wp.array([30.0, 2.0, 0.05, 1000.0, 2.0, 10.0, 20.0, 2.0], dtype=wp.float32, device=device)
         self.ribbon = wp.zeros(horizon, dtype=wp.vec3, device=device)
         # hero lap odometer (display + tests): unwrapped centerline arc length
         self.total_s = wp.zeros(1, dtype=wp.float32, device=device)
@@ -732,7 +769,7 @@ class Example:
             wp.launch(
                 _apply_sample_commands,
                 dim=self.num_worlds,
-                inputs=[self.planner.samples, t, cmd.drive, cmd.steer, cmd.brake],
+                inputs=[self.planner.samples, t, self.car_speed, cmd.drive, cmd.steer, cmd.brake],
                 device=dev,
             )
             for _ in range(self.rollout_substeps):
@@ -753,6 +790,7 @@ class Example:
                     horizon,
                     self.track_len,
                     self.cost_params,
+                    self.u_prev,
                     self.s_prev,
                     self.back_dist,
                     self.dead,
@@ -768,11 +806,12 @@ class Example:
             )
 
         self.planner.update(self.costs)
+        wp.launch(_store_executed_command, dim=1, inputs=[self.planner.nominal, self.u_prev], device=dev)
         self._restore_hero()
         wp.launch(
             _apply_nominal_command,
             dim=self.num_worlds,
-            inputs=[self.planner.nominal, cmd.drive, cmd.steer, cmd.brake],
+            inputs=[self.planner.nominal, self.car_speed, cmd.drive, cmd.steer, cmd.brake],
             device=dev,
         )
         for _ in range(self.sim_substeps):
@@ -850,9 +889,9 @@ class Example:
         if changed_d or changed_s:
             self.planner.sigma.assign(np.array([self.ui_sigma_drive, self.ui_sigma_steer], dtype=np.float32))
         changed = False
-        labels = ("W progress", "W speed", "W steer", "Kill penalty", "W rate", "W proximity", "W terminal")
+        labels = ("W progress", "W speed", "W steer", "Kill penalty", "W rate", "W proximity", "W terminal", "W center")
         for i, label in enumerate(labels):
-            hi = 1.0 if i == 2 else (2000.0 if i == 3 else (20.0 if i in (1, 4) else 100.0))
+            hi = 1.0 if i == 2 else (2000.0 if i == 3 else (20.0 if i in (1, 4, 7) else 100.0))
             c, self.ui_cost[i] = ui.slider_float(label, self.ui_cost[i], 0.0, hi)
             changed = changed or c
         if changed:
