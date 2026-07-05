@@ -18,6 +18,7 @@
 
 import json
 import math
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -53,6 +54,11 @@ A_ACC = 6.0  # [m/s^2] forward pass acceleration limit
 A_BRK = 10.0  # [m/s^2] backward pass braking limit
 V_CAP = 13.6  # [m/s] profile ceiling (matches the 0.8 drive command cap)
 PROX_MARGIN = 0.15  # [m] graded wall-proximity band
+
+MINIMAP_SIZE = 240.0  # [px] minimap window edge length
+MINIMAP_MARGIN = 12.0  # [px] gap to the viewport's bottom-right corner
+MINIMAP_PAD = 0.08  # fractional padding around the track bounding box
+MINIMAP_TRAIL_MAX = 3600  # trail ring-buffer capacity (one entry per frame)
 
 
 @wp.func
@@ -516,6 +522,12 @@ class Example:
             "hero_oob": 0,
         }
         self._nominal_plan = np.zeros((horizon, 2), dtype=np.float32)
+        # minimap state: hero trail ring buffer plus last hero pose (host side)
+        self._trail = deque(maxlen=MINIMAP_TRAIL_MAX)
+        self._hero_xy = (0.0, 0.0)
+        self._hero_yaw = 0.0
+        self._minimap_ok = True
+        self._minimap_boundary_px = None
         self.ui_temperature = float(self.planner.config.temperature)
         self.ui_sigma_drive, self.ui_sigma_steer = (float(v) for v in self.planner.config.sigma)
         self.ui_cost = list(self.cost_params.numpy())
@@ -576,6 +588,16 @@ class Example:
             )
 
         self._boundary_lines = [_loop_lines(inner, 0.01), _loop_lines(outer, 0.01)]
+
+        # minimap world->map transform: fit the padded track bounding box into
+        # the map square preserving aspect ratio (track is static, so once)
+        self._map_inner = inner
+        self._map_outer = outer
+        pts = np.vstack([inner, outer])
+        lo, hi = pts.min(axis=0), pts.max(axis=0)
+        extent = (hi - lo) * (1.0 + 2.0 * MINIMAP_PAD)
+        self._map_center = 0.5 * (lo + hi)
+        self._map_scale = MINIMAP_SIZE / max(float(extent[0]), float(extent[1]), 1e-6)
 
         # cone poses along both boundaries (env 0 only)
         xforms = []
@@ -781,6 +803,11 @@ class Example:
         t = self._telemetry
         qd = self.state_0.body_qd.numpy()[self._chassis0]
         t["speed"] = float(np.linalg.norm(qd[:2]))  # linear velocity is entries 0:3
+        tf = self.state_0.body_q.numpy()[self._chassis0]
+        x, y, z, w = tf[3], tf[4], tf[5], tf[6]
+        self._hero_yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+        self._hero_xy = (float(tf[0]), float(tf[1]))
+        self._trail.append(self._hero_xy)
         total = float(self.total_s.numpy()[0])
         t["meters"] = total
         t["laps"] = int(total // self.track_len) if total >= 0.0 else 0
@@ -828,6 +855,77 @@ class Example:
             changed = changed or c
         if changed:
             self.cost_params.assign(np.array(self.ui_cost, dtype=np.float32))
+        self._draw_minimap(ui)
+
+    def _draw_minimap(self, imgui):
+        """Overlay window anchored bottom-right showing track, trail, and car."""
+        if not self._minimap_ok:
+            return
+        try:
+            viewport = imgui.get_main_viewport()
+            x0 = viewport.pos.x + viewport.size.x - MINIMAP_SIZE - MINIMAP_MARGIN
+            y0 = viewport.pos.y + viewport.size.y - MINIMAP_SIZE - MINIMAP_MARGIN
+            imgui.set_next_window_pos(imgui.ImVec2(x0, y0))
+            imgui.set_next_window_size(imgui.ImVec2(MINIMAP_SIZE, MINIMAP_SIZE))
+            imgui.set_next_window_bg_alpha(0.45)
+            flags = (
+                imgui.WindowFlags_.no_title_bar
+                | imgui.WindowFlags_.no_resize
+                | imgui.WindowFlags_.no_move
+                | imgui.WindowFlags_.no_scrollbar
+                | imgui.WindowFlags_.no_collapse
+                | imgui.WindowFlags_.no_inputs
+                | imgui.WindowFlags_.no_nav
+                | imgui.WindowFlags_.no_focus_on_appearing
+                | imgui.WindowFlags_.no_saved_settings
+            )
+            imgui.push_style_var(imgui.StyleVar_.window_rounding, 8.0)
+            try:
+                visible = imgui.begin("##track_minimap", None, flags)[0]
+                try:
+                    if visible:
+                        self._draw_minimap_contents(imgui, x0, y0)
+                finally:
+                    imgui.end()
+            finally:
+                imgui.pop_style_var()
+        except Exception:
+            self._minimap_ok = False  # degrade silently on missing imgui API
+
+    def _draw_minimap_contents(self, imgui, x0, y0):
+        cx = x0 + 0.5 * MINIMAP_SIZE
+        cy = y0 + 0.5 * MINIMAP_SIZE
+        mx, my = float(self._map_center[0]), float(self._map_center[1])
+        s = self._map_scale
+
+        def to_px(p):
+            # imgui y grows down, world y grows up
+            return imgui.ImVec2(cx + (p[0] - mx) * s, cy - (p[1] - my) * s)
+
+        draw = imgui.get_window_draw_list()
+        gray = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.55, 0.55, 0.6, 0.9))
+        green = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.1, 0.9, 0.3, 0.9))
+        orange = imgui.color_convert_float4_to_u32(imgui.ImVec4(1.0, 0.55, 0.1, 1.0))
+
+        # static boundary loops: pixel coords only depend on the window corner
+        if self._minimap_boundary_px is None or self._minimap_boundary_px[0] != (x0, y0):
+            loops = [[to_px(p) for p in poly] for poly in (self._map_inner, self._map_outer)]
+            self._minimap_boundary_px = ((x0, y0), loops)
+        for loop in self._minimap_boundary_px[1]:
+            draw.add_polyline(loop, gray, imgui.ImDrawFlags_.closed, 1.5)
+
+        if len(self._trail) >= 2:
+            step = max(1, len(self._trail) // 600)  # cap per-frame point count
+            trail = list(self._trail)[::step]
+            if trail[-1] != self._trail[-1]:
+                trail.append(self._trail[-1])
+            draw.add_polyline([to_px(p) for p in trail], green, imgui.ImDrawFlags_.none, 1.5)
+
+        car = to_px(self._hero_xy)
+        tick = 9.0
+        tip = imgui.ImVec2(car.x + tick * math.cos(self._hero_yaw), car.y - tick * math.sin(self._hero_yaw))
+        draw.add_line(car, tip, orange, 2.0)
+        draw.add_circle_filled(car, 4.0, orange)
 
     def _substep(self, dt):
         self.state_0.clear_forces()
