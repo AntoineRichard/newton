@@ -48,7 +48,7 @@ MAX_TRACK_ATTEMPTS = 32
 # reference speed profile (curvature-limited steady state + forward accel pass
 # + backward braking pass, the standard racing decomposition): braking
 # foresight lives in the profile, not the MPPI horizon
-A_LAT_MAX = 12.0  # [m/s^2] usable lateral acceleration for v_ss = sqrt(a_lat/|kappa|)
+A_LAT_MAX = 16.0  # [m/s^2] usable lateral acceleration for v_ss = sqrt(a_lat/|kappa|), ~80% of mu*g
 A_ACC = 6.0  # [m/s^2] forward pass acceleration limit
 A_BRK = 10.0  # [m/s^2] backward pass braking limit
 V_CAP = 13.6  # [m/s] profile ceiling (matches the 0.8 drive command cap)
@@ -459,8 +459,13 @@ class Example:
                 horizon=horizon,
                 dim=2,
                 sigma=(0.35, 0.45),
-                temperature=0.05,
-                beta=0.7,
+                # temperature tuned so the effective sample size sits in the
+                # healthy 5-20% of K band (ESS ~30-90 here); at 0.05 the
+                # softmax was argmin-degenerate (ESS = 1)
+                temperature=15.0,
+                # more noise smoothing on drive than steering, per the
+                # colored-noise MPPI guidance
+                beta=(0.85, 0.6),
                 # drive in [-0.3, 0.8]: enough negative torque to brake hard
                 # for corners (measured backward travel is cost-killed, so
                 # reverse cannot become a cruise mode) and a top-speed cap
@@ -511,8 +516,8 @@ class Example:
             "hero_oob": 0,
         }
         self._nominal_plan = np.zeros((horizon, 2), dtype=np.float32)
-        self.ui_temperature = self.planner.config.temperature
-        self.ui_sigma_drive, self.ui_sigma_steer = self.planner.config.sigma
+        self.ui_temperature = float(self.planner.config.temperature)
+        self.ui_sigma_drive, self.ui_sigma_steer = (float(v) for v in self.planner.config.sigma)
         self.ui_cost = list(self.cost_params.numpy())
 
         # prime pose/projection buffers so the lap odometer starts at the
@@ -808,7 +813,7 @@ class Example:
         ui.text("Planner")
         ui.text(f"Alive: {100.0 * t['alive']:.0f}%   ESS: {t['ess']:.0f}")
         ui.text(f"Cost best/mean: {t['best_cost']:.1f} / {t['mean_cost']:.1f}")
-        changed_t, self.ui_temperature = ui.slider_float("Temperature", self.ui_temperature, 0.005, 0.5)
+        changed_t, self.ui_temperature = ui.slider_float("Temperature", self.ui_temperature, 0.5, 50.0)
         if changed_t:
             self.planner.set_temperature(self.ui_temperature)
         changed_d, self.ui_sigma_drive = ui.slider_float("Sigma drive", self.ui_sigma_drive, 0.05, 1.0)
@@ -886,9 +891,9 @@ class Example:
     @staticmethod
     def create_parser():
         parser = newton.examples.create_parser()
-        # 512 samples beat 1024/2048 in tuning sweeps (the controller is
-        # sim-step-bound, not sample-bound: at fixed temperature, larger
-        # sample counts pull the softmax average toward the mean)
+        # at a healthy temperature (ESS in the 5-20% of K band), sample
+        # counts beyond 512 measured neutral on lap pace while costing frame
+        # rate, so 512 is the efficiency point
         parser.add_argument(
             "--num-samples",
             type=int,
