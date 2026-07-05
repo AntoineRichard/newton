@@ -69,9 +69,12 @@ GMETER_G_EDGE = 2.5  # [g] acceleration magnitude mapped to the widget edge
 GMETER_TRAIL_MAX = 20  # G-dot history length (faint trail)
 GMETER_EMA = 0.3  # blend for the exponential-moving-average dot smoothing
 GRAVITY = 9.81  # [m/s^2] used to express accelerations in g units
-# system Noto faces for the HUD text, in preference order; the HUD falls
-# back to the default imgui font when none of these are installed
+# system fonts for the HUD text, in preference order (JetBrains Mono, then
+# Noto); the HUD falls back to the default imgui font when none is installed
 HUD_FONT_CANDIDATES = (
+    str(Path.home() / ".local/share/fonts/JetBrainsMono-Regular.ttf"),
+    "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf",
+    "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
     "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
     "/usr/share/fonts/noto/NotoSans-Regular.ttf",
     "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
