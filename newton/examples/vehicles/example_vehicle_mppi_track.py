@@ -57,15 +57,21 @@ def _quat_yaw(q: wp.quat) -> float:
 @wp.kernel
 def _gather_car_pose(
     body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
     chassis: wp.array[wp.int32],
     pos: wp.array[wp.vec2f],
     yaw: wp.array[float],
+    v_long: wp.array[float],
 ):
     e = wp.tid()
     tf = body_q[chassis[e]]
     p = wp.transform_get_translation(tf)
     pos[e] = wp.vec2f(p[0], p[1])
-    yaw[e] = _quat_yaw(wp.transform_get_rotation(tf))
+    heading = _quat_yaw(wp.transform_get_rotation(tf))
+    yaw[e] = heading
+    qd = body_qd[chassis[e]]
+    # linear velocity is the first three entries (world frame)
+    v_long[e] = qd[0] * wp.cos(heading) + qd[1] * wp.sin(heading)
 
 
 @wp.kernel
@@ -129,10 +135,11 @@ def _apply_nominal_command(
 
 
 @wp.kernel
-def _zero_plan_buffers(costs: wp.array[float], dead: wp.array[wp.int32]):
+def _zero_plan_buffers(costs: wp.array[float], dead: wp.array[wp.int32], reverse_dist: wp.array[float]):
     e = wp.tid()
     costs[e] = 0.0
     dead[e] = 0
+    reverse_dist[e] = 0.0
 
 
 @wp.kernel
@@ -148,10 +155,13 @@ def _accumulate_cost(
     oob: wp.array[wp.int32],
     clearance: wp.array[float],
     start_oob: wp.array[wp.int32],
+    v_long: wp.array[float],
+    dt: float,
     samples: wp.array3d[float],
     t: int,
     params: wp.array[float],  # [w_progress, w_pass, w_steer, kill_penalty]
     dist_prev: wp.array[float],
+    reverse_dist: wp.array[float],
     dead: wp.array[wp.int32],
     costs: wp.array[float],
 ):
@@ -163,6 +173,16 @@ def _accumulate_cost(
         dead[e] = 1
         costs[e] = costs[e] + params[3]
         return
+    if start_oob[e] == 0:
+        # measured backward motion is forbidden beyond a small back-out
+        # budget, so reverse gear stays a brake/recovery tool and never
+        # becomes a cruise mode (negative drive commands remain free for
+        # braking as long as the car keeps moving forward)
+        reverse_dist[e] = reverse_dist[e] + wp.max(0.0, -v_long[e]) * dt
+        if reverse_dist[e] > 1.0:
+            dead[e] = 1
+            costs[e] = costs[e] + params[3]
+            return
     d = dist_to_next[e]
     progress = dist_prev[e] - d
     # NaN/garbage guard (dist is NaN until the first tracker update)
@@ -323,6 +343,7 @@ class Example:
 
         self.car_pos = wp.zeros(self.num_worlds, dtype=wp.vec2f, device=self.model.device)
         self.car_yaw = wp.zeros(self.num_worlds, dtype=wp.float32, device=self.model.device)
+        self.car_v_long = wp.zeros(self.num_worlds, dtype=wp.float32, device=self.model.device)
         self.car_half_extents = wp.array(
             np.tile(np.array(CAR_HALF_EXTENTS, dtype=np.float32), (self.num_worlds, 1)),
             dtype=wp.vec2f,
@@ -351,8 +372,12 @@ class Example:
                 sigma=(0.35, 0.45),
                 temperature=0.05,
                 beta=0.7,
-                bounds_lo=(-0.3, -1.0),  # limited reverse, full steering
-                bounds_hi=(1.0, 1.0),
+                # drive in [-0.3, 0.8]: enough negative torque to brake hard
+                # for corners (measured backward travel is cost-killed, so
+                # reverse cannot become a cruise mode) and a top-speed cap
+                # that keeps the horizon ahead of the braking distance
+                bounds_lo=(-0.3, -1.0),
+                bounds_hi=(0.8, 1.0),
             ),
             device=self.model.device,
         )
@@ -362,6 +387,7 @@ class Example:
         self.dead = wp.zeros(E, dtype=wp.int32, device=device)
         self.dist_prev = wp.zeros(E, dtype=wp.float32, device=device)
         self.start_oob = wp.zeros(E, dtype=wp.int32, device=device)
+        self.reverse_dist = wp.zeros(E, dtype=wp.float32, device=device)
         # [w_progress, w_pass, w_steer, kill_penalty]
         self.cost_params = wp.array([30.0, 30.0, 0.05, 200.0], dtype=wp.float32, device=device)
         self.ribbon = wp.zeros(horizon, dtype=wp.vec3, device=device)
@@ -486,6 +512,12 @@ class Example:
         wp.copy(self.snap_progress, self.tracker._progress, count=1)
 
     def _broadcast_hero(self):
+        # Broadcasting joint_q/joint_qd is what actually teleports the particles:
+        # SolverMuJoCo re-ingests state joint coords into mjData qpos/qvel every
+        # step (update_data_interval=1), so no mujoco_warp.reset_data call is
+        # needed on rollout refresh. The only mjData state that survives the
+        # teleport is qacc_warmstart (constraint warm start); measured impact on
+        # racing metrics is nil, so it is deliberately left untouched.
         dev = self.model.device
         E = self.num_worlds
         wp.launch(
@@ -543,7 +575,14 @@ class Example:
         wp.launch(
             _gather_car_pose,
             dim=self.num_worlds,
-            inputs=[self.state_0.body_q, self.chassis, self.car_pos, self.car_yaw],
+            inputs=[
+                self.state_0.body_q,
+                self.state_0.body_qd,
+                self.chassis,
+                self.car_pos,
+                self.car_yaw,
+                self.car_v_long,
+            ],
             device=self.model.device,
         )
         # update()/query() refresh and return the same preallocated buffers
@@ -559,7 +598,9 @@ class Example:
         self._snapshot_hero()
         self._broadcast_hero()
         self.planner.sample()
-        wp.launch(_zero_plan_buffers, dim=self.num_worlds, inputs=[self.costs, self.dead], device=dev)
+        wp.launch(
+            _zero_plan_buffers, dim=self.num_worlds, inputs=[self.costs, self.dead, self.reverse_dist], device=dev
+        )
         self._gather_and_track()
         wp.copy(self.dist_prev, self.events.dist_to_next, count=self.num_worlds)
         wp.launch(_record_start_oob, dim=self.num_worlds, inputs=[self.contact.oob, self.start_oob], device=dev)
@@ -583,10 +624,13 @@ class Example:
                     self.contact.oob,
                     self.contact.distance,
                     self.start_oob,
+                    self.car_v_long,
+                    self.frame_dt,
                     self.planner.samples,
                     t,
                     self.cost_params,
                     self.dist_prev,
+                    self.reverse_dist,
                     self.dead,
                     self.costs,
                 ],
@@ -730,13 +774,16 @@ class Example:
     @staticmethod
     def create_parser():
         parser = newton.examples.create_parser()
+        # 512 samples beat 1024/2048 in tuning sweeps (the controller is
+        # sim-step-bound, not sample-bound: at fixed temperature, larger
+        # sample counts pull the softmax average toward the mean)
         parser.add_argument(
             "--num-samples",
             type=int,
-            default=1024,
+            default=512,
             help="MPPI samples K (= simulated worlds; sample 0 is the hero)",
         )
-        parser.add_argument("--horizon", type=int, default=32, help="MPPI planning horizon in control steps")
+        parser.add_argument("--horizon", type=int, default=48, help="MPPI planning horizon in control steps")
         parser.add_argument("--rollout-substeps", type=int, default=4, help="solver substeps per rollout control step")
         parser.add_argument("--track-seed", type=int, default=0, help="base seed for track generation")
         parser.set_defaults(num_frames=240)
