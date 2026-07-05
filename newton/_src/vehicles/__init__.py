@@ -21,9 +21,11 @@ from .metadata import (
     register_vehicle_attributes,
     set_vehicle,
 )
+from .mppi import ControllerMPPI
 
 __all__ = [
     "VEHICLE_NAMESPACE",
+    "ControllerMPPI",
     "DriveInput",
     "DriveMode",
     "TireModel",

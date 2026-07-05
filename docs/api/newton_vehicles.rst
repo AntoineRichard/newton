@@ -20,6 +20,7 @@ heterogeneous vehicles (Ackermann, skid-steer, generic) in a single model.
    :toctree: _generated
    :nosignatures:
 
+   ControllerMPPI
    DriveInput
    DriveMode
    TireModel

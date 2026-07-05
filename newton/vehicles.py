@@ -11,6 +11,7 @@ heterogeneous vehicles (Ackermann, skid-steer, generic) in a single model.
 
 from ._src.vehicles import (
     VEHICLE_NAMESPACE,
+    ControllerMPPI,
     DriveInput,
     DriveMode,
     TireModel,
@@ -30,6 +31,7 @@ from ._src.vehicles import (
 
 __all__ = [
     "VEHICLE_NAMESPACE",
+    "ControllerMPPI",
     "DriveInput",
     "DriveMode",
     "TireModel",
