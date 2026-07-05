@@ -64,6 +64,7 @@ MINIMAP_TRAIL_MAX = 3600  # trail ring-buffer capacity (one entry per frame)
 GMETER_SIZE = 150.0  # [px] G-meter widget edge length (square, left of minimap)
 HUD_GAP = 10.0  # [px] gap between HUD cluster elements
 HUD_BARS_HEIGHT = 72.0  # [px] speed + throttle/brake strip height (above the row)
+HUD_BAR_SEGMENTS = 24  # LED-style segments per throttle/brake bar
 GMETER_G_EDGE = 2.5  # [g] acceleration magnitude mapped to the widget edge
 GMETER_TRAIL_MAX = 20  # G-dot history length (faint trail)
 GMETER_EMA = 0.3  # blend for the exponential-moving-average dot smoothing
@@ -893,6 +894,22 @@ class Example:
         self._draw_hud_bars(ui)
 
     @staticmethod
+    def _hud_caption(imgui, draw, x, y, text, align="left", span=0.0):
+        """Small muted uppercase caption in the broadcast style (0.9x font).
+
+        ``align`` is "left", "right" (text ends at ``x``), or "center"
+        (centered within ``span`` pixels starting at ``x``).
+        """
+        scale = 0.9
+        text_w = imgui.calc_text_size(text).x * scale  # calc is at base font size
+        if align == "right":
+            x -= text_w
+        elif align == "center":
+            x += 0.5 * (span - text_w)
+        col = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.78, 0.78, 0.82, 0.6))
+        draw.add_text(imgui.get_font(), scale * imgui.get_font_size(), imgui.ImVec2(x, y), col, text)
+
+    @staticmethod
     def _hud_window_flags(imgui):
         return (
             imgui.WindowFlags_.no_title_bar
@@ -975,6 +992,7 @@ class Example:
         tip = imgui.ImVec2(car.x + tick * math.cos(self._hero_yaw), car.y - tick * math.sin(self._hero_yaw))
         draw.add_line(car, tip, orange, 2.0)
         draw.add_circle_filled(car, 4.0, orange)
+        self._hud_caption(imgui, draw, x0 + 8.0, y0 + 6.0, "TRACK")
 
     def _draw_gmeter(self, imgui):
         """F1-style G-meter anchored just left of the bottom-right minimap."""
@@ -1034,6 +1052,10 @@ class Example:
         a_right, a_fwd = self._accel_car_g
         draw.add_circle_filled(to_dot(a_right, a_fwd), 5.0, red)
 
+        self._hud_caption(imgui, draw, x0, y0 + 5.0, "ACCELERATION", align="center", span=GMETER_SIZE)
+        mag = math.hypot(a_right, a_fwd)
+        self._hud_caption(imgui, draw, x0 + GMETER_SIZE - 8.0, y0 + GMETER_SIZE - 18.0, f"{mag:.1f} G", align="right")
+
     def _draw_hud_bars(self, imgui):
         """Speed readout + throttle/brake bars spanning the cluster, on top."""
         if not self._hud_ok:
@@ -1075,8 +1097,10 @@ class Example:
         red = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.9, 0.15, 0.15, 0.95))
 
         pad = 10.0
-        bx = x0 + pad
-        bw = width - 2.0 * pad
+        # left label column sized to the widest bar caption ("THROTTLE")
+        label_col = imgui.calc_text_size("THROTTLE").x * 0.9 + 10.0
+        bx = x0 + pad + label_col
+        bw = width - 2.0 * pad - label_col
 
         # speed readout on top, centered over the cluster, drawn at 2x scale
         # via the font+size draw-list overload (set_window_font_scale is
@@ -1086,15 +1110,25 @@ class Example:
         font_size = scale * imgui.get_font_size()
         text_w = imgui.calc_text_size(label).x * scale  # calc is at base font size
         draw.add_text(imgui.get_font(), font_size, imgui.ImVec2(x0 + 0.5 * (width - text_w), y0 + 3.0), white, label)
+        self._hud_caption(imgui, draw, x0 + pad, y0 + 6.0, "SPEED")
 
         bar_h = 12.0
         bar_gap = 6.0
         ty = y0 + HUD_BARS_HEIGHT - 2.0 * bar_h - bar_gap - 6.0
         by = ty + bar_h + bar_gap
-        for y, frac, fill in ((ty, throttle, green), (by, brake, red)):
-            draw.add_rect(imgui.ImVec2(bx, y), imgui.ImVec2(bx + bw, y + bar_h), outline, 2.0)
-            if frac > 0.0:
-                draw.add_rect_filled(imgui.ImVec2(bx, y), imgui.ImVec2(bx + bw * frac, y + bar_h), fill, 2.0)
+        label_dy = 0.5 * (bar_h - 0.9 * imgui.get_font_size())  # center on the bar
+        # segmented LED-style bars: dim outlines mark the full range, lit
+        # segments grow left->right (the last segment fills proportionally)
+        seg_gap = 3.0
+        seg_w = (bw - (HUD_BAR_SEGMENTS - 1) * seg_gap) / HUD_BAR_SEGMENTS
+        for y, frac, fill, name in ((ty, throttle, green, "THROTTLE"), (by, brake, red, "BRAKE")):
+            self._hud_caption(imgui, draw, x0 + pad, y + label_dy, name)
+            for i in range(HUD_BAR_SEGMENTS):
+                sx = bx + i * (seg_w + seg_gap)
+                draw.add_rect(imgui.ImVec2(sx, y), imgui.ImVec2(sx + seg_w, y + bar_h), outline, 1.0)
+                lit = max(0.0, min(1.0, frac * HUD_BAR_SEGMENTS - i))
+                if lit > 0.0:
+                    draw.add_rect_filled(imgui.ImVec2(sx, y), imgui.ImVec2(sx + seg_w * lit, y + bar_h), fill, 1.0)
 
     def _substep(self, dt):
         self.state_0.clear_forces()
