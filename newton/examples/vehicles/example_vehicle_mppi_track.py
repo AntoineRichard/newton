@@ -260,12 +260,6 @@ def _build_model(num_worlds):
     scene.add_ground_plane(cfg=terrain_cfg)
     model = scene.finalize()
 
-    # hide every shape outside world 0 so the viewer draws a single car
-    flags = model.shape_flags.numpy()
-    worlds = model.shape_world.numpy()
-    flags[worlds >= 1] &= ~int(newton.ShapeFlags.VISIBLE)
-    model.shape_flags.assign(flags)
-
     joint_type = model.joint_type.numpy()
     joint_child = model.joint_child.numpy()
     free_children = joint_child[joint_type == int(newton.JointType.FREE)]
@@ -428,6 +422,13 @@ class Example:
         self._init_track_render()
         self.follow_camera = True
         self.viewer.set_model(self.model)
+        # render only the hero world, exactly where it simulates: all worlds
+        # are collocated at the origin, so disable the viewer's automatic
+        # per-world grid offsets (they would draw the car away from the track)
+        if hasattr(self.viewer, "set_visible_worlds"):
+            self.viewer.set_visible_worlds([0])
+        if hasattr(self.viewer, "set_world_offsets"):
+            self.viewer.set_world_offsets((0.0, 0.0, 0.0))
         self._set_follow_camera()
         if hasattr(self.viewer, "camera") and hasattr(self.viewer.camera, "fov"):
             self.viewer.camera.fov = 65.0
