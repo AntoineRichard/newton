@@ -63,7 +63,7 @@ MINIMAP_TRAIL_MAX = 3600  # trail ring-buffer capacity (one entry per frame)
 # F1-broadcast HUD cluster, arranged around the bottom-right minimap
 GMETER_SIZE = 150.0  # [px] G-meter widget edge length (square, left of minimap)
 HUD_GAP = 10.0  # [px] gap between HUD cluster elements
-HUD_BARS_HEIGHT = 72.0  # [px] speed + throttle/brake strip height (above the row)
+HUD_PANEL_W = 260.0  # [px] speed + throttle/brake panel width (left of the G-meter)
 HUD_BAR_SEGMENTS = 24  # LED-style segments per throttle/brake bar
 GMETER_G_EDGE = 2.5  # [g] acceleration magnitude mapped to the widget edge
 GMETER_TRAIL_MAX = 20  # G-dot history length (faint trail)
@@ -79,6 +79,15 @@ HUD_FONT_CANDIDATES = (
     "/usr/share/fonts/noto/NotoSans-Regular.ttf",
     "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
     "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
+)
+HUD_FONT_BOLD_CANDIDATES = (
+    str(Path.home() / ".local/share/fonts/JetBrainsMono-Bold.ttf"),
+    "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Bold.ttf",
+    "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Bold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansMono-Bold.ttf",
+    "/usr/share/fonts/noto/NotoSansMono-Bold.ttf",
 )
 
 
@@ -557,7 +566,8 @@ class Example:
         self._accel_car_g = (0.0, 0.0)  # (right, forward) EMA-smoothed [g]
         self._gmeter_trail = deque(maxlen=GMETER_TRAIL_MAX)
         self._hud_ok = True
-        self._hud_font = None  # system Noto face, loaded lazily on first draw
+        self._hud_font = None  # system font faces, loaded lazily on first draw
+        self._hud_font_bold = None
         self._hud_font_tried = False
         self.ui_temperature = float(self.planner.config.temperature)
         self.ui_sigma_drive, self.ui_sigma_steer = (float(v) for v in self.planner.config.sigma)
@@ -906,41 +916,48 @@ class Example:
         self._draw_gmeter(ui)
         self._draw_hud_bars(ui)
 
-    def _hud_get_font(self, imgui):
-        """Return the HUD font: a system Noto face, or the imgui default."""
+    @staticmethod
+    def _hud_load_font(imgui, candidates):
+        for path in candidates:
+            if Path(path).is_file():
+                try:
+                    font = imgui.get_io().fonts.add_font_from_file_ttf(path, imgui.get_font_size())
+                except Exception:
+                    font = None
+                if font is not None:
+                    return font
+        return None
+
+    def _hud_get_font(self, imgui, bold=False):
+        """Return the HUD font (system JetBrains Mono or Noto, imgui default)."""
         if not self._hud_font_tried:
             self._hud_font_tried = True
-            for path in HUD_FONT_CANDIDATES:
-                if Path(path).is_file():
-                    try:
-                        self._hud_font = imgui.get_io().fonts.add_font_from_file_ttf(path, imgui.get_font_size())
-                    except Exception:
-                        self._hud_font = None
-                    if self._hud_font is not None:
-                        break
-        return self._hud_font if self._hud_font is not None else imgui.get_font()
+            self._hud_font = self._hud_load_font(imgui, HUD_FONT_CANDIDATES)
+            self._hud_font_bold = self._hud_load_font(imgui, HUD_FONT_BOLD_CANDIDATES)
+        font = (self._hud_font_bold or self._hud_font) if bold else self._hud_font
+        return font if font is not None else imgui.get_font()
 
-    def _hud_text_size(self, imgui, text, font_size):
+    def _hud_text_size(self, imgui, text, font_size, bold=False):
         """Measure ``text`` in the HUD font at ``font_size`` pixels."""
-        imgui.push_font(self._hud_get_font(imgui), font_size)
+        imgui.push_font(self._hud_get_font(imgui, bold), font_size)
         try:
             return imgui.calc_text_size(text).x
         finally:
             imgui.pop_font()
 
     def _hud_caption(self, imgui, draw, x, y, text, align="left", span=0.0):
-        """Small muted uppercase caption in the broadcast style (0.9x font).
+        """Bold white uppercase caption in the broadcast style (1.1x font).
 
         ``align`` is "left", "right" (text ends at ``x``), or "center"
         (centered within ``span`` pixels starting at ``x``).
         """
-        font_size = 0.9 * imgui.get_font_size()
+        font_size = 1.1 * imgui.get_font_size()
         if align == "right":
-            x -= self._hud_text_size(imgui, text, font_size)
+            x -= self._hud_text_size(imgui, text, font_size, bold=True)
         elif align == "center":
-            x += 0.5 * (span - self._hud_text_size(imgui, text, font_size))
-        col = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.78, 0.78, 0.82, 0.6))
-        draw.add_text(self._hud_get_font(imgui), font_size, imgui.ImVec2(x, y), col, text)
+            x += 0.5 * (span - self._hud_text_size(imgui, text, font_size, bold=True))
+        col = imgui.color_convert_float4_to_u32(imgui.ImVec4(1.0, 1.0, 1.0, 1.0))
+        draw.add_text(self._hud_get_font(imgui, bold=True), font_size, imgui.ImVec2(x, y), col, text)
 
     @staticmethod
     def _hud_window_flags(imgui):
@@ -1085,30 +1102,28 @@ class Example:
         a_right, a_fwd = self._accel_car_g
         draw.add_circle_filled(to_dot(a_right, a_fwd), 5.0, red)
 
-        self._hud_caption(imgui, draw, x0, y0 + 5.0, "ACCELERATION", align="center", span=GMETER_SIZE)
+        self._hud_caption(imgui, draw, x0, y0 + 6.0, "ACCELERATION", align="center", span=GMETER_SIZE)
         mag = math.hypot(a_right, a_fwd)
-        self._hud_caption(imgui, draw, x0 + GMETER_SIZE - 8.0, y0 + GMETER_SIZE - 18.0, f"{mag:.1f} G", align="right")
+        self._hud_caption(imgui, draw, x0 + GMETER_SIZE - 8.0, y0 + GMETER_SIZE - 26.0, f"{mag:.1f} G", align="right")
 
     def _draw_hud_bars(self, imgui):
-        """Speed readout + throttle/brake bars spanning the cluster, on top."""
+        """Speed readout + throttle/brake panel left of the G-meter, same height."""
         if not self._hud_ok:
             return
         try:
             viewport = imgui.get_main_viewport()
             mm_x0 = viewport.pos.x + viewport.size.x - MINIMAP_SIZE - MINIMAP_MARGIN
-            mm_y0 = viewport.pos.y + viewport.size.y - MINIMAP_SIZE - MINIMAP_MARGIN
-            x0 = mm_x0 - HUD_GAP - GMETER_SIZE  # cluster left edge (G-meter left)
-            width = MINIMAP_SIZE + HUD_GAP + GMETER_SIZE  # full cluster width
-            y0 = mm_y0 - HUD_GAP - HUD_BARS_HEIGHT
+            x0 = mm_x0 - HUD_GAP - GMETER_SIZE - HUD_GAP - HUD_PANEL_W
+            y0 = viewport.pos.y + viewport.size.y - GMETER_SIZE - MINIMAP_MARGIN
             imgui.set_next_window_pos(imgui.ImVec2(x0, y0))
-            imgui.set_next_window_size(imgui.ImVec2(width, HUD_BARS_HEIGHT))
+            imgui.set_next_window_size(imgui.ImVec2(HUD_PANEL_W, GMETER_SIZE))
             imgui.set_next_window_bg_alpha(0.45)
             imgui.push_style_var(imgui.StyleVar_.window_rounding, 8.0)
             try:
                 visible = imgui.begin("##hud_bars", None, self._hud_window_flags(imgui))[0]
                 try:
                     if visible:
-                        self._draw_hud_bars_contents(imgui, x0, y0, width)
+                        self._draw_hud_bars_contents(imgui, x0, y0, HUD_PANEL_W)
                 finally:
                     imgui.end()
             finally:
@@ -1124,39 +1139,40 @@ class Example:
         speed_kmh = t["speed"] * 3.6
 
         draw = imgui.get_window_draw_list()
-        white = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.96, 0.96, 0.96, 1.0))
+        white = imgui.color_convert_float4_to_u32(imgui.ImVec4(1.0, 1.0, 1.0, 1.0))
         outline = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.7, 0.7, 0.75, 0.5))
         blue = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.0, 0.66, 1.0, 0.95))  # electric blue
         red = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.9, 0.15, 0.15, 0.95))
 
-        pad = 10.0
-        # left label column sized to the widest bar caption ("THROTTLE")
-        label_col = self._hud_text_size(imgui, "THROTTLE", 0.9 * imgui.get_font_size()) + 10.0
-        bx = x0 + pad + label_col
-        bw = width - 2.0 * pad - label_col
+        pad = 12.0
+        bx = x0 + pad
+        bw = width - 2.0 * pad
 
-        # speed readout on top, centered over the cluster, drawn at 2x scale
+        # top row: SPEED caption left, km/h readout right, drawn at 2x scale
         # via the font+size draw-list overload (set_window_font_scale is
         # absent in this imgui binding)
         label = f"{int(round(speed_kmh))} km/h"
         font_size = 2.0 * imgui.get_font_size()
-        text_w = self._hud_text_size(imgui, label, font_size)
+        text_w = self._hud_text_size(imgui, label, font_size, bold=True)
         draw.add_text(
-            self._hud_get_font(imgui), font_size, imgui.ImVec2(x0 + 0.5 * (width - text_w), y0 + 3.0), white, label
+            self._hud_get_font(imgui, bold=True),
+            font_size,
+            imgui.ImVec2(x0 + width - pad - text_w, y0 + 8.0),
+            white,
+            label,
         )
-        self._hud_caption(imgui, draw, x0 + pad, y0 + 6.0, "SPEED")
+        self._hud_caption(imgui, draw, x0 + pad, y0 + 14.0, "SPEED")
 
-        bar_h = 12.0
-        bar_gap = 6.0
-        ty = y0 + HUD_BARS_HEIGHT - 2.0 * bar_h - bar_gap - 6.0
-        by = ty + bar_h + bar_gap
-        label_dy = 0.5 * (bar_h - 0.9 * imgui.get_font_size())  # center on the bar
-        # segmented LED-style bars: dim outlines mark the full range, lit
-        # segments grow left->right (the last segment fills proportionally)
+        # labels above full-width segmented LED bars: dim outlines mark the
+        # full range, lit segments grow left->right (the last one fills
+        # proportionally)
+        bar_h = 14.0
         seg_gap = 3.0
         seg_w = (bw - (HUD_BAR_SEGMENTS - 1) * seg_gap) / HUD_BAR_SEGMENTS
-        for y, frac, fill, name in ((ty, throttle, blue, "THROTTLE"), (by, brake, red, "BRAKE")):
-            self._hud_caption(imgui, draw, x0 + pad, y + label_dy, name)
+        rows = ((y0 + 52.0, throttle, blue, "THROTTLE"), (y0 + 100.0, brake, red, "BRAKE"))
+        for label_y, frac, fill, name in rows:
+            self._hud_caption(imgui, draw, x0 + pad, label_y, name)
+            y = label_y + 1.2 * imgui.get_font_size() + 4.0
             for i in range(HUD_BAR_SEGMENTS):
                 sx = bx + i * (seg_w + seg_gap)
                 draw.add_rect(imgui.ImVec2(sx, y), imgui.ImVec2(sx + seg_w, y + bar_h), outline, 1.0)
