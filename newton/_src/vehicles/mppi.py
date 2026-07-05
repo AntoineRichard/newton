@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 import warp as wp
 
 
@@ -33,7 +34,7 @@ def _sample_sequences(
     # counter advances the offset (not the seed) so each planner seed is an
     # independent stream: frame n+1 of seed s never replays frame n of seed s+1
     state = wp.rand_init(seed, (counter[0] * noise.shape[0] + k) * nominal.shape[1] + a)
-    b = beta[0]
+    b = beta[a]
     scale = wp.sqrt(wp.max(0.0, 1.0 - b * b))
     n = float(0.0)
     for t in range(horizon):
@@ -76,11 +77,15 @@ def _softmax_weights(
 
 
 @wp.kernel
-def _sum_weights(weights: wp.array[float], out: wp.array[float]):
+def _sum_weights(weights: wp.array[float], out: wp.array[float], ess: wp.array[float]):
     s = float(0.0)
+    s2 = float(0.0)
     for k in range(weights.shape[0]):
         s += weights[k]
+        s2 += weights[k] * weights[k]
     out[0] = s
+    # effective sample size 1/sum(w_norm^2); diagnostic for temperature tuning
+    ess[0] = s * s / wp.max(s2, 1.0e-30)
 
 
 @wp.kernel
@@ -123,6 +128,11 @@ class ControllerMPPI:
     full cycle can be recorded into a CUDA graph. Temperature and noise
     smoothing live in device arrays and remain adjustable while captured via
     :meth:`set_temperature` and :meth:`set_beta`.
+
+    After :meth:`update`, :attr:`ess` holds the effective sample size
+    ``1 / sum(w_normalized^2)`` (shape [1]); healthy values are roughly 5-20%
+    of ``num_samples`` — near 1 means the softmax collapsed onto a single
+    rollout (temperature too low for the cost spread).
     """
 
     @dataclass
@@ -137,8 +147,10 @@ class ControllerMPPI:
         """Per-channel exploration noise standard deviation, length ``dim``."""
         temperature: float = 0.05
         """Softmax temperature; lower concentrates the update on the best samples."""
-        beta: float = 0.7
-        """Per-step noise smoothing in [0, 1); 0 is white noise."""
+        beta: float | tuple[float, ...] = 0.7
+        """Per-step noise smoothing in [0, 1); 0 is white noise. A scalar
+        applies to all channels; a tuple of length ``dim`` sets it per channel
+        (drive typically wants more smoothing than steering)."""
         bounds_lo: tuple[float, ...] = (-1.0, -1.0)
         """Per-channel lower command bounds, length ``dim``."""
         bounds_hi: tuple[float, ...] = (1.0, 1.0)
@@ -155,7 +167,10 @@ class ControllerMPPI:
         for name in ("sigma", "bounds_lo", "bounds_hi"):
             if len(getattr(cfg, name)) != cfg.dim:
                 raise ValueError(f"{name} must have length dim={cfg.dim}")
-        if not 0.0 <= cfg.beta < 1.0:
+        betas = (cfg.beta,) * cfg.dim if isinstance(cfg.beta, int | float) else tuple(cfg.beta)
+        if len(betas) != cfg.dim:
+            raise ValueError(f"beta must be a scalar or have length dim={cfg.dim}")
+        if not all(0.0 <= b < 1.0 for b in betas):
             raise ValueError("beta must be in [0, 1)")
         self.config = cfg
         self.device = wp.get_device(device)
@@ -169,18 +184,26 @@ class ControllerMPPI:
             self.bounds_lo = wp.array(cfg.bounds_lo, dtype=wp.float32)
             self.bounds_hi = wp.array(cfg.bounds_hi, dtype=wp.float32)
             self._temperature = wp.array([cfg.temperature], dtype=wp.float32)
-            self._beta = wp.array([cfg.beta], dtype=wp.float32)
+            self._beta = wp.array(betas, dtype=wp.float32)
             self._counter = wp.zeros(1, dtype=wp.int32)
             self._min_cost = wp.zeros(1, dtype=wp.float32)
             self._weight_sum = wp.zeros(1, dtype=wp.float32)
+            self.ess = wp.zeros(1, dtype=wp.float32)
 
     def set_temperature(self, value: float) -> None:
         """Sets the softmax temperature (safe while a CUDA graph is captured)."""
         self._temperature.fill_(float(value))
 
-    def set_beta(self, value: float) -> None:
-        """Sets the noise smoothing factor (safe while a CUDA graph is captured)."""
-        self._beta.fill_(float(value))
+    def set_beta(self, value) -> None:
+        """Sets the noise smoothing factor(s) (safe while a CUDA graph is captured).
+
+        Args:
+            value: Scalar applied to all channels, or a sequence of length ``dim``.
+        """
+        if isinstance(value, int | float):
+            self._beta.fill_(float(value))
+        else:
+            self._beta.assign(np.asarray(value, dtype=np.float32))
 
     def sample(self) -> None:
         """Fills :attr:`samples` with the clamped nominal plus smoothed Gaussian noise."""
@@ -224,7 +247,7 @@ class ControllerMPPI:
             inputs=[costs, self._min_cost, self._temperature, self.weights],
             device=self.device,
         )
-        wp.launch(_sum_weights, dim=1, inputs=[self.weights, self._weight_sum], device=self.device)
+        wp.launch(_sum_weights, dim=1, inputs=[self.weights, self._weight_sum, self.ess], device=self.device)
         wp.launch(
             _update_nominal,
             dim=(cfg.horizon, cfg.dim),

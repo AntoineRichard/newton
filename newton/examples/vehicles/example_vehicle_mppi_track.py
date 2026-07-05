@@ -31,9 +31,7 @@ import newton.vehicles as nv
 try:
     import track_gen
     from track_gen import PerEnvSeededRNG, TrackGenConfig, TrackGenerator
-    from track_gen.checkpoints import CheckpointSampler
     from track_gen.collision import CollisionChecker
-    from track_gen.progress import ProgressTracker
     from track_gen.props import PropSampler
 except ImportError as exc:  # pragma: no cover - environment dependent
     raise ImportError("This example requires the track_gen package: pip install -e <path-to-track_gen>") from exc
@@ -44,9 +42,17 @@ TRACK_HALF_WIDTH = 0.5  # [m]
 TRACK_SCALE = 17.0  # calibrated to a measured ~22 m mean track footprint
 TRACK_N_MAX = 512
 CONE_SPACING = 0.5  # [m]
-CHECKPOINT_SPACING = 1.0  # [m]
 CAR_HALF_EXTENTS = (0.29, 0.15)  # oriented OOB box [m] (Slash-class rc car)
 MAX_TRACK_ATTEMPTS = 32
+
+# reference speed profile (curvature-limited steady state + forward accel pass
+# + backward braking pass, the standard racing decomposition): braking
+# foresight lives in the profile, not the MPPI horizon
+A_LAT_MAX = 12.0  # [m/s^2] usable lateral acceleration for v_ss = sqrt(a_lat/|kappa|)
+A_ACC = 6.0  # [m/s^2] forward pass acceleration limit
+A_BRK = 10.0  # [m/s^2] backward pass braking limit
+V_CAP = 13.6  # [m/s] profile ceiling (matches the 0.8 drive command cap)
+PROX_MARGIN = 0.15  # [m] graded wall-proximity band
 
 
 @wp.func
@@ -61,17 +67,66 @@ def _gather_car_pose(
     chassis: wp.array[wp.int32],
     pos: wp.array[wp.vec2f],
     yaw: wp.array[float],
-    v_long: wp.array[float],
+    speed: wp.array[float],
 ):
     e = wp.tid()
     tf = body_q[chassis[e]]
     p = wp.transform_get_translation(tf)
     pos[e] = wp.vec2f(p[0], p[1])
-    heading = _quat_yaw(wp.transform_get_rotation(tf))
-    yaw[e] = heading
+    yaw[e] = _quat_yaw(wp.transform_get_rotation(tf))
     qd = body_qd[chassis[e]]
     # linear velocity is the first three entries (world frame)
-    v_long[e] = qd[0] * wp.cos(heading) + qd[1] * wp.sin(heading)
+    speed[e] = wp.sqrt(qd[0] * qd[0] + qd[1] * qd[1])
+
+
+@wp.kernel
+def _project_centerline(
+    center: wp.array[wp.vec2f],
+    cum_s: wp.array[float],
+    v_profile: wp.array[float],
+    count: int,
+    pos: wp.array[wp.vec2f],
+    s_out: wp.array[float],
+    v_des: wp.array[float],
+):
+    e = wp.tid()
+    p = pos[e]
+    best_d2 = float(1.0e12)
+    best_s = float(0.0)
+    best_i = int(0)
+    for i in range(count):
+        a = center[i]
+        j = i + 1
+        if j == count:
+            j = 0
+        b = center[j]
+        ab = b - a
+        denom = wp.max(wp.dot(ab, ab), 1.0e-9)
+        u = wp.clamp(wp.dot(p - a, ab) / denom, 0.0, 1.0)
+        q = a + u * ab
+        d2 = wp.dot(p - q, p - q)
+        if d2 < best_d2:
+            best_d2 = d2
+            best_s = cum_s[i] + u * wp.sqrt(wp.dot(ab, ab))
+            best_i = i
+    s_out[e] = best_s
+    v_des[e] = v_profile[best_i]
+
+
+@wp.kernel
+def _accumulate_lap_distance(
+    s: wp.array[float],
+    total_len: float,
+    s_prev: wp.array[float],
+    total_s: wp.array[float],
+):
+    ds = s[0] - s_prev[0]
+    if ds < -0.5 * total_len:
+        ds += total_len
+    elif ds > 0.5 * total_len:
+        ds -= total_len
+    total_s[0] = total_s[0] + ds
+    s_prev[0] = s[0]
 
 
 @wp.kernel
@@ -90,21 +145,6 @@ def _broadcast_slice_sv(snap: wp.array[wp.spatial_vector], n_per: int, dst: wp.a
 def _broadcast_slice_f32(snap: wp.array[float], n_per: int, dst: wp.array[float]):
     w, i = wp.tid()
     dst[w * n_per + i] = snap[i]
-
-
-@wp.kernel
-def _broadcast_env_i32(snap: wp.array[wp.int32], dst: wp.array[wp.int32]):
-    dst[wp.tid()] = snap[0]
-
-
-@wp.kernel
-def _restore_env0_i32(snap: wp.array[wp.int32], dst: wp.array[wp.int32]):
-    dst[0] = snap[0]
-
-
-@wp.kernel
-def _broadcast_env_vec2(snap: wp.array[wp.vec2f], dst: wp.array[wp.vec2f]):
-    dst[wp.tid()] = snap[0]
 
 
 @wp.kernel
@@ -135,11 +175,11 @@ def _apply_nominal_command(
 
 
 @wp.kernel
-def _zero_plan_buffers(costs: wp.array[float], dead: wp.array[wp.int32], reverse_dist: wp.array[float]):
+def _zero_plan_buffers(costs: wp.array[float], dead: wp.array[wp.int32], back_dist: wp.array[float]):
     e = wp.tid()
     costs[e] = 0.0
     dead[e] = 0
-    reverse_dist[e] = 0.0
+    back_dist[e] = 0.0
 
 
 @wp.kernel
@@ -150,51 +190,73 @@ def _record_start_oob(oob: wp.array[wp.int32], start_oob: wp.array[wp.int32]):
 
 @wp.kernel
 def _accumulate_cost(
-    dist_to_next: wp.array[float],
-    passed: wp.array[wp.int32],
+    s: wp.array[float],
+    v_des: wp.array[float],
+    speed: wp.array[float],
     oob: wp.array[wp.int32],
     clearance: wp.array[float],
     start_oob: wp.array[wp.int32],
-    v_long: wp.array[float],
-    dt: float,
     samples: wp.array3d[float],
     t: int,
-    params: wp.array[float],  # [w_progress, w_pass, w_steer, kill_penalty]
-    dist_prev: wp.array[float],
-    reverse_dist: wp.array[float],
+    horizon: int,
+    total_len: float,
+    params: wp.array[float],  # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term]
+    s_prev: wp.array[float],
+    back_dist: wp.array[float],
     dead: wp.array[wp.int32],
     costs: wp.array[float],
 ):
     e = wp.tid()
     if dead[e] == 1:
         return
+    # time-decayed kill: crashing later is strictly cheaper, which gives the
+    # planner a braking gradient even when every sample ends in a wall
+    kill = params[3] * wp.pow(0.9, float(t))
     if oob[e] == 1 and start_oob[e] == 0:
-        # entered a wall during the rollout: kill the particle
         dead[e] = 1
-        costs[e] = costs[e] + params[3]
+        costs[e] = costs[e] + kill
         return
+    # arc-length progress along the centerline, unwrapped at the lap seam
+    ds = s[e] - s_prev[e]
+    if ds < -0.5 * total_len:
+        ds += total_len
+    elif ds > 0.5 * total_len:
+        ds -= total_len
+    s_prev[e] = s[e]
+    if wp.abs(ds) > 5.0:  # teleport/NaN guard
+        ds = 0.0
     if start_oob[e] == 0:
-        # measured backward motion is forbidden beyond a small back-out
-        # budget, so reverse gear stays a brake/recovery tool and never
-        # becomes a cruise mode (negative drive commands remain free for
-        # braking as long as the car keeps moving forward)
-        reverse_dist[e] = reverse_dist[e] + wp.max(0.0, -v_long[e]) * dt
-        if reverse_dist[e] > 1.0:
+        # backward travel along the track beyond a small back-out budget is
+        # killed, so reverse stays a brake/recovery tool (this also covers
+        # turned-around forward driving, which velocity checks would miss)
+        back_dist[e] = back_dist[e] + wp.max(0.0, -ds)
+        if back_dist[e] > 1.0:
             dead[e] = 1
-            costs[e] = costs[e] + params[3]
+            costs[e] = costs[e] + kill
             return
-    d = dist_to_next[e]
-    progress = dist_prev[e] - d
-    # NaN/garbage guard (dist is NaN until the first tracker update)
-    if progress != progress or progress > 1.0e3 or progress < -1.0e3:
-        progress = 0.0
+    c = -params[0] * ds
+    # one-sided reference-speed penalty: the profile caps corner-entry speed,
+    # progress reward alone pushes speed up everywhere else
+    over = wp.max(0.0, speed[e] - v_des[e])
+    c += params[1] * over * over
+    if t == horizon - 1:
+        # terminal over-speed cost: a cheap stand-in for a value function at
+        # the horizon end (Vazquez-style terminal speed limit)
+        c += params[6] * over * over
     steer = samples[e, t, 1]
-    costs[e] = costs[e] - params[0] * progress - params[1] * float(passed[e]) + params[2] * steer * steer
+    c += params[2] * steer * steer
+    if t > 0:
+        # small command-rate penalty for smooth trajectories
+        dd = samples[e, t, 0] - samples[e, t - 1, 0]
+        dst = samples[e, t, 1] - samples[e, t - 1, 1]
+        c += params[4] * (dd * dd + dst * dst)
+    # graded wall proximity: a gradient before contact instead of a cliff at it
+    c += params[5] * wp.max(0.0, PROX_MARGIN - clearance[e])
     if start_oob[e] == 1:
         # recovery mode (rollout began outside the band, e.g. after a crash):
         # no kills; penalize distance outside the band so plans steer back in
-        costs[e] = costs[e] + params[0] * wp.max(0.0, -clearance[e])
-    dist_prev[e] = d
+        c += params[0] * wp.max(0.0, -clearance[e])
+    costs[e] = costs[e] + c
 
 
 @wp.kernel
@@ -206,6 +268,29 @@ def _record_ribbon(
 ):
     p = wp.transform_get_translation(body_q[chassis0])
     ribbon[t] = wp.vec3(p[0], p[1], p[2] + 0.05)
+
+
+def _speed_profile(center, seg_len):
+    """Curvature-limited speed profile with forward-accel and backward-braking passes."""
+    prev = np.roll(center, 1, axis=0)
+    nxt = np.roll(center, -1, axis=0)
+    v1 = center - prev
+    v2 = nxt - center
+    cross = v1[:, 0] * v2[:, 1] - v1[:, 1] * v2[:, 0]
+    angles = np.arctan2(cross, (v1 * v2).sum(axis=1))
+    ds = 0.5 * (np.linalg.norm(v1, axis=1) + np.linalg.norm(v2, axis=1))
+    kappa = np.abs(angles) / np.maximum(ds, 1e-6)
+    kappa = np.convolve(np.concatenate([kappa[-2:], kappa, kappa[:2]]), np.ones(5) / 5.0, mode="valid")
+    v = np.minimum(np.sqrt(A_LAT_MAX / np.maximum(kappa, 1e-6)), V_CAP)
+    n = len(center)
+    for _ in range(2):  # two wrap laps so the closed loop converges
+        for i in range(n):  # forward pass: acceleration limit
+            j = (i + 1) % n
+            v[j] = min(v[j], math.sqrt(v[i] ** 2 + 2.0 * A_ACC * seg_len[i]))
+        for i in range(n - 1, -1, -1):  # backward pass: braking limit
+            j = (i + 1) % n
+            v[i] = min(v[i], math.sqrt(v[j] ** 2 + 2.0 * A_BRK * seg_len[i]))
+    return v.astype(np.float32)
 
 
 def _build_model(num_worlds):
@@ -333,19 +418,27 @@ class Example:
         self.control = self.model.control()
         newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state_0)
 
-        # --- checkpoints, progress, collision ----------------------------
+        # --- centerline arc-length progress, speed profile, collision ----
 
         self.car_pos = wp.zeros(self.num_worlds, dtype=wp.vec2f, device=self.model.device)
         self.car_yaw = wp.zeros(self.num_worlds, dtype=wp.float32, device=self.model.device)
-        self.car_v_long = wp.zeros(self.num_worlds, dtype=wp.float32, device=self.model.device)
+        self.car_speed = wp.zeros(self.num_worlds, dtype=wp.float32, device=self.model.device)
+        self.car_s = wp.zeros(self.num_worlds, dtype=wp.float32, device=self.model.device)
+        self.car_v_des = wp.zeros(self.num_worlds, dtype=wp.float32, device=self.model.device)
         self.car_half_extents = wp.array(
             np.tile(np.array(CAR_HALF_EXTENTS, dtype=np.float32), (self.num_worlds, 1)),
             dtype=wp.vec2f,
             device=self.model.device,
         )
-        self.sampler = CheckpointSampler(self.track, spacing=CHECKPOINT_SPACING)
-        self.checkpoints = self.sampler.sample()
-        self.tracker = ProgressTracker(self.checkpoints, position=self.car_pos)
+        center = self._env0_polyline(self.track.center)
+        seg_len = np.linalg.norm(np.roll(center, -1, axis=0) - center, axis=1)
+        self.track_len = float(seg_len.sum())
+        cum_s = np.concatenate([[0.0], np.cumsum(seg_len[:-1])]).astype(np.float32)
+        v_profile = _speed_profile(center, seg_len)
+        self._center = wp.array(center, dtype=wp.vec2f, device=self.model.device)
+        self._cum_s = wp.array(cum_s, dtype=wp.float32, device=self.model.device)
+        self._v_profile = wp.array(v_profile, dtype=wp.float32, device=self.model.device)
+        self._center_count = len(center)
         self.checker = CollisionChecker(self.track, max_boxes=1, method="segments")
         self.checker.bind_inputs(position=self.car_pos, yaw=self.car_yaw, half_extents=self.car_half_extents)
 
@@ -381,12 +474,15 @@ class Example:
         E = self.num_worlds
         self.costs = wp.zeros(E, dtype=wp.float32, device=device)
         self.dead = wp.zeros(E, dtype=wp.int32, device=device)
-        self.dist_prev = wp.zeros(E, dtype=wp.float32, device=device)
+        self.s_prev = wp.zeros(E, dtype=wp.float32, device=device)
         self.start_oob = wp.zeros(E, dtype=wp.int32, device=device)
-        self.reverse_dist = wp.zeros(E, dtype=wp.float32, device=device)
-        # [w_progress, w_pass, w_steer, kill_penalty]
-        self.cost_params = wp.array([30.0, 30.0, 0.05, 200.0], dtype=wp.float32, device=device)
+        self.back_dist = wp.zeros(E, dtype=wp.float32, device=device)
+        # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term]
+        self.cost_params = wp.array([30.0, 2.0, 0.05, 1000.0, 2.0, 10.0, 20.0], dtype=wp.float32, device=device)
         self.ribbon = wp.zeros(horizon, dtype=wp.vec3, device=device)
+        # hero lap odometer (display + tests): unwrapped centerline arc length
+        self.total_s = wp.zeros(1, dtype=wp.float32, device=device)
+        self.frame_s_prev = wp.zeros(1, dtype=wp.float32, device=device)
 
         # hero-slice snapshots (world 0 leads every per-world array)
         self.snap_joint_q = wp.zeros(self.dofs_per_world, dtype=wp.float32, device=device)
@@ -399,17 +495,14 @@ class Example:
         self.snap_trans_long = wp.zeros(wheels_per_world, dtype=wp.float32, device=device)
         self.snap_trans_lat = wp.zeros(wheels_per_world, dtype=wp.float32, device=device)
         self.snap_fz = wp.zeros(wheels_per_world, dtype=wp.float32, device=device)
-        self.snap_prev_pos = wp.zeros(1, dtype=wp.vec2f, device=device)
-        self.snap_next = wp.zeros(1, dtype=wp.int32, device=device)
-        self.snap_laps = wp.zeros(1, dtype=wp.int32, device=device)
-        self.snap_progress = wp.zeros(1, dtype=wp.int32, device=device)
 
         self.graph = None
         self._telemetry = {
             "speed": 0.0,
             "laps": 0,
-            "progress": 0,
-            "dist": 0.0,
+            "meters": 0.0,
+            "v_des": 0.0,
+            "ess": 0.0,
             "alive": 1.0,
             "best_cost": 0.0,
             "mean_cost": 0.0,
@@ -421,6 +514,11 @@ class Example:
         self.ui_temperature = self.planner.config.temperature
         self.ui_sigma_drive, self.ui_sigma_steer = self.planner.config.sigma
         self.ui_cost = list(self.cost_params.numpy())
+
+        # prime pose/projection buffers so the lap odometer starts at the
+        # spawn arc length (eager launches, before any CUDA graph capture)
+        self._gather_and_track()
+        wp.copy(self.frame_s_prev, self.car_s, count=1)
 
         self._init_track_render()
         self.follow_camera = True
@@ -510,10 +608,6 @@ class Example:
         wp.copy(self.snap_trans_long, dyn.trans_long, count=self.wheels_per_world)
         wp.copy(self.snap_trans_lat, dyn.trans_lat, count=self.wheels_per_world)
         wp.copy(self.snap_fz, patch.fz, count=self.wheels_per_world)
-        wp.copy(self.snap_prev_pos, self.tracker._prev_pos, count=1)
-        wp.copy(self.snap_next, self.tracker._next, count=1)
-        wp.copy(self.snap_laps, self.tracker._laps, count=1)
-        wp.copy(self.snap_progress, self.tracker._progress, count=1)
 
     def _broadcast_hero(self):
         # Broadcasting joint_q/joint_qd is what actually teleports the particles:
@@ -554,13 +648,8 @@ class Example:
         wp.launch(_broadcast_slice_f32, dim=(E, n), inputs=[self.snap_trans_long, n, dyn.trans_long], device=dev)
         wp.launch(_broadcast_slice_f32, dim=(E, n), inputs=[self.snap_trans_lat, n, dyn.trans_lat], device=dev)
         wp.launch(_broadcast_slice_f32, dim=(E, n), inputs=[self.snap_fz, n, patch.fz], device=dev)
-        wp.launch(_broadcast_env_vec2, dim=E, inputs=[self.snap_prev_pos, self.tracker._prev_pos], device=dev)
-        wp.launch(_broadcast_env_i32, dim=E, inputs=[self.snap_next, self.tracker._next], device=dev)
-        wp.launch(_broadcast_env_i32, dim=E, inputs=[self.snap_laps, self.tracker._laps], device=dev)
-        wp.launch(_broadcast_env_i32, dim=E, inputs=[self.snap_progress, self.tracker._progress], device=dev)
 
     def _restore_hero(self):
-        dev = self.model.device
         wp.copy(self.state_0.joint_q, self.snap_joint_q, count=self.dofs_per_world)
         wp.copy(self.state_0.joint_qd, self.snap_joint_qd, count=self.vel_dofs_per_world)
         wp.copy(self.state_0.body_q, self.snap_body_q, count=self.bodies_per_world)
@@ -570,12 +659,9 @@ class Example:
         wp.copy(dyn.trans_long, self.snap_trans_long, count=self.wheels_per_world)
         wp.copy(dyn.trans_lat, self.snap_trans_lat, count=self.wheels_per_world)
         wp.copy(patch.fz, self.snap_fz, count=self.wheels_per_world)
-        wp.copy(self.tracker._prev_pos, self.snap_prev_pos, count=1)
-        wp.launch(_restore_env0_i32, dim=1, inputs=[self.snap_next, self.tracker._next], device=dev)
-        wp.launch(_restore_env0_i32, dim=1, inputs=[self.snap_laps, self.tracker._laps], device=dev)
-        wp.launch(_restore_env0_i32, dim=1, inputs=[self.snap_progress, self.tracker._progress], device=dev)
 
     def _gather_and_track(self):
+        dev = self.model.device
         wp.launch(
             _gather_car_pose,
             dim=self.num_worlds,
@@ -585,12 +671,18 @@ class Example:
                 self.chassis,
                 self.car_pos,
                 self.car_yaw,
-                self.car_v_long,
+                self.car_speed,
             ],
-            device=self.model.device,
+            device=dev,
         )
-        # update()/query() refresh and return the same preallocated buffers
-        self.events = self.tracker.update()
+        wp.launch(
+            _project_centerline,
+            dim=self.num_worlds,
+            inputs=[self._center, self._cum_s, self._v_profile, self._center_count, self.car_pos],
+            outputs=[self.car_s, self.car_v_des],
+            device=dev,
+        )
+        # query() refreshes and returns the same preallocated contact buffers
         self.contact = self.checker.query()
 
     def _plan_and_execute(self):
@@ -602,11 +694,9 @@ class Example:
         self._snapshot_hero()
         self._broadcast_hero()
         self.planner.sample()
-        wp.launch(
-            _zero_plan_buffers, dim=self.num_worlds, inputs=[self.costs, self.dead, self.reverse_dist], device=dev
-        )
+        wp.launch(_zero_plan_buffers, dim=self.num_worlds, inputs=[self.costs, self.dead, self.back_dist], device=dev)
         self._gather_and_track()
-        wp.copy(self.dist_prev, self.events.dist_to_next, count=self.num_worlds)
+        wp.copy(self.s_prev, self.car_s, count=self.num_worlds)
         wp.launch(_record_start_oob, dim=self.num_worlds, inputs=[self.contact.oob, self.start_oob], device=dev)
 
         for t in range(horizon):
@@ -623,18 +713,19 @@ class Example:
                 _accumulate_cost,
                 dim=self.num_worlds,
                 inputs=[
-                    self.events.dist_to_next,
-                    self.events.passed,
+                    self.car_s,
+                    self.car_v_des,
+                    self.car_speed,
                     self.contact.oob,
                     self.contact.distance,
                     self.start_oob,
-                    self.car_v_long,
-                    self.frame_dt,
                     self.planner.samples,
                     t,
+                    horizon,
+                    self.track_len,
                     self.cost_params,
-                    self.dist_prev,
-                    self.reverse_dist,
+                    self.s_prev,
+                    self.back_dist,
                     self.dead,
                     self.costs,
                 ],
@@ -659,6 +750,14 @@ class Example:
             self._substep(self.sim_dt)
         self.planner.shift()
         self._gather_and_track()
+        # hero lap odometer for telemetry and tests (rollouts never touch it:
+        # it only advances here, once per executed frame)
+        wp.launch(
+            _accumulate_lap_distance,
+            dim=1,
+            inputs=[self.car_s, self.track_len, self.frame_s_prev, self.total_s],
+            device=dev,
+        )
 
     def step(self):
         if self.graph is None and self.model.device.is_cuda:
@@ -677,10 +776,11 @@ class Example:
         t = self._telemetry
         qd = self.state_0.body_qd.numpy()[self._chassis0]
         t["speed"] = float(np.linalg.norm(qd[:2]))  # linear velocity is entries 0:3
-        events = self.events
-        t["laps"] = int(events.laps.numpy()[0])
-        t["progress"] = int(events.progress.numpy()[0])
-        t["dist"] = float(events.dist_to_next.numpy()[0])
+        total = float(self.total_s.numpy()[0])
+        t["meters"] = total
+        t["laps"] = int(total // self.track_len) if total >= 0.0 else 0
+        t["v_des"] = float(self.car_v_des.numpy()[0])
+        t["ess"] = float(self.planner.ess.numpy()[0])
         t["hero_oob"] = int(self.contact.oob.numpy()[0])
         dead = self.dead.numpy()
         costs = self.costs.numpy()
@@ -701,12 +801,12 @@ class Example:
         ui.plot_lines("steer plan", np.ascontiguousarray(self._nominal_plan[:, 1]))
         ui.separator()
         ui.text("Race")
-        ui.text(f"Speed: {t['speed']:.2f} m/s")
-        ui.text(f"Laps: {t['laps']}   Checkpoints: {t['progress']}")
-        ui.text(f"Dist to next: {t['dist']:.2f} m   OOB: {t['hero_oob']}")
+        ui.text(f"Speed: {t['speed']:.2f} m/s (ref {t['v_des']:.2f})")
+        ui.text(f"Laps: {t['laps']}   Distance: {t['meters']:.0f} m")
+        ui.text(f"OOB: {t['hero_oob']}")
         ui.separator()
         ui.text("Planner")
-        ui.text(f"Alive: {100.0 * t['alive']:.0f}%")
+        ui.text(f"Alive: {100.0 * t['alive']:.0f}%   ESS: {t['ess']:.0f}")
         ui.text(f"Cost best/mean: {t['best_cost']:.1f} / {t['mean_cost']:.1f}")
         changed_t, self.ui_temperature = ui.slider_float("Temperature", self.ui_temperature, 0.005, 0.5)
         if changed_t:
@@ -716,8 +816,9 @@ class Example:
         if changed_d or changed_s:
             self.planner.sigma.assign(np.array([self.ui_sigma_drive, self.ui_sigma_steer], dtype=np.float32))
         changed = False
-        for i, label in enumerate(("W progress", "W pass", "W steer", "Kill penalty")):
-            hi = 1.0 if i == 2 else 500.0
+        labels = ("W progress", "W speed", "W steer", "Kill penalty", "W rate", "W proximity", "W terminal")
+        for i, label in enumerate(labels):
+            hi = 1.0 if i == 2 else (2000.0 if i == 3 else (20.0 if i in (1, 4) else 100.0))
             c, self.ui_cost[i] = ui.slider_float(label, self.ui_cost[i], 0.0, hi)
             changed = changed or c
         if changed:
@@ -778,9 +879,9 @@ class Example:
         hero_q = self.state_0.body_q.numpy()[self._chassis0]
         if not np.isfinite(hero_q).all():
             raise ValueError("non-finite hero pose")
-        progress = int(self.events.progress.numpy()[0])
-        if progress < 2:
-            raise ValueError(f"hero passed only {progress} checkpoints")
+        meters = float(self.total_s.numpy()[0])
+        if meters < 4.0:
+            raise ValueError(f"hero covered only {meters:.2f} m of centerline")
 
     @staticmethod
     def create_parser():
