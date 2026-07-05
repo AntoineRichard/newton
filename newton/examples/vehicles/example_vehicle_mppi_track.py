@@ -51,8 +51,8 @@ MAX_TRACK_ATTEMPTS = 32
 # foresight lives in the profile, not the MPPI horizon
 A_LAT_MAX = 16.0  # [m/s^2] usable lateral acceleration for v_ss = sqrt(a_lat/|kappa|), ~80% of mu*g
 A_ACC = 6.0  # [m/s^2] forward pass acceleration limit
-A_BRK = 10.0  # [m/s^2] backward pass braking limit
-V_CAP = 13.6  # [m/s] profile ceiling (matches the 0.8 drive command cap)
+A_BRK = 14.0  # [m/s^2] backward pass braking limit
+V_CAP = 17.0  # [m/s] profile ceiling (full motor speed; the profile does the discipline)
 PROX_MARGIN = 0.15  # [m] graded wall-proximity band
 
 MINIMAP_SIZE = 240.0  # [px] minimap window edge length
@@ -472,12 +472,14 @@ class Example:
                 # more noise smoothing on drive than steering, per the
                 # colored-noise MPPI guidance
                 beta=(0.85, 0.6),
-                # drive in [-0.3, 0.8]: enough negative torque to brake hard
+                # drive in [-0.3, 1.0]: enough negative torque to brake hard
                 # for corners (measured backward travel is cost-killed, so
-                # reverse cannot become a cruise mode) and a top-speed cap
-                # that keeps the horizon ahead of the braking distance
+                # reverse cannot become a cruise mode); the drive cap is fully
+                # open because the reference speed profile, not the command
+                # bound, disciplines corner-entry speed (uncapping measured
+                # faster AND smoother)
                 bounds_lo=(-0.3, -1.0),
-                bounds_hi=(0.8, 1.0),
+                bounds_hi=(1.0, 1.0),
             ),
             device=self.model.device,
         )
@@ -989,13 +991,13 @@ class Example:
     @staticmethod
     def create_parser():
         parser = newton.examples.create_parser()
-        # at a healthy temperature (ESS in the 5-20% of K band), sample
-        # counts beyond 512 measured neutral on lap pace while costing frame
-        # rate, so 512 is the efficiency point
+        # lap pace saturates at K=512, but steering smoothness keeps
+        # improving with survivors-per-update: 1024 buys -19% steering jitter
+        # for -6% fps (2048: -30% jitter, -20% fps) — 1024 is the sweet spot
         parser.add_argument(
             "--num-samples",
             type=int,
-            default=512,
+            default=1024,
             help="MPPI samples K (= simulated worlds; sample 0 is the hero)",
         )
         parser.add_argument("--horizon", type=int, default=48, help="MPPI planning horizon in control steps")
