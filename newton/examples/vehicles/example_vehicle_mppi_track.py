@@ -40,8 +40,13 @@ except ImportError as exc:  # pragma: no cover - environment dependent
 _ASSET_DIR = Path(newton.examples.get_asset("wheeled"))
 
 TRACK_HALF_WIDTH = 0.5  # [m]
-TRACK_SCALE = 17.0  # calibrated to a measured ~22 m mean track footprint
-TRACK_N_MAX = 512
+# per-generator generation settings: scale calibrated to a ~22-26 m footprint,
+# N_max sized to the generator's perimeter (repulsive tracks are space-filling:
+# ~128 m of track in a 26 m footprint vs ~85 m for bezier)
+TRACK_GENERATOR_SETTINGS = {
+    "bezier": (17.0, 512),
+    "repulsive": (10.0, 1024),
+}
 CONE_SPACING = 0.5  # [m]
 CAR_HALF_EXTENTS = (0.29, 0.15)  # oriented OOB box [m] (Slash-class rc car)
 MAX_TRACK_ATTEMPTS = 32
@@ -425,17 +430,20 @@ def _build_model(num_worlds):
     return model, np.sort(free_children).astype(np.int32)
 
 
-def _generate_track(num_envs, seed, device):
-    """Generates one bezier track shared by all envs; retries invalid seeds."""
+def _generate_track(num_envs, seed, generator, device):
+    """Generates one track shared by all envs; retries invalid seeds."""
+    if generator not in TRACK_GENERATOR_SETTINGS:
+        raise ValueError(f"unsupported --track-generator {generator!r}; choose from {sorted(TRACK_GENERATOR_SETTINGS)}")
+    scale, n_max = TRACK_GENERATOR_SETTINGS[generator]
     for attempt in range(MAX_TRACK_ATTEMPTS):
         seeds = wp.array(np.full(num_envs, seed + attempt, dtype=np.int32), dtype=wp.int32, device=device)
         rng = PerEnvSeededRNG(seeds=seeds, num_envs=num_envs, device=str(device))
         config = TrackGenConfig(
             num_envs=num_envs,
-            generator="bezier",
-            scale=TRACK_SCALE,
+            generator=generator,
+            scale=scale,
             half_width=TRACK_HALF_WIDTH,
-            N_max=TRACK_N_MAX,
+            N_max=n_max,
             device=str(device),
         )
         track = TrackGenerator(config, rng).generate()
@@ -478,7 +486,9 @@ class Example:
         # --- track generation and spawn placement ------------------------
         # spawn edits model.joint_q, so it must precede solver/state creation
         # (mjData qpos and State.joint_q are initialized from model.joint_q)
-        self.track, self.track_seed = _generate_track(self.num_worlds, args.track_seed, self.model.device)
+        self.track, self.track_seed = _generate_track(
+            self.num_worlds, args.track_seed, args.track_generator, self.model.device
+        )
         self._spawn_on_track()
 
         # njmax/nconmax are per world; size the shared contact buffer for all worlds
@@ -1296,6 +1306,13 @@ class Example:
         parser.add_argument("--horizon", type=int, default=48, help="MPPI planning horizon in control steps")
         parser.add_argument("--rollout-substeps", type=int, default=4, help="solver substeps per rollout control step")
         parser.add_argument("--track-seed", type=int, default=0, help="base seed for track generation")
+        parser.add_argument(
+            "--track-generator",
+            type=str,
+            default="bezier",
+            choices=sorted(TRACK_GENERATOR_SETTINGS),
+            help="track_gen generator family (repulsive needs the track_gen branch that provides it)",
+        )
         parser.set_defaults(num_frames=240)
         return parser
 
