@@ -10,7 +10,7 @@ import newton.vehicles as nv
 
 
 def _make(**overrides):
-    kwargs = dict(num_samples=64, horizon=8, dim=2, sigma=(0.3, 0.4), seed=11)
+    kwargs = {"num_samples": 64, "horizon": 8, "dim": 2, "sigma": (0.3, 0.4), "seed": 11}
     kwargs.update(overrides)
     return nv.ControllerMPPI(config=nv.ControllerMPPI.Config(**kwargs))
 

@@ -33,6 +33,7 @@ from newton.tests.unittest_utils import (
 )
 
 _HAS_ONNX = importlib.util.find_spec("onnx") is not None
+_HAS_TRACK_GEN = importlib.util.find_spec("track_gen") is not None
 
 
 def _build_command_line_options(test_options: dict[str, Any]) -> list:
@@ -102,6 +103,11 @@ def add_example_test(
         usd_required = options.pop("usd_required", False)
         if usd_required and not USD_AVAILABLE:
             test.skipTest("Requires usd-core")
+
+        # Mark the test as skipped if track_gen is not installed but required
+        track_gen_required = options.pop("track_gen_required", False)
+        if track_gen_required and not _HAS_TRACK_GEN:
+            test.skipTest("track_gen not installed")
 
         # Deprecations should fail example tests by default. Opt out only for
         # a known third-party or asset issue that still needs follow-up.
@@ -518,6 +524,14 @@ add_example_test(
     name="vehicles.example_vehicle_rc_car",
     devices=test_devices,
     test_options={"usd_required": True, "num-frames": 300},
+    use_viewer=True,
+)
+
+add_example_test(
+    TestVehicleExamples,
+    name="vehicles.example_vehicle_mppi_track",
+    devices=cuda_test_devices,
+    test_options={"usd_required": True, "track_gen_required": True, "num-frames": 240},
     use_viewer=True,
 )
 

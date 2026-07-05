@@ -108,11 +108,11 @@ class ControllerMPPI:
     sequences; the caller owns the rollouts and the per-sample cost array.
     One replan cycle is::
 
-        planner.sample()          # fill planner.samples [K, H, A]
-        costs = rollout(...)      # caller: simulate sample k, accumulate cost[k]
-        planner.update(costs)     # softmax-weighted update of the nominal
-        command = planner.nominal # execute row 0, then
-        planner.shift()           # warm-start the next cycle
+        planner.sample()  # fill planner.samples [K, H, A]
+        costs = rollout(...)  # caller: simulate sample k, accumulate cost[k]
+        planner.update(costs)  # softmax-weighted update of the nominal
+        command = planner.nominal  # execute row 0, then
+        planner.shift()  # warm-start the next cycle
 
     All methods launch Warp kernels only (no host synchronization), so the
     full cycle can be recorded into a CUDA graph. Temperature and noise
