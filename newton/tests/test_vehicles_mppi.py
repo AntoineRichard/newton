@@ -9,10 +9,10 @@ import warp as wp
 import newton.vehicles as nv
 
 
-def _make(**overrides):
+def _make(device=None, **overrides):
     kwargs = {"num_samples": 64, "horizon": 8, "dim": 2, "sigma": (0.3, 0.4), "seed": 11}
     kwargs.update(overrides)
-    return nv.ControllerMPPI(config=nv.ControllerMPPI.Config(**kwargs))
+    return nv.ControllerMPPI(config=nv.ControllerMPPI.Config(**kwargs), device=device)
 
 
 class TestControllerMPPI(unittest.TestCase):
@@ -61,6 +61,22 @@ class TestControllerMPPI(unittest.TestCase):
         costs[5] = 0.0
         planner.update(wp.array(costs, dtype=wp.float32, device=planner.device))
         np.testing.assert_allclose(planner.nominal.numpy(), samples[5], atol=1e-3)
+
+    def test_cpu_device_full_cycle(self):
+        planner = _make(device="cpu")
+        planner.sample()
+        samples = planner.samples.numpy()
+        self.assertTrue(np.isfinite(samples).all())
+        np.testing.assert_allclose(samples[0], planner.nominal.numpy(), atol=1e-6)
+        costs = wp.array(np.linspace(0.0, 10.0, 64, dtype=np.float32), dtype=wp.float32, device="cpu")
+        planner.update(costs)
+        planner.shift()
+        self.assertTrue(np.isfinite(planner.nominal.numpy()).all())
+
+    def test_update_validates_costs(self):
+        planner = _make()
+        with self.assertRaises(ValueError):
+            planner.update(wp.zeros(8, dtype=wp.float32, device=planner.device))
 
     def test_shift_rolls_and_repeats_last(self):
         planner = _make()

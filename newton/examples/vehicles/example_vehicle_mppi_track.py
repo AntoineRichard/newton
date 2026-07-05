@@ -41,7 +41,7 @@ except ImportError as exc:  # pragma: no cover - environment dependent
 _ASSET_DIR = Path(newton.examples.get_asset("wheeled"))
 
 TRACK_HALF_WIDTH = 0.5  # [m]
-TRACK_SCALE = 17.0  # calibrated for a ~20 m footprint
+TRACK_SCALE = 17.0  # calibrated to a measured ~22 m mean track footprint
 TRACK_N_MAX = 512
 CONE_SPACING = 0.5  # [m]
 CHECKPOINT_SPACING = 1.0  # [m]
@@ -352,6 +352,8 @@ class Example:
         # --- MPPI planner and plan-cycle buffers -------------------------
         horizon = 8 if self._test_mode else args.horizon
         self.rollout_substeps = 2 if self._test_mode else args.rollout_substeps
+        if self.rollout_substeps < 1:
+            raise ValueError("rollout-substeps must be >= 1")
         total_substeps = horizon * self.rollout_substeps + self.sim_substeps
         if total_substeps % 2 != 0:
             raise ValueError(
@@ -418,6 +420,7 @@ class Example:
         self._nominal_plan = np.zeros((horizon, 2), dtype=np.float32)
         self.ui_temperature = self.planner.config.temperature
         self.ui_sigma_drive, self.ui_sigma_steer = self.planner.config.sigma
+        self.ui_cost = list(self.cost_params.numpy())
 
         self._init_track_render()
         self.follow_camera = True
@@ -712,6 +715,13 @@ class Example:
         changed_s, self.ui_sigma_steer = ui.slider_float("Sigma steer", self.ui_sigma_steer, 0.05, 1.0)
         if changed_d or changed_s:
             self.planner.sigma.assign(np.array([self.ui_sigma_drive, self.ui_sigma_steer], dtype=np.float32))
+        changed = False
+        for i, label in enumerate(("W progress", "W pass", "W steer", "Kill penalty")):
+            hi = 1.0 if i == 2 else 500.0
+            c, self.ui_cost[i] = ui.slider_float(label, self.ui_cost[i], 0.0, hi)
+            changed = changed or c
+        if changed:
+            self.cost_params.assign(np.array(self.ui_cost, dtype=np.float32))
 
     def _substep(self, dt):
         self.state_0.clear_forces()

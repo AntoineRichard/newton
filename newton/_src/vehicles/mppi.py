@@ -30,7 +30,9 @@ def _sample_sequences(
             noise[0, t, a] = 0.0
             samples[0, t, a] = nominal[t, a]
         return
-    state = wp.rand_init(seed + counter[0], k * nominal.shape[1] + a)
+    # counter advances the offset (not the seed) so each planner seed is an
+    # independent stream: frame n+1 of seed s never replays frame n of seed s+1
+    state = wp.rand_init(seed, (counter[0] * noise.shape[0] + k) * nominal.shape[1] + a)
     b = beta[0]
     scale = wp.sqrt(wp.max(0.0, 1.0 - b * b))
     n = float(0.0)
@@ -51,6 +53,9 @@ def _advance_counter(counter: wp.array[wp.int32]):
     counter[0] = counter[0] + 1
 
 
+# the reductions below are deliberately single-thread O(K) loops: K is small
+# (hundreds to a few thousand) and a deterministic loop keeps update() free of
+# atomics, so results are bit-stable across runs and CUDA graph replays
 @wp.kernel
 def _min_cost(costs: wp.array[float], out: wp.array[float]):
     m = costs[0]
@@ -141,7 +146,7 @@ class ControllerMPPI:
         seed: int = 0
         """Base RNG seed; resampling advances an internal device counter."""
 
-    def __init__(self, config: Config | None = None, device=None):
+    def __init__(self, config: Config | None = None, device: wp.context.Device | str | None = None):
         cfg = config if config is not None else ControllerMPPI.Config()
         if cfg.num_samples < 2:
             raise ValueError("num_samples must be >= 2 (sample 0 is the nominal)")
@@ -202,8 +207,16 @@ class ControllerMPPI:
 
         Args:
             costs: Per-sample accumulated rollout costs, shape [num_samples].
+
+        Raises:
+            ValueError: If ``costs`` does not have shape [num_samples] or lives
+                on a different device than the planner.
         """
         cfg = self.config
+        if costs.shape[0] != cfg.num_samples:
+            raise ValueError(f"costs must have shape [{cfg.num_samples}], got {costs.shape}")
+        if costs.device != self.device:
+            raise ValueError(f"costs must live on device {self.device}, got {costs.device}")
         wp.launch(_min_cost, dim=1, inputs=[costs, self._min_cost], device=self.device)
         wp.launch(
             _softmax_weights,

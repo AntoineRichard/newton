@@ -149,6 +149,15 @@ class ControllerMPPI:
   time; the test wrapper skips it cleanly.
 - Manual verification: run with the GL viewer on CUDA; confirm laps complete.
 
+## Accepted cuts (post-implementation)
+
+- The nominal-plan ribbon renders in a fixed green rather than recolored by
+  plan cost (cosmetic; cost is shown in the UI panel).
+- Rollouts additionally kill particles whose measured backward travel exceeds
+  a 1 m budget (reverse stays a brake/back-out tool), and rollouts that start
+  out-of-bounds switch to a penetration-depth recovery cost instead of kills —
+  both added beyond this spec at user request.
+
 ## Out of scope
 
 - Physical cone/wall collision (cones are decorative; walls act through cost).
