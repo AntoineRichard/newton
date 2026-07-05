@@ -60,6 +60,15 @@ MINIMAP_MARGIN = 12.0  # [px] gap to the viewport's bottom-right corner
 MINIMAP_PAD = 0.08  # fractional padding around the track bounding box
 MINIMAP_TRAIL_MAX = 3600  # trail ring-buffer capacity (one entry per frame)
 
+# F1-broadcast HUD cluster, arranged around the bottom-right minimap
+GMETER_SIZE = 150.0  # [px] G-meter widget edge length (square, left of minimap)
+HUD_GAP = 10.0  # [px] gap between HUD cluster elements
+HUD_BARS_HEIGHT = 72.0  # [px] speed + throttle/brake strip height (above the row)
+GMETER_G_EDGE = 2.5  # [g] acceleration magnitude mapped to the widget edge
+GMETER_TRAIL_MAX = 20  # G-dot history length (faint trail)
+GMETER_EMA = 0.3  # blend for the exponential-moving-average dot smoothing
+GRAVITY = 9.81  # [m/s^2] used to express accelerations in g units
+
 
 @wp.func
 def _quat_yaw(q: wp.quat) -> float:
@@ -530,6 +539,12 @@ class Example:
         self._hero_yaw = 0.0
         self._minimap_ok = True
         self._minimap_boundary_px = None
+        # HUD state: planar acceleration in the car frame (g units) and its
+        # inputs; mirrors the minimap's graceful-degradation guard
+        self._prev_v = None  # previous hero planar velocity [m/s], world frame
+        self._accel_car_g = (0.0, 0.0)  # (right, forward) EMA-smoothed [g]
+        self._gmeter_trail = deque(maxlen=GMETER_TRAIL_MAX)
+        self._hud_ok = True
         self.ui_temperature = float(self.planner.config.temperature)
         self.ui_sigma_drive, self.ui_sigma_steer = (float(v) for v in self.planner.config.sigma)
         self.ui_cost = list(self.cost_params.numpy())
@@ -810,6 +825,22 @@ class Example:
         self._hero_yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
         self._hero_xy = (float(tf[0]), float(tf[1]))
         self._trail.append(self._hero_xy)
+        # G-meter: differentiate planar velocity on the host, rotate into the
+        # car frame (forward = +y up on screen, right = +x right on screen),
+        # convert to g, and EMA-smooth so the broadcast dot stays readable
+        v = np.array([qd[0], qd[1]], dtype=np.float64)
+        if self._prev_v is not None:
+            a = (v - self._prev_v) * self.fps  # world-frame planar accel [m/s^2]
+            c, s = math.cos(self._hero_yaw), math.sin(self._hero_yaw)
+            a_fwd = (a[0] * c + a[1] * s) / GRAVITY
+            a_right = (a[0] * s - a[1] * c) / GRAVITY
+            pr, pf = self._accel_car_g
+            self._accel_car_g = (
+                (1.0 - GMETER_EMA) * pr + GMETER_EMA * a_right,
+                (1.0 - GMETER_EMA) * pf + GMETER_EMA * a_fwd,
+            )
+            self._gmeter_trail.append(self._accel_car_g)
+        self._prev_v = v
         total = float(self.total_s.numpy()[0])
         t["meters"] = total
         t["laps"] = int(total // self.track_len) if total >= 0.0 else 0
@@ -858,6 +889,22 @@ class Example:
         if changed:
             self.cost_params.assign(np.array(self.ui_cost, dtype=np.float32))
         self._draw_minimap(ui)
+        self._draw_gmeter(ui)
+        self._draw_hud_bars(ui)
+
+    @staticmethod
+    def _hud_window_flags(imgui):
+        return (
+            imgui.WindowFlags_.no_title_bar
+            | imgui.WindowFlags_.no_resize
+            | imgui.WindowFlags_.no_move
+            | imgui.WindowFlags_.no_scrollbar
+            | imgui.WindowFlags_.no_collapse
+            | imgui.WindowFlags_.no_inputs
+            | imgui.WindowFlags_.no_nav
+            | imgui.WindowFlags_.no_focus_on_appearing
+            | imgui.WindowFlags_.no_saved_settings
+        )
 
     def _draw_minimap(self, imgui):
         """Overlay window anchored bottom-right showing track, trail, and car."""
@@ -928,6 +975,126 @@ class Example:
         tip = imgui.ImVec2(car.x + tick * math.cos(self._hero_yaw), car.y - tick * math.sin(self._hero_yaw))
         draw.add_line(car, tip, orange, 2.0)
         draw.add_circle_filled(car, 4.0, orange)
+
+    def _draw_gmeter(self, imgui):
+        """F1-style G-meter anchored just left of the bottom-right minimap."""
+        if not self._hud_ok:
+            return
+        try:
+            viewport = imgui.get_main_viewport()
+            mm_x0 = viewport.pos.x + viewport.size.x - MINIMAP_SIZE - MINIMAP_MARGIN
+            x0 = mm_x0 - HUD_GAP - GMETER_SIZE
+            y0 = viewport.pos.y + viewport.size.y - GMETER_SIZE - MINIMAP_MARGIN
+            imgui.set_next_window_pos(imgui.ImVec2(x0, y0))
+            imgui.set_next_window_size(imgui.ImVec2(GMETER_SIZE, GMETER_SIZE))
+            imgui.set_next_window_bg_alpha(0.45)
+            imgui.push_style_var(imgui.StyleVar_.window_rounding, 8.0)
+            try:
+                visible = imgui.begin("##hud_gmeter", None, self._hud_window_flags(imgui))[0]
+                try:
+                    if visible:
+                        self._draw_gmeter_contents(imgui, x0, y0)
+                finally:
+                    imgui.end()
+            finally:
+                imgui.pop_style_var()
+        except Exception:
+            self._hud_ok = False  # degrade silently on missing imgui API
+
+    def _draw_gmeter_contents(self, imgui, x0, y0):
+        cx = x0 + 0.5 * GMETER_SIZE
+        cy = y0 + 0.5 * GMETER_SIZE
+        radius = 0.5 * GMETER_SIZE - 14.0
+        ppg = radius / GMETER_G_EDGE  # pixels per g
+
+        draw = imgui.get_window_draw_list()
+        cross = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.75, 0.75, 0.8, 0.8))
+        ring = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.6, 0.6, 0.65, 0.35))
+        red = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.95, 0.15, 0.15, 1.0))
+        trail_col = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.95, 0.35, 0.35, 0.35))
+
+        center = imgui.ImVec2(cx, cy)
+        for g in (1.0, 2.0):  # faint 1 g and 2 g reference rings
+            draw.add_circle(center, g * ppg, ring, 48, 1.0)
+        draw.add_line(imgui.ImVec2(cx - radius, cy), imgui.ImVec2(cx + radius, cy), cross, 1.0)
+        draw.add_line(imgui.ImVec2(cx, cy - radius), imgui.ImVec2(cx, cy + radius), cross, 1.0)
+
+        def to_dot(a_right, a_fwd):
+            # +x right = accel to the car's right; +y up = forward accel
+            dx = a_right * ppg
+            dy = -a_fwd * ppg
+            mag = math.hypot(dx, dy)
+            if mag > radius:  # clamp the vector to the widget edge
+                dx *= radius / mag
+                dy *= radius / mag
+            return imgui.ImVec2(cx + dx, cy + dy)
+
+        for a_right, a_fwd in self._gmeter_trail:
+            draw.add_circle_filled(to_dot(a_right, a_fwd), 2.0, trail_col)
+        a_right, a_fwd = self._accel_car_g
+        draw.add_circle_filled(to_dot(a_right, a_fwd), 5.0, red)
+
+    def _draw_hud_bars(self, imgui):
+        """Speed readout + throttle/brake bars spanning the cluster, on top."""
+        if not self._hud_ok:
+            return
+        try:
+            viewport = imgui.get_main_viewport()
+            mm_x0 = viewport.pos.x + viewport.size.x - MINIMAP_SIZE - MINIMAP_MARGIN
+            mm_y0 = viewport.pos.y + viewport.size.y - MINIMAP_SIZE - MINIMAP_MARGIN
+            x0 = mm_x0 - HUD_GAP - GMETER_SIZE  # cluster left edge (G-meter left)
+            width = MINIMAP_SIZE + HUD_GAP + GMETER_SIZE  # full cluster width
+            y0 = mm_y0 - HUD_GAP - HUD_BARS_HEIGHT
+            imgui.set_next_window_pos(imgui.ImVec2(x0, y0))
+            imgui.set_next_window_size(imgui.ImVec2(width, HUD_BARS_HEIGHT))
+            imgui.set_next_window_bg_alpha(0.45)
+            imgui.push_style_var(imgui.StyleVar_.window_rounding, 8.0)
+            try:
+                visible = imgui.begin("##hud_bars", None, self._hud_window_flags(imgui))[0]
+                try:
+                    if visible:
+                        self._draw_hud_bars_contents(imgui, x0, y0, width)
+                finally:
+                    imgui.end()
+            finally:
+                imgui.pop_style_var()
+        except Exception:
+            self._hud_ok = False  # degrade silently on missing imgui API
+
+    def _draw_hud_bars_contents(self, imgui, x0, y0, width):
+        t = self._telemetry
+        drive = t["drive"]
+        throttle = max(0.0, min(1.0, drive))  # forward drive command in [0, 1]
+        brake = max(0.0, min(1.0, -drive))  # motor braking = |negative drive|
+        speed_kmh = t["speed"] * 3.6
+
+        draw = imgui.get_window_draw_list()
+        white = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.96, 0.96, 0.96, 1.0))
+        outline = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.7, 0.7, 0.75, 0.5))
+        green = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.15, 0.85, 0.25, 0.95))
+        red = imgui.color_convert_float4_to_u32(imgui.ImVec4(0.9, 0.15, 0.15, 0.95))
+
+        pad = 10.0
+        bx = x0 + pad
+        bw = width - 2.0 * pad
+
+        # speed readout on top, centered over the cluster, drawn at 2x scale
+        # via the font+size draw-list overload (set_window_font_scale is
+        # absent in this imgui binding)
+        label = f"{int(round(speed_kmh))} km/h"
+        scale = 2.0
+        font_size = scale * imgui.get_font_size()
+        text_w = imgui.calc_text_size(label).x * scale  # calc is at base font size
+        draw.add_text(imgui.get_font(), font_size, imgui.ImVec2(x0 + 0.5 * (width - text_w), y0 + 3.0), white, label)
+
+        bar_h = 12.0
+        bar_gap = 6.0
+        ty = y0 + HUD_BARS_HEIGHT - 2.0 * bar_h - bar_gap - 6.0
+        by = ty + bar_h + bar_gap
+        for y, frac, fill in ((ty, throttle, green), (by, brake, red)):
+            draw.add_rect(imgui.ImVec2(bx, y), imgui.ImVec2(bx + bw, y + bar_h), outline, 2.0)
+            if frac > 0.0:
+                draw.add_rect_filled(imgui.ImVec2(bx, y), imgui.ImVec2(bx + bw * frac, y + bar_h), fill, 2.0)
 
     def _substep(self, dt):
         self.state_0.clear_forces()
