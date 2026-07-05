@@ -63,8 +63,8 @@ MINIMAP_TRAIL_MAX = 3600  # trail ring-buffer capacity (one entry per frame)
 # F1-broadcast HUD cluster, arranged around the bottom-right minimap
 GMETER_SIZE = 150.0  # [px] G-meter widget edge length (square, left of minimap)
 HUD_GAP = 10.0  # [px] gap between HUD cluster elements
-HUD_PANEL_W = 260.0  # [px] speed + throttle/brake panel width (left of the G-meter)
-HUD_BAR_SEGMENTS = 24  # LED-style segments per throttle/brake bar
+HUD_PANEL_W = 496.0  # [px] speed + throttle/brake panel width (left of the G-meter)
+HUD_BAR_SEGMENTS = 48  # LED-style segments per throttle/brake bar
 GMETER_G_EDGE = 2.5  # [g] acceleration magnitude mapped to the widget edge
 GMETER_TRAIL_MAX = 20  # G-dot history length (faint trail)
 GMETER_EMA = 0.3  # blend for the exponential-moving-average dot smoothing
