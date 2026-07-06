@@ -28,11 +28,26 @@ re-exports are public.
 | `newton/_src/vehicles/vehicle.py` | `newton_vehicles/vehicle.py` |
 | `newton/_src/vehicles/wheel.py` | `newton_vehicles/wheel.py` |
 | `newton/tests/test_vehicles_*.py` (10 files) | `tests/test_vehicles_*.py` |
-| `newton/tests/vehicles_test_utils.py` | `tests/vehicles_test_utils.py` — replace the re-export with a **vendored copy** of `add_function_test`, `get_test_devices`, and `USD_AVAILABLE` from `newton/tests/unittest_utils.py` (test-only helpers, not public newton API; test imports stay unchanged) |
+| `newton/tests/assets/wheeled/husky_wheeled_attrs.usda`, `rc_car_wheeled_attrs.usda` | `tests/assets/wheeled/` — consumed by `test_vehicles_metadata.py` (`_TEST_ASSET_DIR`); the USD auto-detect tests break without them |
+| `newton/tests/vehicles_test_utils.py` | `tests/vehicles_test_utils.py` — replace the re-export with a **vendored copy** of `add_function_test`, `get_test_devices`, and `USD_AVAILABLE` from `newton/tests/unittest_utils.py` (test-only helpers, not public newton API) |
 | `newton/examples/vehicles/*.py` | `examples/*.py` |
 | `newton/examples/assets/wheeled/**` (`manifest.json`, `husky.usda`, `rc_car.usda`) | `examples/assets/wheeled/**` |
 | `newton/examples/assets/cone.usda` | `examples/assets/cone.usda` (used by the MPPI track example) |
 | `newton/tests/test_examples.py` `TestVehicleExamples` block | port into a small `tests/test_examples.py` in the new repo (or drop and rely on CI running the examples headless) |
+
+### Import rewrites after the move
+
+The module-path prefixes change even where symbol names do not:
+
+- In tests: `newton._src.vehicles.X` → `newton_vehicles.X` (6 test files import
+  package internals directly), `import newton.vehicles as nv` →
+  `import newton_vehicles as nv`, and
+  `from newton.tests.vehicles_test_utils import ...` →
+  `from .vehicles_test_utils import ...` (or the repo's test-package path).
+- `test_vehicles_stability.py` imports `_steer_front_axle` from
+  `test_vehicles_controller` — keep both files in the same test package or
+  move the helper into `vehicles_test_utils.py` during the move.
+- In examples: `import newton.vehicles as nv` → `import newton_vehicles as nv`.
 
 Also remove from newton itself: the `vehicles` entries in
 `newton/__init__.py` (submodule import + `__all__`), the vehicle rows in
