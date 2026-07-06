@@ -8,15 +8,18 @@
 - Add `ViewerGL.show_loading_splash()` / `ViewerGL.hide_loading_splash()` displaying a stylized Newton's-cradle overlay while the GL viewer waits on Warp kernel compilation; raised automatically by `newton.examples.init()` for visible GL viewers
 - Add edge-simplification options to `Mesh.build_sdf()` that drop near-coplanar internal edges from the mesh-edge set used by SDF-mesh contact generation: `edge_lower_angle_threshold_rad` (default 0.1°; pass a negative value to opt out and keep the full edge set), `edge_upper_angle_threshold_rad`, opt-in `edge_box_absorption`, and box half-extent controls `edge_box_half_{normal,lateral}` / `edge_box_half_{normal,lateral}_rel`
 - Add `cable_cross_slide_table` example demonstrating a cable-driven XY table
+- Add static friction (slope holding) to the `newton.vehicles` tire model, with per-wheel stick and impulse-utilization diagnostics
 - Add `vehicle_mppi_track` example racing the RC car around procedurally generated tracks with an MPPI controller that uses replicated simulation worlds as rollout particles (requires the `track_gen` package)
 - Add `newton.vehicles`, a wheeled-vehicle simulation layer: a cohesive `WheeledVehicles` controller wraps a rigid solver (which owns collision and normal support) and owns analytical wheel spin plus a brush combined-slip tire model (canonical theoretical slip with friction-circle saturation and a self-aligning moment), with heterogeneous Ackermann/skid-steer/generic drive modes and `vehicle_husky` / `vehicle_rc_car` examples
 - Add an optional `kernel_block_dim` argument to `SensorTiledCamera.update()` for tuning the Warp ray-tracer's `render_megakernel` launch shape.
 - Add `ArticulationView.joint_template_labels`, `link_template_labels` (aliased as `body_template_labels`), and `shape_template_labels` exposing the raw template-articulation labels alongside the existing leaf-only `*_names`, so callers can disambiguate selected entries whose leaf names collide.
+- Add vehicle manifest loading with USD auto-detect via `newton.vehicles.load_vehicle_manifest()` and `apply_vehicle_manifest()`
 - Parse URDF `<material>` colors (inline `<color rgba>` and named material references) during import and apply them to `ModelBuilder.shape_color` for all shape types
 - Add robotics tutorial notebook covering ModelBuilder, solvers, CUDA graphs, IK, and pick-and-place
 - Add `newton.vehicles.ControllerMPPI`, a sim-agnostic sampling-based MPPI planner (device-resident nominal/sample/noise buffers, CUDA-graph-capturable sample/update/shift cycle)
 - Add `newton.utils.OnnxRuntime`, a graph-capturable ONNX inference engine backed solely by Warp kernels (no `onnxruntime` or `torch` runtime dependency); used by `ControllerNeuralMLP` and `ControllerNeuralLSTM` to load `.onnx` policies. To migrate a TorchScript policy, run `torch.onnx.export(model, dummy_input, "policy.onnx", opset_version=17)` once and point the controllers at the resulting `.onnx` file. The `onnx` package is now an optional extra (`pip install newton[onnx]`); install it explicitly to use the ONNX runtime.
 - Add USD parsing for `NewtonSiteAPI` to mark shapes as sites.
+- Add optional relaxation-length transient slip to the `newton.vehicles` tire model via `WheeledConfig.relaxation_length_ratio` (default off)
 - Add `ViewerRTX`, a real-time ray-traced viewer powered by NVIDIA OVRTX.
 - Add `CollisionPipeline(enable_axial_contact_projection=False, enable_plane_cylinder_contact_collapse=False)` diagnostic options for comparing cylinder contacts before axial projection or analytical plane-cylinder collapse.
 - Add hydroelastic contact support for analytic infinite planes paired with SDF-backed hydroelastic shapes.
@@ -24,8 +27,10 @@
 ### Changed
 
 - Remove the `cbor2` `<6` dependency ceiling after updating recorder deserialization to accept mapping-like decoded containers
+- Change the `newton.vehicles` tire core to an implicit per-wheel impulse-budget solve, stable at high friction (validated to μ = 2.5), and raise the `vehicle_rc_car` example default tire friction to 2.0; remove `WheeledConfig.load_filter` — the solve latches the normal load directly, so drop the argument
 - Switch the SDF-mesh narrow phase to hardware-filtered SDF texture sampling with centred-difference gradients. Hydroelastic SDF sampling is unchanged. Resulting contact distances and normals shift well below typical `contact_threshold` and `shape_margin` settings, so no user action is required; pass a negative `edge_lower_angle_threshold_rad` (e.g. `-1.0`) to `Mesh.build_sdf()` to disable the new edge-simplification pass and reproduce the pre-optimisation behaviour with the full edge set
 - Require Warp 1.14 and configure Warp logging through `warp.config.log_level`; use Newton's `--quiet` flag or `--warp-config log_level=...` instead of legacy `verbose` or `quiet` config keys
+- Change `newton.vehicles` tire friction to include a static regime: `WheeledConfig.static_mu_scale` defaults to 1.2 (static/kinetic friction ratio); set `static_mu_scale=1.0` to restore the kinetic-only behavior
 - Auto-scale `ViewerGL` contact arrows, joint axes, and COM markers by `Viewer.scene_scale`; to approximate the previous fixed sizes after `set_model()`, set `viewer.renderer.arrow_length_scale = 0.1 / viewer.scene_scale`, `viewer.renderer.joint_scale = 0.1 / viewer.scene_scale`, and `viewer.renderer.com_scale = 0.1 / viewer.scene_scale`.
 
 ### Deprecated
@@ -37,6 +42,7 @@
 
 - Remove `SensorContact.net_force` (deprecated in 1.1.0); use `SensorContact.total_force` and `SensorContact.force_matrix` instead
 - Remove `include_total` parameter from `SensorContact` (deprecated in 1.1.0); use `measure_total` instead
+- Remove the experimental `newton.wheeled` module in favor of `newton.vehicles`; use `newton.vehicles.WheeledVehicles` instead
 - Remove `SensorContact.sensing_objs` (deprecated in 1.1.0); use `SensorContact.sensing_obj_idx` and `SensorContact.sensing_obj_type` instead
 - Remove `SensorContact.counterparts` and `SensorContact.reading_indices` (deprecated in 1.1.0); use `SensorContact.counterpart_indices` and `SensorContact.counterpart_type` instead
 - Remove `SensorContact.shape` (deprecated in 1.1.0); use `total_force.shape` / `force_matrix.shape` instead
