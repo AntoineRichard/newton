@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from newton._src.sim import JointType, Model, ModelBuilder
+from newton import JointType, Model, ModelBuilder
 
 
 def configure_wheel_axle_joints(

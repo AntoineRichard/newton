@@ -11,7 +11,7 @@ from enum import IntEnum
 import numpy as np
 import warp as wp
 
-from newton._src.sim import Model, ModelBuilder
+from newton import Model, ModelBuilder
 
 from .contact import WheelContactPatch, latch_wheel_loads, update_wheel_contact_patches
 from .metadata import (

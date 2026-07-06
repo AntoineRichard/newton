@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import warp as wp
 
-from newton._src.geometry.types import GeoType
+from newton import GeoType
 
 from .metadata import VehicleModelData
 

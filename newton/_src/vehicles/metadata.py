@@ -25,7 +25,7 @@ from typing import Any
 import numpy as np
 import warp as wp
 
-from newton._src.sim import Model, ModelBuilder
+from newton import Model, ModelBuilder
 
 VEHICLE_NAMESPACE = "vehicle"
 _VEHICLE_FREQUENCY = f"{VEHICLE_NAMESPACE}:vehicle"
