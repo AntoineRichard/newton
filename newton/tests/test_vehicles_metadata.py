@@ -13,7 +13,6 @@ import warp as wp
 
 import newton
 import newton.vehicles as nv
-from newton._src.geometry.flags import ShapeFlags
 from newton.tests.unittest_utils import USD_AVAILABLE
 
 _ASSET_DIR = Path(__file__).resolve().parents[1] / "examples" / "assets" / "wheeled"
@@ -83,7 +82,7 @@ class TestVehicleMetadata(unittest.TestCase):
         self.assertTrue(hasattr(ns, "is_wheel"))
         self.assertEqual(len(ns.is_wheel.numpy()), model.shape_count)
 
-    def test_add_wheel_sets_attrs_and_flag(self):
+    def test_add_wheel_sets_attrs(self):
         builder = newton.ModelBuilder()
         nv.register_vehicle_attributes(builder)
         shapes = _add_car(builder, vehicle_id=0, wheel_id_start=0, drive_mode=nv.DriveMode.ACKERMANN, steer_front=True)
@@ -91,11 +90,9 @@ class TestVehicleMetadata(unittest.TestCase):
         ns = getattr(model, nv.VEHICLE_NAMESPACE)
         is_wheel = ns.is_wheel.numpy()
         radius = ns.radius.numpy()
-        flags = model.shape_flags.numpy()
         for s in shapes:
             self.assertTrue(bool(is_wheel[s]))
             self.assertAlmostEqual(float(radius[s]), 0.1, places=5)
-            self.assertTrue(int(flags[s]) & int(ShapeFlags.PRESERVE_CONTACT_FOOTPRINT))
 
     def test_read_flat_tables(self):
         builder = newton.ModelBuilder()

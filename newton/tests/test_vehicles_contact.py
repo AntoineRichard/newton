@@ -71,10 +71,9 @@ def test_patch_geometry(test, device):
     center = patch.center.numpy()
     test.assertTrue(bool(active[0]), "wheel patch should be active resting on the plane")
     test.assertGreater(float(normal[0][2]), 0.95)  # support normal ~ +Z
-    # Patch center sits in the lower part of the wheel. The un-fixed analytic
+    # Patch center sits in the lower part of the wheel. The analytic
     # plane-cylinder helper still emits a spurious equator contact that biases
-    # the average upward (~0.066); Phase 1 (preserve_contact_footprint honored)
-    # brings this to ~0. Until then, assert it is well below the wheel center.
+    # the average upward (~0.066), so assert it is well below the wheel center.
     test.assertLess(float(center[0][2]), 0.1)
     # wheel did not fall through the plane
     test.assertGreater(float(state.body_q.numpy()[wheel_body][2]), 0.15)

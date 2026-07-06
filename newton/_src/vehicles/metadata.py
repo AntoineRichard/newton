@@ -25,7 +25,6 @@ from typing import Any
 import numpy as np
 import warp as wp
 
-from newton._src.geometry.flags import ShapeFlags
 from newton._src.sim import Model, ModelBuilder
 
 VEHICLE_NAMESPACE = "vehicle"
@@ -301,7 +300,7 @@ def add_wheel(
     forward_axis: tuple[float, float, float] = (1.0, 0.0, 0.0),
     axle_axis: tuple[float, float, float] = (0.0, 1.0, 0.0),
 ) -> None:
-    """Annotate ``shape`` as a wheel and enable its contact-footprint mode.
+    """Annotate ``shape`` as a wheel.
 
     Args:
         builder: Builder with registered ``vehicle:*`` attributes.
@@ -348,9 +347,6 @@ def add_wheel(
     _set(builder, f"{VEHICLE_NAMESPACE}:axle_axis", shape, wp.vec3(*axle_axis))
     _set(builder, f"{VEHICLE_NAMESPACE}:is_wheel_body", body, True)
     _set(builder, f"{VEHICLE_NAMESPACE}:wheel_body_id", body, int(wheel_id))
-
-    # Preserve the full contact footprint for this wheel's rolling contacts.
-    builder.shape_flags[shape] |= int(ShapeFlags.PRESERVE_CONTACT_FOOTPRINT)
 
 
 def load_vehicle_manifest(path: str | Path) -> tuple[VehicleAssetMetadata, ...]:
