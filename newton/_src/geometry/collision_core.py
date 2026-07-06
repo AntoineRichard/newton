@@ -291,8 +291,6 @@ def create_compute_gjk_mpr_contacts(
     Returns:
         A compute_gjk_mpr_contacts function with the writer function baked in
     """
-    if post_process_contact is None:
-        post_process_contact = post_process_axial_on_discrete_contact
     if support_func is None:
         support_func = support_map
 

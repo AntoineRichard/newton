@@ -17,6 +17,7 @@ from ..geometry.collision_core import (
     create_find_contacts,
     get_triangle_shape_from_mesh,
     mesh_vs_convex_midphase,
+    post_process_axial_on_discrete_contact,
     post_process_minkowski_only,
 )
 from ..geometry.collision_primitive import (
@@ -134,7 +135,9 @@ def write_contact_simple(
         )
 
 
-def create_narrow_phase_primitive_kernel(writer_func: Any, *, enable_plane_cylinder_contact_collapse: bool = True):
+def create_narrow_phase_primitive_kernel(
+    writer_func: Any, *, disabled_analytic_pairs: frozenset[tuple[int, int]] | None = None
+):
     """
     Create a kernel for fast analytical collision detection of primitive shapes.
 
@@ -145,15 +148,18 @@ def create_narrow_phase_primitive_kernel(writer_func: Any, *, enable_plane_cylin
 
     Args:
         writer_func: Contact writer function (e.g., write_contact_simple)
-        enable_plane_cylinder_contact_collapse: Whether plane-cylinder pairs use the
-            analytical primitive contact set (up to 4 contacts). Disable to route
-            them through GJK/MPR, which preserves a distributed, sinkage-dependent
-            contact footprint for rolling bodies.
+        disabled_analytic_pairs: Optional set of ``(GeoType, GeoType)`` pairs,
+            ordered so the lower type value comes first, whose analytic fast
+            path is compiled out of the kernel; those pairs fall through to
+            the GJK/MPR route instead. None (the default) keeps every
+            analytic path enabled.
 
     Returns:
         A warp kernel for primitive collision detection
     """
-    _module = f"narrow_phase_primitive_{writer_func.__name__}_{enable_plane_cylinder_contact_collapse}"
+    _disabled = frozenset() if disabled_analytic_pairs is None else frozenset(disabled_analytic_pairs)
+    _pairs = "_".join(f"{int(a)}x{int(b)}" for a, b in sorted(_disabled)) or "none"
+    _module = f"narrow_phase_primitive_{writer_func.__name__}_{_pairs}"
 
     @wp.kernel(enable_backward=False, module=_module)
     def narrow_phase_primitive_kernel(
@@ -451,7 +457,7 @@ def create_narrow_phase_primitive_kernel(writer_func: Any, *, enable_plane_cylin
             # Plane-Cylinder collision (type_a=PLANE=0, type_b=CYLINDER=5)
             # Produces up to 4 contacts
             # -----------------------------------------------------------------
-            elif is_plane_a and is_cylinder_b and wp.static(enable_plane_cylinder_contact_collapse):
+            elif is_plane_a and is_cylinder_b and wp.static((GeoType.PLANE, GeoType.CYLINDER) not in _disabled):
                 plane_normal = wp.quat_rotate(quat_a, wp.vec3(0.0, 0.0, 1.0))
                 cylinder_axis = wp.quat_rotate(quat_b, wp.vec3(0.0, 0.0, 1.0))
                 cylinder_radius = scale_b[0]
@@ -914,9 +920,10 @@ def narrow_phase_find_mesh_triangle_overlaps_kernel(
         )
 
 
-def create_narrow_phase_process_mesh_triangle_contacts_kernel(writer_func: Any, post_process_contact: Any = None):
-    _ppc = post_process_contact.__name__ if post_process_contact is not None else "default"
-    _module = f"narrow_phase_mesh_tri_{writer_func.__name__}_{_ppc}"
+def create_narrow_phase_process_mesh_triangle_contacts_kernel(
+    writer_func: Any, post_process_contact: Any = post_process_axial_on_discrete_contact
+):
+    _module = f"narrow_phase_mesh_tri_{writer_func.__name__}_{post_process_contact.__name__}"
 
     @wp.kernel(enable_backward=False, module=_module)
     def narrow_phase_process_mesh_triangle_contacts_kernel(
@@ -1607,13 +1614,23 @@ class NarrowPhase:
         # launch geometry.
         self.block_dim = 1 if device_obj.is_cpu else 128
 
-        post_process_contact = None if enable_axial_contact_projection else post_process_minkowski_only
+        # Translate the semantic toggles into the generic factory parameters.
+        # When the defaults are wanted, omit the kwargs entirely so the
+        # factories fall back to their own (upstream) defaults.
+        if enable_axial_contact_projection:
+            post_process_kwargs = {}
+        else:
+            post_process_kwargs = {"post_process_contact": post_process_minkowski_only}
+        if enable_plane_cylinder_contact_collapse:
+            disabled_analytic_pairs = None
+        else:
+            disabled_analytic_pairs = frozenset({(GeoType.PLANE, GeoType.CYLINDER)})
 
         # Create the appropriate kernel variants
         # Primitive kernel handles lightweight primitives and routes remaining pairs
         self.primitive_kernel = create_narrow_phase_primitive_kernel(
             writer_func,
-            enable_plane_cylinder_contact_collapse=enable_plane_cylinder_contact_collapse,
+            disabled_analytic_pairs=disabled_analytic_pairs,
         )
         # GJK/MPR kernel handles remaining convex-convex pairs
         if use_lean_gjk_mpr:
@@ -1629,13 +1646,13 @@ class NarrowPhase:
             self.narrow_phase_kernel = create_narrow_phase_kernel_gjk_mpr(
                 self.external_aabb,
                 writer_func,
-                post_process_contact=post_process_contact,
+                **post_process_kwargs,
             )
         # Create triangle contacts kernel when meshes or heightfields are present
         if has_meshes or has_heightfields:
             self.mesh_triangle_contacts_kernel = create_narrow_phase_process_mesh_triangle_contacts_kernel(
                 writer_func,
-                post_process_contact=post_process_contact,
+                **post_process_kwargs,
             )
         else:
             self.mesh_triangle_contacts_kernel = None
