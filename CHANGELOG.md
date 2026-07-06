@@ -8,7 +8,7 @@
 - Add `ViewerGL.show_loading_splash()` / `ViewerGL.hide_loading_splash()` displaying a stylized Newton's-cradle overlay while the GL viewer waits on Warp kernel compilation; raised automatically by `newton.examples.init()` for visible GL viewers
 - Add edge-simplification options to `Mesh.build_sdf()` that drop near-coplanar internal edges from the mesh-edge set used by SDF-mesh contact generation: `edge_lower_angle_threshold_rad` (default 0.1°; pass a negative value to opt out and keep the full edge set), `edge_upper_angle_threshold_rad`, opt-in `edge_box_absorption`, and box half-extent controls `edge_box_half_{normal,lateral}` / `edge_box_half_{normal,lateral}_rel`
 - Add `cable_cross_slide_table` example demonstrating a cable-driven XY table
-- Add static friction (slope holding) to the `newton.vehicles` tire model, with per-wheel stick and impulse-utilization diagnostics
+- Add static friction (slope holding) to the `newton.vehicles` tire model via `WheeledConfig.static_mu_scale` (default 1.2, the static/kinetic friction ratio; set 1.0 for a kinetic-only regime), with per-wheel stick and impulse-utilization diagnostics
 - Add `vehicle_mppi_track` example racing the RC car around procedurally generated tracks with an MPPI controller that uses replicated simulation worlds as rollout particles (requires the `track_gen` package)
 - Add `newton.vehicles`, a wheeled-vehicle simulation layer: a cohesive `WheeledVehicles` controller wraps a rigid solver (which owns collision and normal support) and owns analytical wheel spin plus a brush combined-slip tire model (canonical theoretical slip with friction-circle saturation and a self-aligning moment), with heterogeneous Ackermann/skid-steer/generic drive modes and `vehicle_husky` / `vehicle_rc_car` examples
 - Add an optional `kernel_block_dim` argument to `SensorTiledCamera.update()` for tuning the Warp ray-tracer's `render_megakernel` launch shape.
@@ -27,10 +27,9 @@
 ### Changed
 
 - Remove the `cbor2` `<6` dependency ceiling after updating recorder deserialization to accept mapping-like decoded containers
-- Change the `newton.vehicles` tire core to an implicit per-wheel impulse-budget solve, stable at high friction (validated to μ = 2.5), and raise the `vehicle_rc_car` example default tire friction to 2.0; remove `WheeledConfig.load_filter` — the solve latches the normal load directly, so drop the argument
+- Change the `newton.vehicles` tire core to an implicit per-wheel impulse-budget solve that latches the normal load directly (there is no `WheeledConfig.load_filter` smoothing knob), stable at high friction (validated to μ = 2.5), and raise the `vehicle_rc_car` example default tire friction to 2.0
 - Switch the SDF-mesh narrow phase to hardware-filtered SDF texture sampling with centred-difference gradients. Hydroelastic SDF sampling is unchanged. Resulting contact distances and normals shift well below typical `contact_threshold` and `shape_margin` settings, so no user action is required; pass a negative `edge_lower_angle_threshold_rad` (e.g. `-1.0`) to `Mesh.build_sdf()` to disable the new edge-simplification pass and reproduce the pre-optimisation behaviour with the full edge set
 - Require Warp 1.14 and configure Warp logging through `warp.config.log_level`; use Newton's `--quiet` flag or `--warp-config log_level=...` instead of legacy `verbose` or `quiet` config keys
-- Change `newton.vehicles` tire friction to include a static regime: `WheeledConfig.static_mu_scale` defaults to 1.2 (static/kinetic friction ratio); set `static_mu_scale=1.0` to restore the kinetic-only behavior
 - Auto-scale `ViewerGL` contact arrows, joint axes, and COM markers by `Viewer.scene_scale`; to approximate the previous fixed sizes after `set_model()`, set `viewer.renderer.arrow_length_scale = 0.1 / viewer.scene_scale`, `viewer.renderer.joint_scale = 0.1 / viewer.scene_scale`, and `viewer.renderer.com_scale = 0.1 / viewer.scene_scale`.
 
 ### Deprecated

@@ -2845,15 +2845,12 @@ class TestNarrowPhaseCylinderPlaneDiagnostics(_NarrowPhaseSetupMixin, unittest.T
             enable_plane_cylinder_contact_collapse=False,
         )
 
-    def test_plane_cylinder_gjk_footprint_has_multiple_contacts(self):
-        """A side-lying cylinder penetrating a plane yields >2 contacts via GJK/MPR."""
-        radius = 0.5
-        half_height = 0.1
-        sink = 0.01
+    @staticmethod
+    def _side_lying_cylinder_geom_list(radius=0.5, half_height=0.1, sink=0.01):
+        """Plane plus a side-lying cylinder sunk ``sink`` below its resting height."""
         # Rotate the cylinder's local Z axis onto world Y so it lies on its side.
         axis_q = wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), np.pi * 0.5)
-
-        geom_list = [
+        return [
             {
                 "type": GeoType.PLANE,
                 "transform": ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]),
@@ -2866,6 +2863,11 @@ class TestNarrowPhaseCylinderPlaneDiagnostics(_NarrowPhaseSetupMixin, unittest.T
             },
         ]
 
+    def test_plane_cylinder_gjk_footprint_has_multiple_contacts(self):
+        """A side-lying cylinder penetrating a plane yields >2 contacts via GJK/MPR."""
+        radius = 0.5
+        geom_list = self._side_lying_cylinder_geom_list(radius=radius)
+
         count, _pairs, positions, normals, penetrations, _tangents = self._run_narrow_phase(geom_list, [(0, 1)])
 
         self.assertGreater(count, 2, "GJK/MPR cylinder-plane footprint should keep more than two contacts")
@@ -2874,6 +2876,26 @@ class TestNarrowPhaseCylinderPlaneDiagnostics(_NarrowPhaseSetupMixin, unittest.T
             self.assertAlmostEqual(np.linalg.norm(normals[i]), 1.0, places=5, msg=f"Contact {i} normal unit length")
             self.assertGreater(normals[i][2], 0.9, msg=f"Contact {i} normal should point up (+Z)")
             self.assertLess(positions[i][2], radius, msg=f"Contact {i} should sit near the plane")
+            if penetrations[i] < 0.0:
+                penetrating += 1
+        self.assertGreater(penetrating, 0, "A sunk cylinder must report penetrating contacts")
+
+    def test_plane_cylinder_default_collapse_yields_line_contact(self):
+        """Contrast: default toggles collapse the same footprint to a line (<= 2 contacts)."""
+        self.narrow_phase = NarrowPhase(
+            max_candidate_pairs=10000,
+            max_triangle_pairs=100000,
+            device=None,
+        )
+        geom_list = self._side_lying_cylinder_geom_list()
+
+        count, _pairs, _positions, normals, penetrations, _tangents = self._run_narrow_phase(geom_list, [(0, 1)])
+
+        self.assertGreater(count, 0, "A sunk cylinder must generate contacts with default toggles")
+        self.assertLessEqual(count, 2, "Default plane-cylinder collapse should keep at most two contacts")
+        penetrating = 0
+        for i in range(count):
+            self.assertGreater(normals[i][2], 0.9, msg=f"Contact {i} normal should point up (+Z)")
             if penetrations[i] < 0.0:
                 penetrating += 1
         self.assertGreater(penetrating, 0, "A sunk cylinder must report penetrating contacts")

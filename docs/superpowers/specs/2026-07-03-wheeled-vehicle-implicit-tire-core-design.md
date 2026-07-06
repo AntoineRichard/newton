@@ -199,7 +199,8 @@ Per wheel, per substep, solve the linearized implicit system in
    damping with the existing zero-crossing clamps.
 3. **Stick test first (static friction):** compute the impulse `p_stick` that
    drives `u⁺ = 0` (and, when brakes lock the wheel, `ω⁺·r = v_c·t_fwd`). If
-   `‖p_stick‖ ≤ μ·Fz·dt` (using a static μ, default equal to kinetic μ), take the
+   `‖p_stick‖ ≤ μ·Fz·dt` (using a static μ, default 1.2× kinetic since rubber's
+   μ_s exceeds its μ_k), take the
    stick solution and skip steps 4–5. Stick/slip is decided by the circle test,
    not a sign test — this is what eliminates the square wave.
 4. Otherwise convert the slip solution to a tangential impulse
@@ -285,7 +286,8 @@ examples' telemetry HUD and live-tuning sliders (both retained).
 
 - No new public modules. `newton.vehicles.WheeledVehicles` keeps its surface.
 - `WheeledConfig` (or the nested `Config`): remove `load_filter` and the lateral
-  cap knob; add `static_mu_scale` (default 1.0) and keep
+  cap knob; add `static_mu_scale` (default 1.2, reflecting μ_s > μ_k for
+  rubber) and keep
   `relaxation_length_ratio` (default 0.0). Since the branch is unreleased, removal
   without deprecation is acceptable; if any of these shipped in a release, follow
   the standard deprecation policy instead.

@@ -150,6 +150,7 @@ class Example:
         self._omega = 0.0
         self._slip = 0.0
         self._stick_count = 0
+        self._wheel_count = len(self.vehicles.dynamics.stick)
         self._max_utilization = 0.0
         self._prev_yaw = _yaw(self._initial)
 
@@ -189,7 +190,7 @@ class Example:
         ui.text(f"Yaw rate: {math.degrees(self._yaw_rate):.1f} deg/s")
         ui.text(f"Wheel omega: {self._omega:.1f} rad/s")
         ui.text(f"Slip ratio: {self._slip:.2f}")
-        ui.text(f"Stick wheels: {self._stick_count}/4")
+        ui.text(f"Stick wheels: {self._stick_count}/{self._wheel_count}")
         ui.text(f"Impulse utilization: {self._max_utilization:.2f}")
 
     def _command(self):

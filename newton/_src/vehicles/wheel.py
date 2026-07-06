@@ -253,20 +253,14 @@ def _wheel_dynamics_kernel(
             twist = body_qd[body]
             v_lin = wp.spatial_top(twist)
             w_ang = wp.spatial_bottom(twist)
-            # Apply the tire wrench at the wheel's geometric ground contact (wheel
-            # center minus radius along the support normal), not the raw mean of the
-            # solver's contact points. Those points are not symmetric about the wheel
-            # centerline (and ride up the wheel's sides), so the lateral bias turns the
-            # large longitudinal drive force into a spurious yaw torque
+            # Apply the tire wrench at the wheel's geometric ground contact -- the
+            # textbook application point: the wheel center (shape center, not the body
+            # COM; they differ when several wheels share one chassis body, e.g.
+            # skid-steer) minus the radius along the support normal. Using the solver's
+            # averaged contact points instead biases the point sideways (they are not
+            # symmetric about the wheel centerline and ride up the wheel's sides), so
+            # the large longitudinal drive force becomes a spurious yaw torque
             # (tau_z ~ -offset_y * F_x) that makes the car veer under hard acceleration.
-            # The geometric contact point is also the textbook tire application point.
-            # Apply the tire wrench at the wheel's geometric ground contact: the wheel
-            # center (shape center, not the body COM -- they differ when several wheels
-            # share one chassis body, e.g. skid-steer) projected to the ground by the
-            # radius along the support normal. Using the solver's averaged contact-point
-            # center instead biases the point sideways (its points are not symmetric
-            # about the wheel centerline), turning the drive force into a spurious yaw
-            # torque that makes a sprung car veer under hard acceleration.
             wheel_off = wp.quat_rotate(rot, wheel_center[w] - body_com[body])
             offset = wheel_off - r * n
             v_contact = v_lin + wp.cross(w_ang, offset)

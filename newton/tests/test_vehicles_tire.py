@@ -68,8 +68,10 @@ class TestBrushGoldenCurves(unittest.TestCase):
 
     def test_brush_matches_reference_over_slip_grid(self):
         fz, mu, c_long, c_lat, trail = 1500.0, 0.9, 15.0, 12.0, 0.03
+        # Include kappa <= -1 (past lock-up) to exercise the -0.9999 singularity
+        # guard, which the reference clamps identically.
         kappa_grid, alpha_grid = np.meshgrid(
-            np.linspace(-0.95, 1.5, 26),
+            np.concatenate([[-5.0, -2.0, -1.0], np.linspace(-0.95, 1.5, 26)]),
             np.linspace(-1.0, 1.0, 21),
         )
         kappa = kappa_grid.ravel()
