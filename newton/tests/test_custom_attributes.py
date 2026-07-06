@@ -1569,6 +1569,51 @@ class TestCustomFrequencyAttributes(unittest.TestCase):
         # Verify custom frequency count is stored
         self.assertEqual(model.get_custom_frequency_count("test:pair"), 2)
 
+    def test_custom_frequency_count_accessor(self):
+        """Test ModelBuilder.get_custom_frequency_count() tracks allocated rows."""
+        builder = ModelBuilder()
+
+        # Unknown/unused frequency returns 0
+        self.assertEqual(builder.get_custom_frequency_count("test:pair"), 0)
+
+        builder.add_custom_frequency(ModelBuilder.CustomFrequency(name="pair", namespace="test"))
+        builder.add_custom_attribute(
+            ModelBuilder.CustomAttribute(
+                name="pair_value",
+                frequency="test:pair",
+                dtype=wp.float32,
+                default=0.0,
+                namespace="test",
+            )
+        )
+
+        # Registered but no rows yet
+        self.assertEqual(builder.get_custom_frequency_count("test:pair"), 0)
+
+        # Stamp N=2 rows
+        builder.add_custom_values(**{"test:pair_value": 1.0})
+        builder.add_custom_values(**{"test:pair_value": 2.0})
+        self.assertEqual(builder.get_custom_frequency_count("test:pair"), 2)
+
+        # Merge a sub-builder with M=3 rows -> N+M
+        sub_builder = ModelBuilder()
+        sub_builder.add_custom_frequency(ModelBuilder.CustomFrequency(name="pair", namespace="test"))
+        sub_builder.add_custom_attribute(
+            ModelBuilder.CustomAttribute(
+                name="pair_value",
+                frequency="test:pair",
+                dtype=wp.float32,
+                default=0.0,
+                namespace="test",
+            )
+        )
+        for value in (10.0, 20.0, 30.0):
+            sub_builder.add_custom_values(**{"test:pair_value": value})
+        self.assertEqual(sub_builder.get_custom_frequency_count("test:pair"), 3)
+
+        builder.add_builder(sub_builder)
+        self.assertEqual(builder.get_custom_frequency_count("test:pair"), 5)
+
     def test_custom_frequency_requires_registration(self):
         """Test that using an unregistered custom frequency raises ValueError."""
         builder = ModelBuilder()

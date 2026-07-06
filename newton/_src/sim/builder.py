@@ -1511,6 +1511,23 @@ class ModelBuilder:
         """Return set of custom frequency keys (string frequencies) defined in this builder."""
         return set(self._custom_frequency_counts.keys())
 
+    def get_custom_frequency_count(self, frequency: str) -> int:
+        """Return the number of rows currently allocated for a custom frequency.
+
+        Rows are allocated by :meth:`add_custom_values` and
+        :meth:`add_custom_values_batch`, and accumulate when merging builders
+        via :meth:`add_builder` or :meth:`add_world`. This is useful for
+        assigning contiguous per-row ids before stamping new rows.
+
+        Args:
+            frequency: The custom frequency key (e.g., ``"mujoco:pair"``).
+
+        Returns:
+            The number of rows allocated for this frequency, or 0 if the
+            frequency is unknown or has no rows yet.
+        """
+        return self._custom_frequency_counts.get(frequency, 0)
+
     def add_custom_values(self, **kwargs: Any) -> dict[str, int]:
         """Append values to custom attributes with custom string frequencies.
 
