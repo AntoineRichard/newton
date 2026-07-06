@@ -4119,6 +4119,164 @@ class ModelBuilder:
 
         return joint_index
 
+    def set_joint_type(self, joint: int, joint_type: JointType) -> None:
+        """Changes the type of an existing joint, updating coordinate, DOF, and constraint bookkeeping in place.
+
+        This edits the builder before :meth:`finalize` and is intended for cases where an imported joint
+        must be reconfigured -- for example, locking an imported revolute joint by converting it to
+        :attr:`JointType.FIXED` when its motion is represented analytically elsewhere. Assigning
+        :attr:`joint_type` directly is unsafe because it leaves stale per-DOF and per-coordinate data,
+        which corrupts downstream degree-of-freedom accounting.
+
+        In v1 only conversions with unambiguous semantics are supported:
+
+        - Converting any joint to :attr:`JointType.FIXED` (locking): all of the joint's coordinates and
+          DOFs are removed and replaced with fixed-joint constraints. The joint's parent and child
+          transforms are preserved, so the child body pose is unchanged at :meth:`finalize` for a joint
+          at its zero-coordinate (rest) configuration.
+        - A no-op conversion to the joint's current type.
+
+        Any other conversion raises :class:`NotImplementedError`.
+
+        Per-DOF and per-coordinate state associated with removed DOFs (coordinates, velocities,
+        actuation, armature, limits, friction, effort/velocity limits, and targets) is dropped. The
+        start indices of subsequent joints and any custom attributes registered at
+        :attr:`Model.AttributeFrequency.JOINT_DOF`, :attr:`Model.AttributeFrequency.JOINT_COORD`, or
+        :attr:`Model.AttributeFrequency.JOINT_CONSTRAINT` frequency are remapped to stay consistent.
+
+        Note:
+            Equality and mimic constraints reference joints by index (which is preserved), so they remain
+            structurally valid. A constraint that targets a DOF removed by locking becomes physically
+            meaningless; removing or updating such constraints is the caller's responsibility.
+
+        Args:
+            joint: Index of the joint to convert.
+            joint_type: Target joint type. See :class:`JointType`.
+
+        Raises:
+            ValueError: If ``joint`` is out of range.
+            NotImplementedError: If the requested conversion is not supported.
+        """
+        if joint < 0 or joint >= len(self.joint_type):
+            raise ValueError(f"joint index {joint} is out of range")
+        current_type = JointType(self.joint_type[joint])
+        joint_type = JointType(joint_type)
+        if joint_type == current_type:
+            return
+        if joint_type != JointType.FIXED:
+            raise NotImplementedError(
+                f"Converting joint {joint} from {current_type.name} to {joint_type.name} is not supported; "
+                "only conversion to JointType.FIXED is available."
+            )
+        self._convert_joints_to_fixed((joint,))
+
+    def _convert_joints_to_fixed(self, joint_indices: Sequence[int]) -> None:
+        """Converts the given joints to :attr:`JointType.FIXED`, removing their DOFs and coordinates.
+
+        Rebuilds the per-coordinate, per-DOF, and per-constraint arrays, updates start indices and
+        aggregate counts, and remaps joint-frequency custom attributes.
+        """
+        selected = {int(index) for index in joint_indices}
+
+        # Arrays indexed at joint-coordinate frequency (parallel to joint_q_start).
+        coord_arrays = (self.joint_q, self.joint_target_q)
+        # Arrays indexed at joint-DOF frequency (parallel to joint_qd_start).
+        dof_arrays = (
+            self.joint_qd,
+            self.joint_f,
+            self.joint_act,
+            self.joint_axis,
+            self.joint_target_qd,
+            self.joint_target_mode,
+            self.joint_target_ke,
+            self.joint_target_kd,
+            self.joint_damping,
+            self.joint_limit_ke,
+            self.joint_limit_kd,
+            self.joint_armature,
+            self.joint_effort_limit,
+            self.joint_velocity_limit,
+            self.joint_friction,
+            self.joint_limit_lower,
+            self.joint_limit_upper,
+        )
+
+        old_q_start = list(self.joint_q_start)
+        old_qd_start = list(self.joint_qd_start)
+        old_cts_start = list(self.joint_cts_start)
+        old_cts = list(self.joint_cts)
+
+        q_remap: dict[int, int] = {}
+        qd_remap: dict[int, int] = {}
+        cts_remap: dict[int, int] = {}
+        new_q_start: list[int] = []
+        new_qd_start: list[int] = []
+        new_cts_start: list[int] = []
+        new_cts: list[Any] = []
+        new_coord_count = 0
+        new_dof_count = 0
+
+        def _slice(starts: Sequence[int], total: int, index: int) -> tuple[int, int]:
+            start = int(starts[index])
+            end = int(starts[index + 1]) if index + 1 < len(starts) else int(total)
+            return start, end
+
+        joint_count = len(self.joint_type)
+        for joint_index in range(joint_count):
+            q_start, q_end = _slice(old_q_start, self.joint_coord_count, joint_index)
+            qd_start, qd_end = _slice(old_qd_start, self.joint_dof_count, joint_index)
+            cts_start, cts_end = _slice(old_cts_start, len(old_cts), joint_index)
+
+            new_q_start.append(new_coord_count)
+            new_qd_start.append(new_dof_count)
+            new_cts_start.append(len(new_cts))
+
+            if joint_index in selected:
+                self.joint_type[joint_index] = JointType.FIXED
+                self.joint_dof_dim[joint_index] = (0, 0)
+                new_cts.extend(0.0 for _ in range(JointType.FIXED.constraint_count(0)))
+                continue
+
+            for old_index in range(q_start, q_end):
+                q_remap[old_index] = new_coord_count
+                new_coord_count += 1
+            for old_index in range(qd_start, qd_end):
+                qd_remap[old_index] = new_dof_count
+                new_dof_count += 1
+            for old_index in range(cts_start, cts_end):
+                cts_remap[old_index] = len(new_cts)
+                new_cts.append(old_cts[old_index])
+
+        def _rebuild(arrays: Sequence[list[Any]], remap: dict[int, int], new_length: int) -> None:
+            for array in arrays:
+                old_values = list(array)
+                rebuilt: list[Any] = [None] * new_length
+                for old_index, new_index in remap.items():
+                    rebuilt[new_index] = old_values[old_index]
+                array[:] = rebuilt
+
+        _rebuild(coord_arrays, q_remap, new_coord_count)
+        _rebuild(dof_arrays, qd_remap, new_dof_count)
+        self.joint_cts[:] = new_cts
+        self.joint_q_start[:] = new_q_start
+        self.joint_qd_start[:] = new_qd_start
+        self.joint_cts_start[:] = new_cts_start
+        self.joint_dof_count = new_dof_count
+        self.joint_coord_count = new_coord_count
+        self.joint_constraint_count = len(new_cts)
+
+        self._remap_joint_custom_frequency(Model.AttributeFrequency.JOINT_COORD, q_remap)
+        self._remap_joint_custom_frequency(Model.AttributeFrequency.JOINT_DOF, qd_remap)
+        self._remap_joint_custom_frequency(Model.AttributeFrequency.JOINT_CONSTRAINT, cts_remap)
+
+    def _remap_joint_custom_frequency(self, frequency: Model.AttributeFrequency, remap: dict[int, int]) -> None:
+        """Remaps dict-keyed custom attribute values at ``frequency`` through ``remap``, dropping removed indices."""
+        for custom_attr in self.get_custom_attributes_by_frequency([frequency]):
+            values = custom_attr.values
+            if not isinstance(values, dict):
+                continue
+            custom_attr.values = {remap[old]: value for old, value in values.items() if old in remap}
+
     @deprecate_nonkeyword_arguments
     def add_joint_revolute(
         self,
