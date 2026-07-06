@@ -594,6 +594,8 @@ class CollisionPipeline:
         contact_matching_pos_threshold: float = 0.0005,
         contact_matching_normal_dot_threshold: float = 0.995,
         contact_report: bool = False,
+        enable_axial_contact_projection: bool = True,
+        enable_plane_cylinder_contact_collapse: bool = True,
         verify_buffers: bool = True,
         contact_reduction_hashtable_size_factor: float = 0.25,
     ):
@@ -677,6 +679,18 @@ class CollisionPipeline:
                 / ``rigid_contact_broken_count`` on the :class:`Contacts`
                 container, populated each frame.  Requires a non-disabled
                 ``contact_matching`` mode.
+            enable_axial_contact_projection: Whether cylinder/cone contacts against
+                discrete surfaces are projected onto the shape axis for rolling
+                stabilization. Disable to keep the distributed, sinkage-dependent
+                contact footprint (e.g. for wheels or rollers). Defaults to True,
+                preserving existing behavior. Ignored when a prebuilt
+                ``narrow_phase`` is supplied.
+            enable_plane_cylinder_contact_collapse: Whether plane-cylinder pairs use
+                the analytical primitive contact set (up to 4 contacts). Disable to
+                route them through GJK/MPR so a penetrating cylinder keeps a full
+                contact patch instead of a collapsed line/rim contact. Defaults to
+                True, preserving existing behavior. Ignored when a prebuilt
+                ``narrow_phase`` is supplied.
             verify_buffers: Run a ``dim=[1]`` diagnostic kernel at the end of
                 the narrow phase that prints warnings on any intermediate
                 candidate-pair or final rigid contact buffer overflow; see
@@ -753,6 +767,8 @@ class CollisionPipeline:
         self.reduce_contacts = reduce_contacts
         self.requires_grad = requires_grad
         self.soft_contact_margin = soft_contact_margin
+        self.enable_axial_contact_projection = enable_axial_contact_projection
+        self.enable_plane_cylinder_contact_collapse = enable_plane_cylinder_contact_collapse
         self.include_static_kinematic_pairs = include_static_kinematic_pairs
 
         if using_expert_components:
@@ -907,6 +923,8 @@ class CollisionPipeline:
                 use_lean_gjk_mpr=use_lean_gjk_mpr,
                 deterministic=deterministic,
                 contact_max=rigid_contact_max,
+                enable_axial_contact_projection=enable_axial_contact_projection,
+                enable_plane_cylinder_contact_collapse=enable_plane_cylinder_contact_collapse,
                 verify_buffers=verify_buffers,
                 contact_reduction_hashtable_size_factor=contact_reduction_hashtable_size_factor,
             )
