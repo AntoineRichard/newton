@@ -15,9 +15,10 @@ coordinate/DOF/constraint index remapping) before finalization.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
 
-from newton import JointType, Model, ModelBuilder
+from newton import JointType, ModelBuilder
+
+from ._compat import set_joint_type_fixed
 
 
 def configure_wheel_axle_joints(
@@ -53,8 +54,23 @@ def configure_wheel_axle_joints(
         axle_joint_labels=axle_joint_labels,
         wheel_body_labels=wheel_body_labels,
     )
-    _convert_joints_to_fixed(builder, joint_indices)
+    _validate_joints_convertible(builder, joint_indices)
+    for joint_index in joint_indices:
+        set_joint_type_fixed(builder, joint_index)
     return joint_indices
+
+
+def _validate_joints_convertible(builder: ModelBuilder, joint_indices: Sequence[int]) -> None:
+    """Validate all selected joints up front so no joint is converted on error."""
+    for joint_index in joint_indices:
+        if joint_index < 0 or joint_index >= len(builder.joint_type):
+            raise ValueError(f"axle joint index {joint_index} is out of range")
+        joint_type = builder.joint_type[joint_index]
+        if joint_type not in (JointType.FIXED, JointType.REVOLUTE):
+            raise ValueError(
+                f"axle joint {joint_index} ('{builder.joint_label[joint_index]}') must be revolute or fixed, "
+                f"got {joint_type}"
+            )
 
 
 def _resolve_axle_joint_indices(
@@ -113,153 +129,3 @@ def _deduplicate_indices(indices: Sequence[int], source_name: str) -> tuple[int,
     if len(out) != len(indices):
         raise ValueError(f"{source_name} resolved duplicate axle joints")
     return out
-
-
-def _convert_joints_to_fixed(builder: ModelBuilder, joint_indices: Sequence[int]) -> None:
-    selected = {int(index) for index in joint_indices}
-    for joint_index in selected:
-        if joint_index < 0 or joint_index >= len(builder.joint_type):
-            raise ValueError(f"axle joint index {joint_index} is out of range")
-        joint_type = builder.joint_type[joint_index]
-        if joint_type == JointType.FIXED:
-            continue
-        if joint_type != JointType.REVOLUTE:
-            raise ValueError(
-                f"axle joint {joint_index} ('{builder.joint_label[joint_index]}') must be revolute or fixed, "
-                f"got {joint_type}"
-            )
-
-    old_q_start = list(builder.joint_q_start)
-    old_qd_start = list(builder.joint_qd_start)
-    old_cts_start = list(builder.joint_cts_start)
-    old_q = list(builder.joint_q)
-    old_qd = list(builder.joint_qd)
-    old_cts = list(builder.joint_cts)
-    old_joint_f = list(builder.joint_f)
-    old_joint_act = list(builder.joint_act)
-    old_axis = list(builder.joint_axis)
-    old_target_pos = list(builder.joint_target_pos)
-    old_target_vel = list(builder.joint_target_vel)
-    old_target_mode = list(builder.joint_target_mode)
-    old_target_ke = list(builder.joint_target_ke)
-    old_target_kd = list(builder.joint_target_kd)
-    old_limit_lower = list(builder.joint_limit_lower)
-    old_limit_upper = list(builder.joint_limit_upper)
-    old_limit_ke = list(builder.joint_limit_ke)
-    old_limit_kd = list(builder.joint_limit_kd)
-    old_armature = list(builder.joint_armature)
-    old_effort_limit = list(builder.joint_effort_limit)
-    old_velocity_limit = list(builder.joint_velocity_limit)
-    old_friction = list(builder.joint_friction)
-
-    q_index_remap: dict[int, int] = {}
-    qd_index_remap: dict[int, int] = {}
-    cts_index_remap: dict[int, int] = {}
-
-    new_q: list[Any] = []
-    new_qd: list[Any] = []
-    new_cts: list[Any] = []
-    new_joint_f: list[Any] = []
-    new_joint_act: list[Any] = []
-    new_axis: list[Any] = []
-    new_target_pos: list[Any] = []
-    new_target_vel: list[Any] = []
-    new_target_mode: list[Any] = []
-    new_target_ke: list[Any] = []
-    new_target_kd: list[Any] = []
-    new_limit_lower: list[Any] = []
-    new_limit_upper: list[Any] = []
-    new_limit_ke: list[Any] = []
-    new_limit_kd: list[Any] = []
-    new_armature: list[Any] = []
-    new_effort_limit: list[Any] = []
-    new_velocity_limit: list[Any] = []
-    new_friction: list[Any] = []
-    new_q_start: list[int] = []
-    new_qd_start: list[int] = []
-    new_cts_start: list[int] = []
-
-    for joint_index in range(len(builder.joint_type)):
-        q_start, q_end = _joint_slice(old_q_start, len(old_q), joint_index)
-        qd_start, qd_end = _joint_slice(old_qd_start, len(old_qd), joint_index)
-        cts_start, cts_end = _joint_slice(old_cts_start, len(old_cts), joint_index)
-
-        new_q_start.append(len(new_q))
-        new_qd_start.append(len(new_qd))
-        new_cts_start.append(len(new_cts))
-
-        if joint_index in selected:
-            builder.joint_type[joint_index] = JointType.FIXED
-            builder.joint_dof_dim[joint_index] = (0, 0)
-            new_cts.extend(0.0 for _ in range(JointType.FIXED.constraint_count(0)))
-            continue
-
-        for old_index in range(q_start, q_end):
-            q_index_remap[old_index] = len(new_q)
-            new_q.append(old_q[old_index])
-        for old_index in range(qd_start, qd_end):
-            qd_index_remap[old_index] = len(new_qd)
-            new_qd.append(old_qd[old_index])
-            new_joint_f.append(old_joint_f[old_index])
-            new_joint_act.append(old_joint_act[old_index])
-            new_axis.append(old_axis[old_index])
-            new_target_pos.append(old_target_pos[old_index])
-            new_target_vel.append(old_target_vel[old_index])
-            new_target_mode.append(old_target_mode[old_index])
-            new_target_ke.append(old_target_ke[old_index])
-            new_target_kd.append(old_target_kd[old_index])
-            new_limit_lower.append(old_limit_lower[old_index])
-            new_limit_upper.append(old_limit_upper[old_index])
-            new_limit_ke.append(old_limit_ke[old_index])
-            new_limit_kd.append(old_limit_kd[old_index])
-            new_armature.append(old_armature[old_index])
-            new_effort_limit.append(old_effort_limit[old_index])
-            new_velocity_limit.append(old_velocity_limit[old_index])
-            new_friction.append(old_friction[old_index])
-        for old_index in range(cts_start, cts_end):
-            cts_index_remap[old_index] = len(new_cts)
-            new_cts.append(old_cts[old_index])
-
-    builder.joint_q = new_q
-    builder.joint_qd = new_qd
-    builder.joint_cts = new_cts
-    builder.joint_f = new_joint_f
-    builder.joint_act = new_joint_act
-    builder.joint_axis = new_axis
-    builder.joint_target_pos = new_target_pos
-    builder.joint_target_vel = new_target_vel
-    builder.joint_target_mode = new_target_mode
-    builder.joint_target_ke = new_target_ke
-    builder.joint_target_kd = new_target_kd
-    builder.joint_limit_lower = new_limit_lower
-    builder.joint_limit_upper = new_limit_upper
-    builder.joint_limit_ke = new_limit_ke
-    builder.joint_limit_kd = new_limit_kd
-    builder.joint_armature = new_armature
-    builder.joint_effort_limit = new_effort_limit
-    builder.joint_velocity_limit = new_velocity_limit
-    builder.joint_friction = new_friction
-    builder.joint_q_start = new_q_start
-    builder.joint_qd_start = new_qd_start
-    builder.joint_cts_start = new_cts_start
-    builder.joint_dof_count = len(new_qd)
-    builder.joint_coord_count = len(new_q)
-    builder.joint_constraint_count = len(new_cts)
-
-    _remap_custom_frequency(builder, Model.AttributeFrequency.JOINT_COORD, q_index_remap)
-    _remap_custom_frequency(builder, Model.AttributeFrequency.JOINT_DOF, qd_index_remap)
-    _remap_custom_frequency(builder, Model.AttributeFrequency.JOINT_CONSTRAINT, cts_index_remap)
-
-
-def _joint_slice(starts: Sequence[int], total: int, joint_index: int) -> tuple[int, int]:
-    start = int(starts[joint_index])
-    end = int(starts[joint_index + 1]) if joint_index + 1 < len(starts) else int(total)
-    return start, end
-
-
-def _remap_custom_frequency(builder: ModelBuilder, frequency: Model.AttributeFrequency, remap: dict[int, int]) -> None:
-    for custom_attr in builder.get_custom_attributes_by_frequency([frequency]):
-        values = custom_attr.values
-        if not isinstance(values, dict):
-            continue
-        custom_attr.values = {remap[old_index]: value for old_index, value in values.items() if old_index in remap}

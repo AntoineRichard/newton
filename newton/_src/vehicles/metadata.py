@@ -27,6 +27,8 @@ import warp as wp
 
 from newton import Model, ModelBuilder
 
+from ._compat import get_custom_frequency_count
+
 VEHICLE_NAMESPACE = "vehicle"
 _VEHICLE_FREQUENCY = f"{VEHICLE_NAMESPACE}:vehicle"
 _VEHICLE_INDEX_ATTR = f"{VEHICLE_NAMESPACE}:vehicle_index"
@@ -264,7 +266,7 @@ def set_vehicle(
     if vehicle_id < 0:
         raise ValueError("vehicle_id must be non-negative")
     _require_registered(builder)
-    current = int(builder._custom_frequency_counts.get(_VEHICLE_FREQUENCY, 0))
+    current = get_custom_frequency_count(builder, _VEHICLE_FREQUENCY)
     if vehicle_id != current:
         raise ValueError(
             f"set_vehicle must be called once per vehicle in increasing id order; "
@@ -328,7 +330,7 @@ def add_wheel(
     elif int(builder.shape_body[shape]) != body:
         raise ValueError(f"shape {shape} is attached to body {int(builder.shape_body[shape])}, not {body}")
 
-    vehicle_rows = int(builder._custom_frequency_counts.get(_VEHICLE_FREQUENCY, 0))
+    vehicle_rows = get_custom_frequency_count(builder, _VEHICLE_FREQUENCY)
     if vehicle_id >= vehicle_rows:
         raise ValueError(f"call set_vehicle({vehicle_id}, ...) before adding its wheels")
     _reserve_rows(builder, _WHEEL_FREQUENCY, _WHEEL_INDEX_ATTR, wheel_id + 1)
@@ -488,9 +490,9 @@ def apply_vehicle_manifest(
     """
     _require_registered(builder)
     if vehicle_id is None:
-        vehicle_id = int(builder._custom_frequency_counts.get(_VEHICLE_FREQUENCY, 0))
+        vehicle_id = get_custom_frequency_count(builder, _VEHICLE_FREQUENCY)
     if wheel_id_start is None:
-        wheel_id_start = int(builder._custom_frequency_counts.get(_WHEEL_FREQUENCY, 0))
+        wheel_id_start = get_custom_frequency_count(builder, _WHEEL_FREQUENCY)
     if wheel_id_start < 0:
         raise ValueError(f"asset {asset.name} wheel_id_start must be non-negative")
 
@@ -840,7 +842,7 @@ def _require_registered(builder: ModelBuilder) -> None:
 
 
 def _reserve_rows(builder: ModelBuilder, frequency: str, index_attr: str, count: int) -> None:
-    current = int(builder._custom_frequency_counts.get(frequency, 0))
+    current = get_custom_frequency_count(builder, frequency)
     for index in range(current, count):
         builder.add_custom_values(**{index_attr: index})
 
