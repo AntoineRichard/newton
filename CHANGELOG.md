@@ -19,29 +19,11 @@
 - Add `newton.utils.OnnxRuntime`, a graph-capturable ONNX inference engine backed solely by Warp kernels (no `onnxruntime` or `torch` runtime dependency); used by `ControllerNeuralMLP` and `ControllerNeuralLSTM` to load `.onnx` policies. To migrate a TorchScript policy, run `torch.onnx.export(model, dummy_input, "policy.onnx", opset_version=17)` once and point the controllers at the resulting `.onnx` file. The `onnx` package is now an optional extra (`pip install newton[onnx]`); install it explicitly to use the ONNX runtime.
 - Add USD parsing for `NewtonSiteAPI` to mark shapes as sites.
 - Add `ViewerRTX`, a real-time ray-traced viewer powered by NVIDIA OVRTX.
-- Add `newton.wheeled.WheelContactPatchState` and `update_wheel_contact_patches()` for reducing Newton contacts into per-wheel patch diagnostics.
-- Add `update_wheel_contact_patches(enable_analytic_plane_patches=True)` for closed-form wheel-cylinder footprint diagnostics on analytic planes.
 - Add `CollisionPipeline(enable_axial_contact_projection=False, enable_plane_cylinder_contact_collapse=False)` diagnostic options for comparing cylinder contacts before axial projection or analytical plane-cylinder collapse.
 - Add hydroelastic contact support for analytic infinite planes paired with SDF-backed hydroelastic shapes.
-- Add `newton.wheeled.WheelMomentControl`, `WheelMomentState`, `configure_wheel_moment_control()`, and `update_wheel_moments()` for analytical wheel rotational moments when physical wheel spin is locked or visual-only.
-- Add `newton.wheeled.WheelDriveControl`, `WheelDriveState`, `apply_wheel_drive_forces()`, and `update_wheel_drive_normal_loads()` for Coulomb-limited wheel drive/braking from contact patch diagnostics.
-- Add `newton.wheeled.WheelTireControl`, `WheelTireState`, `apply_wheel_tire_forces()`, `update_wheel_tire_normal_loads()`, `configure_wheel_tire_control()`, `configure_wheel_axle_joints()`, and `configure_mujoco_wheel_contacts()` for saturated linear tire forces and tire-model asset setup from contact patch diagnostics.
-- Add opt-in Fiala/brush-style lateral tire forces through `WheelTireControl.tire_model` and `configure_wheel_tire_control(tire_model=...)`, while keeping saturated-linear tire behavior as the default.
-- Add `--tire-model fiala` support to the `wheeled_car_control` example for interactive Ackermann-car testing with the Fiala lateral tire model.
-- Add speed, acceleration, wheel-speed, drive-torque, and tire-slip diagnostics to the `wheeled_car_control` example UI.
-- Add `wheeled_drive` example simulating the simplified wheeled USDA assets under MuJoCo axle torque control.
-- Add `wheeled_force_drive` example simulating the simplified wheeled USDA assets with contact-patch wheel drive forces.
-- Add `wheeled_tire_drive` example simulating the simplified wheeled USDA assets with analytical wheel-speed tire forces and normal-only MuJoCo wheel contacts.
-- Add `newton.wheeled.WheeledVehicleLayout`, `WheeledVehicleControl`, `WheeledVehicleState`, `WheeledMotorConfig`, `WheeledSteeringConfig`, `build_wheeled_vehicle_layout()`, `configure_wheeled_vehicle_control()`, and `update_wheeled_vehicle_controls()` for geometry-aware vehicle command channels.
-- Add `wheeled_car_control` and `wheeled_husky_control` examples for controllable Ackermann and skid-steer fixtures with follow cameras.
-- Add `wheeled_terrain_contact` example for controlling the RC car over bump, ramp, and mesh terrain fixtures.
 
 ### Changed
 
-- Change `wheeled_car_control` to drive analytical wheel moments from torque commands instead of ideal wheel-speed targets, and make drive scale tune the maximum drive torque.
-- Retune RC car tire friction and stiffness in the wheeled car examples for a higher-grip baseline, and expose live tire tuning controls in `wheeled_car_control`.
-- Change the `wheeled_car_control` scripted command cycle to use gentler steering and straight reverse/settle phases.
-- Change `wheeled_terrain_contact` to drive analytical wheel moment dynamics instead of prescribing tire wheel speed directly.
 - Remove the `cbor2` `<6` dependency ceiling after updating recorder deserialization to accept mapping-like decoded containers
 - Switch the SDF-mesh narrow phase to hardware-filtered SDF texture sampling with centred-difference gradients. Hydroelastic SDF sampling is unchanged. Resulting contact distances and normals shift well below typical `contact_threshold` and `shape_margin` settings, so no user action is required; pass a negative `edge_lower_angle_threshold_rad` (e.g. `-1.0`) to `Mesh.build_sdf()` to disable the new edge-simplification pass and reproduce the pre-optimisation behaviour with the full edge set
 - Require Warp 1.14 and configure Warp logging through `warp.config.log_level`; use Newton's `--quiet` flag or `--warp-config log_level=...` instead of legacy `verbose` or `quiet` config keys
@@ -63,7 +45,6 @@
 
 ### Fixed
 
-- Fix wheeled custom vehicle, wheel, and body IDs so annotated wheeled templates replicate with unique metadata.
 - Fix `eval_fk()` overwriting VBD-simulated `JointType.CABLE` body poses.
 - Fix `SolverXPBD` `body_parent_f` reporting to include `Control.joint_f` contributions and accumulate multiple inbound joint contributions, matching the `SolverMuJoCo` and `SolverFeatherstone` convention.
 - Fix MJCF `xyaxes` parsing to treat the second vector as Y and derive Z from X cross Y.

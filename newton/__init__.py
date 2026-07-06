@@ -95,7 +95,6 @@ from . import (  # noqa: E402
     utils,
     vehicles,
     viewer,
-    wheeled,
 )
 
 __all__ += [
@@ -110,5 +109,4 @@ __all__ += [
     "utils",
     "vehicles",
     "viewer",
-    "wheeled",
 ]

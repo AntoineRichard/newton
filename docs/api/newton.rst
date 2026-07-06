@@ -21,7 +21,6 @@ newton
    newton_utils
    newton_vehicles
    newton_viewer
-   newton_wheeled
 
 .. rubric:: Submodules
 
@@ -36,7 +35,6 @@ newton
 - :doc:`newton.utils <newton_utils>`
 - :doc:`newton.vehicles <newton_vehicles>`
 - :doc:`newton.viewer <newton_viewer>`
-- :doc:`newton.wheeled <newton_wheeled>`
 
 .. rubric:: Classes
 

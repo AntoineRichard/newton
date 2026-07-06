@@ -6,130 +6,96 @@
     ]
 )
 
-over "physicsScene"
-{
-    custom bool newton:wheeled:is_wheel = false (
-        customData = {
-            string assignment = "model"
-            string frequency = "shape"
-        }
-    )
-    custom int newton:wheeled:wheel_id = -1 (
-        customData = {
-            string assignment = "model"
-            string frequency = "shape"
-            string references = "wheeled:wheel"
-        }
-    )
-    custom int newton:wheeled:vehicle_id = -1 (
-        customData = {
-            string assignment = "model"
-            string frequency = "shape"
-            string references = "wheeled:vehicle"
-        }
-    )
-    custom float newton:wheeled:wheel_radius = 0.0 (
-        customData = {
-            string assignment = "model"
-            string frequency = "shape"
-        }
-    )
-    custom float newton:wheeled:wheel_width = 0.0 (
-        customData = {
-            string assignment = "model"
-            string frequency = "shape"
-        }
-    )
-    custom bool newton:wheeled:is_wheel_body = false (
-        customData = {
-            string assignment = "model"
-            string frequency = "body"
-        }
-    )
-    custom int newton:wheeled:wheel_body_id = -1 (
-        customData = {
-            string assignment = "model"
-            string frequency = "body"
-            string references = "wheeled:wheel"
-        }
-    )
-}
-
 over "husky"
 {
-    custom bool newton:wheeled:is_vehicle = true
-    custom int newton:wheeled:vehicle_id = 0
+    custom bool newton:vehicle:is_vehicle = true
+    custom int newton:vehicle:vehicle_id = 0
+    custom int newton:vehicle:drive_mode = 2
+    custom float newton:vehicle:wheelbase = 0.512
+    custom float newton:vehicle:track_width = 0.566
 
     over "RigidBodies"
     {
         over "husky_front_left_wheel"
         {
-            custom bool newton:wheeled:is_wheel_body = true
-            custom int newton:wheeled:wheel_body_id = 0
+            custom bool newton:vehicle:is_wheel_body = true
+            custom int newton:vehicle:wheel_body_id = 0
 
             over "Geometry"
             {
                 over "husky_front_left_wheel"
                 {
-                    custom bool newton:wheeled:is_wheel = true
-                    custom int newton:wheeled:wheel_id = 0
-                    custom int newton:wheeled:vehicle_id = 0
-                    custom float newton:wheeled:wheel_radius = 0.1625
-                    custom float newton:wheeled:wheel_width = 0.13
+                    custom bool newton:vehicle:is_wheel = true
+                    custom int newton:vehicle:wheel_id = 0
+                    custom int newton:vehicle:vehicle_id = 0
+                    custom float newton:vehicle:radius = 0.1625
+                    custom float newton:vehicle:width = 0.13
+                    custom bool newton:vehicle:driven = true
+                    custom int newton:vehicle:side = -1
+                    custom int newton:vehicle:axle_row = 0
                 }
             }
         }
 
         over "husky_rear_left_wheel"
         {
-            custom bool newton:wheeled:is_wheel_body = true
-            custom int newton:wheeled:wheel_body_id = 1
+            custom bool newton:vehicle:is_wheel_body = true
+            custom int newton:vehicle:wheel_body_id = 1
 
             over "Geometry"
             {
                 over "husky_rear_left_wheel"
                 {
-                    custom bool newton:wheeled:is_wheel = true
-                    custom int newton:wheeled:wheel_id = 1
-                    custom int newton:wheeled:vehicle_id = 0
-                    custom float newton:wheeled:wheel_radius = 0.1625
-                    custom float newton:wheeled:wheel_width = 0.13
+                    custom bool newton:vehicle:is_wheel = true
+                    custom int newton:vehicle:wheel_id = 1
+                    custom int newton:vehicle:vehicle_id = 0
+                    custom float newton:vehicle:radius = 0.1625
+                    custom float newton:vehicle:width = 0.13
+                    custom bool newton:vehicle:driven = true
+                    custom int newton:vehicle:side = -1
+                    custom int newton:vehicle:axle_row = 1
                 }
             }
         }
 
         over "husky_front_right_wheel"
         {
-            custom bool newton:wheeled:is_wheel_body = true
-            custom int newton:wheeled:wheel_body_id = 2
+            custom bool newton:vehicle:is_wheel_body = true
+            custom int newton:vehicle:wheel_body_id = 2
 
             over "Geometry"
             {
                 over "husky_front_right_wheel"
                 {
-                    custom bool newton:wheeled:is_wheel = true
-                    custom int newton:wheeled:wheel_id = 2
-                    custom int newton:wheeled:vehicle_id = 0
-                    custom float newton:wheeled:wheel_radius = 0.1625
-                    custom float newton:wheeled:wheel_width = 0.13
+                    custom bool newton:vehicle:is_wheel = true
+                    custom int newton:vehicle:wheel_id = 2
+                    custom int newton:vehicle:vehicle_id = 0
+                    custom float newton:vehicle:radius = 0.1625
+                    custom float newton:vehicle:width = 0.13
+                    custom bool newton:vehicle:driven = true
+                    custom int newton:vehicle:side = 1
+                    custom int newton:vehicle:axle_row = 0
                 }
             }
         }
 
         over "husky_rear_right_wheel"
         {
-            custom bool newton:wheeled:is_wheel_body = true
-            custom int newton:wheeled:wheel_body_id = 3
+            custom bool newton:vehicle:is_wheel_body = true
+            custom int newton:vehicle:wheel_body_id = 3
 
             over "Geometry"
             {
                 over "husky_rear_right_wheel"
                 {
-                    custom bool newton:wheeled:is_wheel = true
-                    custom int newton:wheeled:wheel_id = 3
-                    custom int newton:wheeled:vehicle_id = 0
-                    custom float newton:wheeled:wheel_radius = 0.1625
-                    custom float newton:wheeled:wheel_width = 0.13
+                    custom bool newton:vehicle:is_wheel = true
+                    custom int newton:vehicle:wheel_id = 3
+                    custom int newton:vehicle:vehicle_id = 0
+                    custom float newton:vehicle:radius = 0.1625
+                    custom float newton:vehicle:width = 0.13
+                    custom bool newton:vehicle:driven = true
+                    custom int newton:vehicle:side = 1
+                    custom int newton:vehicle:axle_row = 1
                 }
             }
         }

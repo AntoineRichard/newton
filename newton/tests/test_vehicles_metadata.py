@@ -18,6 +18,7 @@ from newton.tests.unittest_utils import USD_AVAILABLE
 
 _ASSET_DIR = Path(__file__).resolve().parents[1] / "examples" / "assets" / "wheeled"
 _MANIFEST_PATH = _ASSET_DIR / "manifest.json"
+_TEST_ASSET_DIR = Path(__file__).resolve().parent / "assets" / "wheeled"
 
 
 def _asset_by_name(name: str):
@@ -373,6 +374,79 @@ class TestVehicleManifestApplication(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "rc_car.*attached to body"):
             nv.apply_vehicle_manifest(builder, swapped)
+
+
+@unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
+class TestVehicleAuthoredUsdImport(unittest.TestCase):
+    """USD prim-filter auto-detect: ``newton:vehicle:*`` attributes authored in the asset."""
+
+    def test_authored_rc_car_auto_detect(self):
+        builder = newton.ModelBuilder()
+        nv.register_vehicle_attributes(builder)
+        builder.add_usd(str(_TEST_ASSET_DIR / "rc_car_wheeled_attrs.usda"))
+        model = builder.finalize(device="cpu")
+        data = nv.read_vehicle_model_data(model)
+
+        self.assertEqual(data.wheel_count, 4)
+        self.assertEqual(data.vehicle_count, 1)
+        self.assertEqual(model.get_custom_frequency_count("vehicle:wheel"), 4)
+        self.assertEqual(model.get_custom_frequency_count("vehicle:vehicle"), 1)
+        np.testing.assert_array_equal(data.wheel_vehicle.numpy(), [0, 0, 0, 0])
+        np.testing.assert_allclose(data.radius.numpy(), [0.055] * 4)
+        np.testing.assert_allclose(data.width.numpy(), [0.045] * 4)
+        self.assertEqual(int(data.drive_mode.numpy()[0]), int(nv.DriveMode.ACKERMANN))
+        np.testing.assert_allclose(data.wheelbase.numpy(), [0.324])
+        np.testing.assert_allclose(data.track_width.numpy(), [0.296])
+        np.testing.assert_allclose(data.steer_limit.numpy(), [math.radians(35.0)], rtol=1e-6)
+
+        # The asset stamps wheel ids in FL, RL, FR, RR prim order.
+        np.testing.assert_array_equal(data.side.numpy(), [-1, -1, 1, 1])
+        np.testing.assert_array_equal(data.axle_row.numpy(), [0, 1, 0, 1])
+        np.testing.assert_array_equal(data.steerable.numpy(), [1, 0, 1, 0])
+        np.testing.assert_array_equal(data.driven.numpy(), [1, 1, 1, 1])
+        wheel_shapes = data.wheel_shape.numpy()
+        expected_leaves = ("front_left", "rear_left", "front_right", "rear_right")
+        for wheel_id, shape in enumerate(wheel_shapes):
+            self.assertIn(expected_leaves[wheel_id], model.shape_label[int(shape)])
+
+        # shape_to_wheel is the inverse of wheel_shape.
+        shape_to_wheel = data.shape_to_wheel.numpy()
+        for wheel_id, shape in enumerate(wheel_shapes):
+            self.assertEqual(int(shape_to_wheel[int(shape)]), wheel_id)
+
+    def test_authored_husky_auto_detect(self):
+        builder = newton.ModelBuilder()
+        nv.register_vehicle_attributes(builder)
+        builder.add_usd(str(_TEST_ASSET_DIR / "husky_wheeled_attrs.usda"))
+        model = builder.finalize(device="cpu")
+        data = nv.read_vehicle_model_data(model)
+
+        self.assertEqual(data.wheel_count, 4)
+        self.assertEqual(data.vehicle_count, 1)
+        np.testing.assert_array_equal(data.wheel_vehicle.numpy(), [0, 0, 0, 0])
+        np.testing.assert_allclose(data.radius.numpy(), [0.1625] * 4)
+        np.testing.assert_allclose(data.width.numpy(), [0.13] * 4)
+        self.assertEqual(int(data.drive_mode.numpy()[0]), int(nv.DriveMode.SKID_STEER))
+        np.testing.assert_array_equal(data.steerable.numpy(), [0, 0, 0, 0])
+        np.testing.assert_array_equal(data.side.numpy(), [-1, -1, 1, 1])
+        np.testing.assert_array_equal(data.axle_row.numpy(), [0, 1, 0, 1])
+
+    def test_authored_replicated_preserves_ids(self):
+        template = newton.ModelBuilder()
+        nv.register_vehicle_attributes(template)
+        template.add_usd(str(_TEST_ASSET_DIR / "rc_car_wheeled_attrs.usda"))
+
+        scene = newton.ModelBuilder()
+        scene.replicate(template, 2)
+        model = scene.finalize(device="cpu")
+        data = nv.read_vehicle_model_data(model)
+
+        self.assertEqual(data.wheel_count, 8)
+        self.assertEqual(data.vehicle_count, 2)
+        self.assertEqual(model.get_custom_frequency_count("vehicle:vehicle"), 2)
+        np.testing.assert_array_equal(data.wheel_vehicle.numpy(), [0, 0, 0, 0, 1, 1, 1, 1])
+        np.testing.assert_array_equal(data.vehicle_wheel_count.numpy(), [4, 4])
+        np.testing.assert_allclose(data.radius.numpy(), [0.055] * 8)
 
 
 if __name__ == "__main__":

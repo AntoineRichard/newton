@@ -18,4 +18,3 @@
    api/newton_utils
    api/newton_vehicles
    api/newton_viewer
-   api/newton_wheeled
