@@ -11,7 +11,7 @@ import newton
 import newton.vehicles as nv
 from newton._src.vehicles.vehicle import VehicleCommands, update_vehicle_controls
 from newton._src.vehicles.wheel import WheelDynamics
-from newton.tests.unittest_utils import add_function_test, get_test_devices
+from newton.tests.vehicles_test_utils import add_function_test, get_test_devices
 
 _LAYOUT = ((0.5, 0.3, 0), (0.5, -0.3, 0), (-0.5, 0.3, 1), (-0.5, -0.3, 1))
 

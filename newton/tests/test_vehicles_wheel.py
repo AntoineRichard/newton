@@ -9,7 +9,7 @@ import newton
 import newton.vehicles as nv
 from newton._src.vehicles.contact import WheelContactPatch
 from newton._src.vehicles.wheel import WheelDynamics, apply_wheel_dynamics
-from newton.tests.unittest_utils import add_function_test, get_test_devices
+from newton.tests.vehicles_test_utils import add_function_test, get_test_devices
 
 
 def _fill(arr, value):

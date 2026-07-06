@@ -11,7 +11,7 @@ import newton.vehicles as nv
 from newton._src.vehicles.contact import WheelContactPatch
 from newton._src.vehicles.impulse import solve_tire_impulse, solve_tire_impulse_relaxed, vec6, wheel_effective_mass
 from newton._src.vehicles.wheel import WheelDynamics, apply_wheel_dynamics
-from newton.tests.unittest_utils import add_function_test, get_test_devices
+from newton.tests.vehicles_test_utils import add_function_test, get_test_devices
 
 
 @wp.kernel

@@ -10,7 +10,7 @@ import warp as wp
 import newton
 import newton.vehicles as nv
 from newton._src.vehicles.contact import WheelContactPatch, latch_wheel_loads, update_wheel_contact_patches
-from newton.tests.unittest_utils import add_function_test, get_test_devices
+from newton.tests.vehicles_test_utils import add_function_test, get_test_devices
 
 
 def _build_wheel_on_plane(device, *, radius=0.2, half_width=0.05, start_gap=0.01):

@@ -13,7 +13,7 @@ import warp as wp
 
 import newton
 import newton.vehicles as nv
-from newton.tests.unittest_utils import USD_AVAILABLE
+from newton.tests.vehicles_test_utils import USD_AVAILABLE
 
 _ASSET_DIR = Path(__file__).resolve().parents[1] / "examples" / "assets" / "wheeled"
 _MANIFEST_PATH = _ASSET_DIR / "manifest.json"

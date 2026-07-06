@@ -9,7 +9,7 @@ import warp as wp
 
 import newton
 import newton.vehicles as nv
-from newton.tests.unittest_utils import add_function_test, get_test_devices
+from newton.tests.vehicles_test_utils import add_function_test, get_test_devices
 
 _R = 0.08  # wheel radius
 # long/low/wide layout so traction does not induce a wheelie on the rigid test car

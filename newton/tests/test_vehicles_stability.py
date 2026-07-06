@@ -30,7 +30,7 @@ import warp as wp
 import newton
 import newton.vehicles as nv
 from newton.tests.test_vehicles_controller import _steer_front_axle
-from newton.tests.unittest_utils import add_function_test, get_test_devices
+from newton.tests.vehicles_test_utils import add_function_test, get_test_devices
 
 _DT = 1.0 / 240.0
 _R = 0.055  # wheel radius [m], matching the rc_car scale
