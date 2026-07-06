@@ -63,6 +63,7 @@ from .sdf_mc import (
     get_triangle_fraction,
 )
 from .sdf_texture import TextureSDFData, texture_sample_sdf, texture_sample_sdf_at_voxel
+from .types import GeoType
 from .utils import scan_with_total
 
 vec8f = wp.types.vector(length=8, dtype=wp.float32)
@@ -100,6 +101,34 @@ def get_effective_stiffness(k_a: wp.float32, k_b: wp.float32) -> wp.float32:
     if denom <= 0.0:
         return 0.0
     return (k_a * k_b) / denom
+
+
+@wp.func
+def sdf_box_intersects_plane(
+    sdf_data: TextureSDFData,
+    X_ws_sdf: wp.transform,
+    X_ws_plane: wp.transform,
+    gap_sum: wp.float32,
+) -> bool:
+    half_extents = 0.5 * (sdf_data.sdf_box_upper - sdf_data.sdf_box_lower)
+    center_offset = 0.5 * (sdf_data.sdf_box_lower + sdf_data.sdf_box_upper)
+    centered_transform = wp.transform_multiply(X_ws_sdf, wp.transform(center_offset, wp.quat_identity()))
+
+    plane_normal = wp.normalize(wp.transform_vector(X_ws_plane, wp.vec3(0.0, 0.0, 1.0)))
+    plane_origin = wp.transform_get_translation(X_ws_plane)
+    center = wp.transform_get_translation(centered_transform)
+    rotation = wp.transform_get_rotation(centered_transform)
+
+    axis_x = wp.quat_rotate(rotation, wp.vec3(1.0, 0.0, 0.0))
+    axis_y = wp.quat_rotate(rotation, wp.vec3(0.0, 1.0, 0.0))
+    axis_z = wp.quat_rotate(rotation, wp.vec3(0.0, 0.0, 1.0))
+    projected_radius = (
+        wp.abs(wp.dot(plane_normal, axis_x)) * half_extents[0]
+        + wp.abs(wp.dot(plane_normal, axis_y)) * half_extents[1]
+        + wp.abs(wp.dot(plane_normal, axis_z)) * half_extents[2]
+    )
+    signed_distance = wp.dot(center - plane_origin, plane_normal)
+    return signed_distance - projected_radius <= gap_sum
 
 
 @wp.struct
@@ -579,6 +608,7 @@ class HydroelasticSDF:
             HydroelasticSDF instance, or None if no hydroelastic shape pairs exist.
         """
         shape_flags = model.shape_flags.numpy()
+        shape_type = model.shape_type.numpy()
 
         # Check if any shapes have hydroelastic flag
         has_hydroelastic = any((flags & ShapeFlags.HYDROELASTIC) for flags in shape_flags)
@@ -589,7 +619,8 @@ class HydroelasticSDF:
         num_hydroelastic_pairs = 0
         for shape_a, shape_b in shape_pairs:
             if (shape_flags[shape_a] & ShapeFlags.HYDROELASTIC) and (shape_flags[shape_b] & ShapeFlags.HYDROELASTIC):
-                num_hydroelastic_pairs += 1
+                if shape_type[shape_a] != GeoType.PLANE or shape_type[shape_b] != GeoType.PLANE:
+                    num_hydroelastic_pairs += 1
 
         if num_hydroelastic_pairs == 0:
             return None
@@ -609,6 +640,8 @@ class HydroelasticSDF:
         for idx in hydroelastic_indices:
             sdf_idx = int(shape_sdf_index[idx])
             if sdf_idx < 0:
+                if shape_type[idx] == GeoType.PLANE:
+                    continue
                 raise ValueError(f"Hydroelastic shape {idx} requires SDF data but has no attached/generated SDF.")
             if sdf_idx >= len(coarse_textures) or coarse_textures[sdf_idx] is None:
                 raise ValueError(
@@ -632,6 +665,8 @@ class HydroelasticSDF:
         for idx in hydroelastic_indices:
             sdf_idx = int(shape_sdf_index[idx])
             if sdf_idx < 0:
+                if shape_type[idx] == GeoType.PLANE:
+                    continue
                 raise ValueError(f"Hydroelastic shape {idx} requires SDF data but has no attached/generated SDF.")
             if sdf_idx >= len(coarse_textures) or coarse_textures[sdf_idx] is None:
                 raise ValueError(
@@ -713,14 +748,16 @@ class HydroelasticSDF:
 
         self._broadphase_sdfs(
             shape_sdf_data,
+            shape_sdf_index,
             shape_transform,
+            shape_gap,
             shape_pairs_sdf_sdf,
             shape_pairs_sdf_sdf_count,
         )
 
-        self._find_iso_voxels(shape_sdf_data, shape_transform, shape_gap)
+        self._find_iso_voxels(shape_sdf_data, shape_sdf_index, shape_transform, shape_gap)
 
-        self._generate_contacts(shape_sdf_data, shape_transform, shape_gap)
+        self._generate_contacts(shape_sdf_data, shape_sdf_index, shape_transform, shape_gap)
 
         if self.config.reduce_contacts:
             self._reduce_decode_contacts(
@@ -779,7 +816,9 @@ class HydroelasticSDF:
     def _broadphase_sdfs(
         self,
         shape_sdf_data: wp.array[TextureSDFData],
+        shape_sdf_index: wp.array[wp.int32],
         shape_transform: wp.array[wp.transform],
+        shape_gap: wp.array[wp.float32],
         shape_pairs_sdf_sdf: wp.array[wp.vec2i],
         shape_pairs_sdf_sdf_count: wp.array[wp.int32],
     ) -> None:
@@ -792,6 +831,8 @@ class HydroelasticSDF:
             inputs=[
                 shape_transform,
                 shape_sdf_data,
+                shape_sdf_index,
+                shape_gap,
                 shape_pairs_sdf_sdf,
                 shape_pairs_sdf_sdf_count,
             ],
@@ -819,6 +860,7 @@ class HydroelasticSDF:
                 shape_pairs_sdf_sdf,
                 shape_pairs_sdf_sdf_count,
                 shape_sdf_data,
+                shape_sdf_index,
                 self.max_num_blocks_broad,
             ],
             outputs=[
@@ -832,6 +874,7 @@ class HydroelasticSDF:
     def _find_iso_voxels(
         self,
         shape_sdf_data: wp.array[TextureSDFData],
+        shape_sdf_index: wp.array[wp.int32],
         shape_transform: wp.array[wp.transform],
         shape_gap: wp.array[wp.float32],
     ) -> None:
@@ -846,6 +889,7 @@ class HydroelasticSDF:
                     self.grid_size,
                     self.iso_buffer_counts[i],
                     shape_sdf_data,
+                    shape_sdf_index,
                     shape_transform,
                     self.pressure_data,
                     self.iso_buffer_coords[i],
@@ -895,6 +939,7 @@ class HydroelasticSDF:
     def _generate_contacts(
         self,
         shape_sdf_data: wp.array[TextureSDFData],
+        shape_sdf_index: wp.array[wp.int32],
         shape_transform: wp.array[wp.transform],
         shape_gap: wp.array[wp.float32],
         shape_local_aabb_lower: wp.array | None = None,
@@ -925,6 +970,7 @@ class HydroelasticSDF:
                 self.grid_size,
                 self.iso_voxel_count,
                 shape_sdf_data,
+                shape_sdf_index,
                 shape_transform,
                 self.shape_material_kh,
                 self.pressure_data,
@@ -1032,6 +1078,8 @@ def shape_subgrid_dims(sdf: TextureSDFData) -> wp.vec3i:
 def broadphase_collision_pairs_count(
     shape_transform: wp.array[wp.transform],
     shape_sdf_data: wp.array[TextureSDFData],
+    shape_sdf_index: wp.array[wp.int32],
+    shape_gap: wp.array[wp.float32],
     shape_pairs_sdf_sdf: wp.array[wp.vec2i],
     shape_pairs_sdf_sdf_count: wp.array[wp.int32],
     # outputs
@@ -1044,6 +1092,40 @@ def broadphase_collision_pairs_count(
     pair = shape_pairs_sdf_sdf[tid]
     shape_a = pair[0]
     shape_b = pair[1]
+
+    # Analytic plane + SDF pairs: the plane has no SDF texture, so iterate over
+    # the SDF shape's subgrids and cull with an OBB-vs-plane test.
+    sdf_idx_a = shape_sdf_index[shape_a]
+    sdf_idx_b = shape_sdf_index[shape_b]
+    if sdf_idx_a < 0 or sdf_idx_b < 0:
+        if sdf_idx_a < 0 and sdf_idx_b < 0:
+            thread_num_blocks[tid] = 0
+            return
+
+        plane_shape = shape_a
+        sdf_shape = shape_b
+        if sdf_idx_b < 0:
+            plane_shape = shape_b
+            sdf_shape = shape_a
+
+        dims = shape_subgrid_dims(shape_sdf_data[sdf_shape])
+        num_blocks = dims[0] * dims[1] * dims[2]
+        if num_blocks <= 0:
+            thread_num_blocks[tid] = 0
+            return
+
+        does_collide = sdf_box_intersects_plane(
+            shape_sdf_data[sdf_shape],
+            shape_transform[sdf_shape],
+            shape_transform[plane_shape],
+            shape_gap[shape_a] + shape_gap[shape_b],
+        )
+        if does_collide:
+            thread_num_blocks[tid] = num_blocks
+        else:
+            thread_num_blocks[tid] = 0
+        return
+
     sdf_a = shape_sdf_data[shape_a]
     sdf_b = shape_sdf_data[shape_b]
     half_extents_a = 0.5 * (sdf_a.sdf_box_upper - sdf_a.sdf_box_lower)
@@ -1083,6 +1165,7 @@ def broadphase_collision_pairs_scatter(
     shape_pairs_sdf_sdf: wp.array[wp.vec2i],
     shape_pairs_sdf_sdf_count: wp.array[wp.int32],
     shape_sdf_data: wp.array[TextureSDFData],
+    shape_sdf_index: wp.array[wp.int32],
     max_num_blocks_broad: int,
     # outputs
     block_broad_collide_shape_pair: wp.array[wp.vec2i],
@@ -1110,12 +1193,21 @@ def broadphase_collision_pairs_scatter(
         shape_a = pair[0]
         shape_b = pair[1]
 
-        # Sort shapes so the one with smaller voxel size is shape_b
-        sdf_a = shape_sdf_data[shape_a]
-        sdf_b = shape_sdf_data[shape_b]
-        if sdf_b.voxel_radius > sdf_a.voxel_radius:
-            shape_a, shape_b = shape_b, shape_a
-            sdf_a, sdf_b = sdf_b, sdf_a
+        sdf_idx_a = shape_sdf_index[shape_a]
+        sdf_idx_b = shape_sdf_index[shape_b]
+        if sdf_idx_a < 0 or sdf_idx_b < 0:
+            # Plane + SDF: force the plane to shape_a so the SDF shape (shape_b)
+            # drives subgrid iteration.
+            if sdf_idx_b < 0:
+                shape_a, shape_b = shape_b, shape_a
+            sdf_b = shape_sdf_data[shape_b]
+        else:
+            # Sort shapes so the one with smaller voxel size is shape_b
+            sdf_a = shape_sdf_data[shape_a]
+            sdf_b = shape_sdf_data[shape_b]
+            if sdf_b.voxel_radius > sdf_a.voxel_radius:
+                shape_a, shape_b = shape_b, shape_a
+                sdf_a, sdf_b = sdf_b, sdf_a
 
         block_in_pair = block_tid - block_start_prefix[pair_idx]
 
@@ -1169,6 +1261,7 @@ def create_count_iso_voxels_block_kernel(pressure_func: Any):
         grid_size: int,
         in_buffer_collide_count: wp.array[int],
         shape_sdf_data: wp.array[TextureSDFData],
+        shape_sdf_index: wp.array[wp.int32],
         shape_transform: wp.array[wp.transform],
         pressure_data: Any,
         in_buffer_collide_coords: wp.array[wp.vec3us],
@@ -1206,6 +1299,7 @@ def create_count_iso_voxels_block_kernel(pressure_func: Any):
             bc = in_buffer_collide_coords[tid]
 
             X_b_to_a = wp.transform_multiply(wp.transform_inverse(X_ws_a), X_ws_b)
+            other_is_plane = shape_sdf_index[shape_a] < 0
 
             num_iso_subblocks = wp.int32(0)
             subblock_idx = wp.uint8(0)
@@ -1219,8 +1313,13 @@ def create_count_iso_voxels_block_kernel(pressure_func: Any):
                         local_pos_b = sdf_data_b.sdf_box_lower + wp.cw_mul(x_center, sdf_data_b.voxel_size)
                         point_a = wp.transform_point(X_b_to_a, local_pos_b)
                         vb = texture_sample_sdf(sdf_data_b, local_pos_b)
-                        va = texture_sample_sdf(sdf_data_a, point_a)
-                        is_valid = not (wp.isnan(vb) or wp.isnan(va))
+                        va = float(0.0)
+                        is_valid = not wp.isnan(vb)
+                        if other_is_plane:
+                            va = point_a[2]
+                        else:
+                            va = texture_sample_sdf(sdf_data_a, point_a)
+                            is_valid = is_valid and not wp.isnan(va)
                         if not is_valid or va > r + gap_a or vb > r + gap_b:
                             continue
 
@@ -1302,6 +1401,7 @@ def create_mc_iterate_voxel_vertices_func(pressure_func: Any):
         shape_other: wp.int32,
         pressure_data: Any,
         gap_sum: wp.float32,
+        other_is_plane: bool,
     ):
         """Iterate over the vertices of a voxel and return the cube index, corner values, and whether any vertices are inside the shape."""
         cube_idx = wp.uint8(0)
@@ -1320,9 +1420,13 @@ def create_mc_iterate_voxel_vertices_func(pressure_func: Any):
             local_pos_a = sdf_data.sdf_box_lower + wp.cw_mul(wp.vec3(float(x), float(y), float(z)), sdf_data.voxel_size)
             point_b = wp.transform_point(X_a_to_b, local_pos_a)
             valA = texture_sample_sdf_at_voxel(sdf_data, x, y, z)
-            valB = texture_sample_sdf(sdf_other_data, point_b)
-
-            is_valid = not (wp.isnan(valA) or wp.isnan(valB))
+            valB = float(0.0)
+            is_valid = not wp.isnan(valA)
+            if other_is_plane:
+                valB = point_b[2]
+            else:
+                valB = texture_sample_sdf(sdf_other_data, point_b)
+                is_valid = is_valid and not wp.isnan(valB)
             if not is_valid:
                 return wp.uint8(0), corner_vals, corner_sdf_vals, False, False
 
@@ -1542,6 +1646,7 @@ def get_generate_contacts_kernel(
         grid_size: int,
         iso_voxel_count: wp.array[wp.int32],
         shape_sdf_data: wp.array[TextureSDFData],
+        shape_sdf_index: wp.array[wp.int32],
         shape_transform: wp.array[wp.transform],
         shape_material_kh: wp.array[float],
         pressure_data: Any,
@@ -1585,6 +1690,8 @@ def get_generate_contacts_kernel(
             k_a = shape_material_kh[shape_a]
             k_b = shape_material_kh[shape_b]
 
+            other_is_plane = shape_sdf_index[shape_a] < 0
+
             x_id = wp.int32(iso_coords.x)
             y_id = wp.int32(iso_coords.y)
             z_id = wp.int32(iso_coords.z)
@@ -1603,6 +1710,7 @@ def get_generate_contacts_kernel(
                 shape_a,
                 pressure_data,
                 gap_sum,
+                other_is_plane,
             )
 
             range_idx = wp.int32(cube_idx)

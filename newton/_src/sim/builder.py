@@ -343,8 +343,11 @@ class ModelBuilder:
         """Whether the shape collides using SDF-based hydroelastics. For hydroelastic collisions, both participating shapes must have is_hydroelastic set to True. Defaults to False.
 
         .. note::
-            Hydroelastic collision handling only works with volumetric shapes and in particular will not work for shapes like flat meshes or cloth.
-            This flag will be automatically set to False for planes and heightfields in :meth:`ModelBuilder.add_shape`.
+            Hydroelastic collision handling only works with volumetric shapes and
+            analytic planes and in particular will not work for shapes like flat
+            meshes or cloth.
+            This flag will be automatically set to False for heightfields in
+            :meth:`ModelBuilder.add_shape`.
         """
         kh: float = 1.0e10
         """Hydroelastic contact stiffness coefficient [N/m^3].
@@ -431,7 +434,7 @@ class ModelBuilder:
                     f"sdf_max_resolution must be divisible by 8 (got {self.sdf_max_resolution}). "
                     "This is required because SDF volumes are allocated in 8x8x8 tiles."
                 )
-            hydroelastic_supported = shape_type not in (GeoType.PLANE, GeoType.HFIELD)
+            hydroelastic_supported = shape_type != GeoType.HFIELD
             hydroelastic_requires_configured_sdf = shape_type in (
                 GeoType.SPHERE,
                 GeoType.BOX,
@@ -5763,12 +5766,11 @@ class ModelBuilder:
         self.body_shapes[body].append(shape)
         self.shape_label.append(label or f"shape_{shape}")
         self.shape_transform.append(xform)
-        # Get flags and clear HYDROELASTIC for unsupported shape types (PLANE, HFIELD)
+        # Get flags and clear HYDROELASTIC for unsupported shape types (HFIELD)
         shape_flags = cfg.flags
-        if (shape_flags & ShapeFlags.HYDROELASTIC) and (type == GeoType.PLANE or type == GeoType.HFIELD):
-            shape_flags &= (
-                ~ShapeFlags.HYDROELASTIC
-            )  # Falling back to mesh/primitive collisions for plane and hfield shapes
+        if (shape_flags & ShapeFlags.HYDROELASTIC) and type == GeoType.HFIELD:
+            # Falling back to mesh/primitive collisions for hfield shapes.
+            shape_flags &= ~ShapeFlags.HYDROELASTIC
 
         resolved_color = ModelBuilder._coerce_shape_color(color)
         if resolved_color is None and src is not None:
@@ -10540,11 +10542,11 @@ class ModelBuilder:
                     strict=True,
                 )
             )
-            has_hydroelastic_shapes = any(
-                (sflags & ShapeFlags.HYDROELASTIC) and (sflags & ShapeFlags.COLLIDE_SHAPES)
-                for sflags in self.shape_flags
+            has_hydroelastic_sdf_shapes = any(
+                (sflags & ShapeFlags.HYDROELASTIC) and (sflags & ShapeFlags.COLLIDE_SHAPES) and stype != GeoType.PLANE
+                for stype, sflags in zip(self.shape_type, self.shape_flags, strict=True)
             )
-            if (has_mesh_sdf or has_deferred_mesh_sdf or has_hydroelastic_shapes) and not is_gpu:
+            if (has_mesh_sdf or has_deferred_mesh_sdf or has_hydroelastic_sdf_shapes) and not is_gpu:
                 raise ValueError(
                     "Building texture SDFs requires a CUDA-capable GPU device. "
                     "The texture SDF build path uses wp.Volume.allocate_by_tiles "
@@ -10633,7 +10635,7 @@ class ModelBuilder:
                     if mesh_sdf is not None:
                         cache_key = ("mesh_sdf", id(mesh_sdf))
                 elif has_shape_collision and (
-                    is_hydroelastic
+                    (is_hydroelastic and shape_type != GeoType.PLANE)
                     or (
                         shape_type == GeoType.BOX
                         and (sdf_max_resolution is not None or sdf_target_voxel_size is not None)
