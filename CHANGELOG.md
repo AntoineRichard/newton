@@ -19,6 +19,7 @@
 - Expose `MeshAdjacencyData` (the device-resident soft-mesh adjacency struct returned by `MeshAdjacency.to()`) as public API for use in custom Warp kernels
 - Add `Model.AttributeSpec` and `Model.attribute_specs` for declaring model-attribute indexing, references, and view/compaction behavior in one metadata registry.
 - Add `ModelBuilder.BvhConfig` for selecting Warp BVH constructors during model finalization for mesh, Gaussian, and shape BVHs.
+- Add `ModelBuilder.set_joint_type()` to change an existing joint's type before finalization, updating coordinate, DOF, and constraint bookkeeping in place; v1 supports converting any joint to `JointType.FIXED` (locking).
 - Add an experimental coupled solver framework:
   - Introduce `newton.solvers.experimental.coupled` with `SolverCoupled`, `SolverCoupledProxy`, `SolverCoupledADMM`, and `ModelView` for multi-solver ownership, state mapping, and view-local model overrides.
   - Support body and particle proxy coupling with virtual inertia, solver hooks, MPM collider/transfer proxies, and convergence diagnostics.

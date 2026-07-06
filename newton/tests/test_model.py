@@ -781,7 +781,7 @@ class TestModelMesh(unittest.TestCase):
     def test_shape_gap_negative_warning(self):
         """Test that a warning is raised when shape gap < 0."""
         builder = ModelBuilder()
-        body = builder.add_body(mass=1.0)
+        body = builder.add_link(mass=1.0)
 
         # Create a shape with negative gap (should trigger warning)
         cfg = ModelBuilder.ShapeConfig()
@@ -801,7 +801,7 @@ class TestModelMesh(unittest.TestCase):
     def test_shape_gap_non_negative_no_warning(self):
         """Test that no warning is raised when shape gap >= 0."""
         builder = ModelBuilder()
-        body = builder.add_body(mass=1.0)
+        body = builder.add_link(mass=1.0)
 
         # Create a shape with non-negative gap (should not trigger warning)
         cfg = ModelBuilder.ShapeConfig()
@@ -819,7 +819,7 @@ class TestModelMesh(unittest.TestCase):
     def test_shape_gap_warning_multiple_shapes(self):
         """Test that the warning correctly reports multiple shapes with gap < 0."""
         builder = ModelBuilder()
-        body = builder.add_body(mass=1.0)
+        body = builder.add_link(mass=1.0)
 
         # Create multiple shapes with negative gap
         cfg_bad = ModelBuilder.ShapeConfig()
@@ -976,7 +976,7 @@ class TestModelMesh(unittest.TestCase):
     def test_validate_structure_invalid_shape_body(self):
         """Test that _validate_structure catches invalid shape_body references."""
         builder = ModelBuilder()
-        body = builder.add_body(mass=1.0)
+        body = builder.add_link(mass=1.0)
         builder.add_shape_sphere(body=body, radius=0.5, label="test_shape")
 
         # Manually set invalid body reference
@@ -2093,6 +2093,127 @@ class TestModelJoints(unittest.TestCase):
         self.assertEqual(builder.joint_parent[joint_id], parent_body)
 
 
+class TestModelSetJointType(unittest.TestCase):
+    def _two_revolute_chain(self):
+        builder = ModelBuilder()
+        b0 = builder.add_link(mass=1.0)
+        j0 = builder.add_joint_revolute(parent=-1, child=b0, axis=wp.vec3(0.0, 0.0, 1.0))
+        b1 = builder.add_link(mass=1.0)
+        j1 = builder.add_joint_revolute(parent=b0, child=b1, axis=wp.vec3(0.0, 0.0, 1.0))
+        builder.add_articulation([j0, j1])
+        return builder, j0, j1
+
+    def test_revolute_to_fixed_reduces_counts_and_remaps_starts(self):
+        builder, j0, _ = self._two_revolute_chain()
+        # Two revolute joints: 2 coords, 2 DOFs, 5 constraints each.
+        self.assertEqual(builder.joint_coord_count, 2)
+        self.assertEqual(builder.joint_dof_count, 2)
+        self.assertEqual(builder.joint_constraint_count, 10)
+
+        builder.set_joint_type(j0, newton.JointType.FIXED)
+
+        # Joint count is preserved; only the type and per-DOF bookkeeping change.
+        self.assertEqual(builder.joint_count, 2)
+        self.assertEqual(builder.joint_type, [newton.JointType.FIXED, newton.JointType.REVOLUTE])
+        self.assertEqual(builder.joint_dof_dim[j0], (0, 0))
+        # j0 loses its coord/DOF; j1 keeps one of each.
+        self.assertEqual(builder.joint_coord_count, 1)
+        self.assertEqual(builder.joint_dof_count, 1)
+        # Fixed adds 6 constraints, surviving revolute keeps 5.
+        self.assertEqual(builder.joint_constraint_count, 11)
+        # Subsequent joint start indices are remapped consistently.
+        self.assertEqual(builder.joint_q_start, [0, 0])
+        self.assertEqual(builder.joint_qd_start, [0, 0])
+        self.assertEqual(builder.joint_cts_start, [0, 6])
+        # Per-DOF/coord arrays shrink to the new DOF/coord counts.
+        self.assertEqual(len(builder.joint_q), 1)
+        self.assertEqual(len(builder.joint_qd), 1)
+        self.assertEqual(len(builder.joint_axis), 1)
+        self.assertEqual(len(builder.joint_armature), 1)
+        self.assertEqual(len(builder.joint_target_q), 1)
+        self.assertEqual(len(builder.joint_cts), 11)
+
+    def test_preserves_child_pose_through_finalize(self):
+        px = wp.transform((0.5, 0.0, 0.2), wp.quat_from_axis_angle(wp.vec3(0.0, 0.0, 1.0), 0.3))
+        cx = wp.transform((0.0, 0.1, 0.0), wp.quat_identity())
+
+        def _eval(convert):
+            builder = ModelBuilder()
+            body = builder.add_link(mass=1.0)
+            if convert:
+                joint = builder.add_joint_revolute(
+                    parent=-1, child=body, axis=wp.vec3(0.0, 0.0, 1.0), parent_xform=px, child_xform=cx
+                )
+            else:
+                joint = builder.add_joint_fixed(parent=-1, child=body, parent_xform=px, child_xform=cx)
+            builder.add_articulation([joint])
+            if convert:
+                builder.set_joint_type(joint, newton.JointType.FIXED)
+            model = builder.finalize()
+            state = model.state()
+            newton.eval_fk(model, model.joint_q, model.joint_qd, state)
+            return state.body_q.numpy()
+
+        assert_np_equal(_eval(convert=True), _eval(convert=False), tol=1.0e-5)
+
+    def test_noop_conversion_to_same_type(self):
+        builder, j0, _ = self._two_revolute_chain()
+        before = (list(builder.joint_type), builder.joint_dof_count, builder.joint_coord_count)
+        builder.set_joint_type(j0, newton.JointType.REVOLUTE)
+        after = (list(builder.joint_type), builder.joint_dof_count, builder.joint_coord_count)
+        self.assertEqual(before, after)
+
+    def test_unsupported_conversion_raises(self):
+        builder, j0, _ = self._two_revolute_chain()
+        with self.assertRaises(NotImplementedError):
+            builder.set_joint_type(j0, newton.JointType.BALL)
+        # State is unchanged after the failed conversion.
+        self.assertEqual(builder.joint_dof_count, 2)
+
+    def test_out_of_range_index_raises(self):
+        builder, _, _ = self._two_revolute_chain()
+        with self.assertRaises(ValueError):
+            builder.set_joint_type(5, newton.JointType.FIXED)
+        with self.assertRaises(ValueError):
+            builder.set_joint_type(-1, newton.JointType.FIXED)
+
+    def test_remaps_dof_custom_attribute(self):
+        builder, j0, _ = self._two_revolute_chain()
+        builder.add_custom_attribute(
+            ModelBuilder.CustomAttribute(
+                name="dof_tag",
+                dtype=wp.float32,
+                frequency=newton.Model.AttributeFrequency.JOINT_DOF,
+                default=0.0,
+                # DOF 0 belongs to j0 (removed), DOF 1 belongs to j1 (survives, remaps to 0).
+                values={0: 10.0, 1: 20.0},
+            )
+        )
+        builder.set_joint_type(j0, newton.JointType.FIXED)
+        # The removed DOF is dropped; the surviving DOF keeps its value at its new index.
+        self.assertEqual(builder.custom_attributes["dof_tag"].values, {0: 20.0})
+
+    def test_mujoco_smoke_step_with_locked_joint(self):
+        builder, j0, _ = self._two_revolute_chain()
+        builder.set_joint_type(j0, newton.JointType.FIXED)
+        model = builder.finalize()
+
+        try:
+            solver = newton.solvers.SolverMuJoCo(model, iterations=1, ls_iterations=1)
+        except ImportError as e:
+            self.skipTest(f"MuJoCo or deps not installed: {e}")
+        except Exception as e:
+            self.skipTest(f"Error initializing SolverMuJoCo: {e}")
+
+        state_in = model.state()
+        state_out = model.state()
+        control = model.control()
+        contacts = model.contacts()
+        # Finalizing and stepping a model with a locked joint must not raise
+        # (regression against the "MuJoCo qpos N < expected M" DOF-accounting bug).
+        solver.step(state_in, state_out, control, contacts, 0.01)
+
+
 class TestModelWorld(unittest.TestCase):
     def test_add_world_with_open_edges(self):
         builder = ModelBuilder()
@@ -2359,7 +2480,7 @@ class TestModelWorld(unittest.TestCase):
 
         # Create a simple sub-builder
         sub_builder = ModelBuilder()
-        sub_builder.add_body(mass=1.0)
+        sub_builder.add_link(mass=1.0)
 
         # Test 1: Global entities should not increment world_count
         self.assertEqual(main_builder.world_count, 0)
@@ -2399,7 +2520,7 @@ class TestModelWorld(unittest.TestCase):
         # Test non-contiguous worlds
         builder1 = ModelBuilder()
         sub_builder = ModelBuilder()
-        sub_builder.add_body(mass=1.0)
+        sub_builder.add_link(mass=1.0)
 
         # Create world 0 and world 2, skipping world 1
         # We need to manually manipulate world indices to create invalid cases
@@ -2554,8 +2675,8 @@ class TestModelValidation(unittest.TestCase):
     def test_validate_structure_invalid_equality_constraint_body(self):
         """Test that _validate_structure catches invalid equality constraint body references."""
         builder = ModelBuilder()
-        body1 = builder.add_body(mass=1.0)
-        body2 = builder.add_body(mass=1.0)
+        body1 = builder.add_link(mass=1.0)
+        body2 = builder.add_link(mass=1.0)
         _add_equality_constraint(
             builder,
             constraint_type=newton.solvers.SolverMuJoCo.EqType.WELD,
