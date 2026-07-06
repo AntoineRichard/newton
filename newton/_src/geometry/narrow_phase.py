@@ -217,13 +217,15 @@ def create_narrow_phase_primitive_kernel(writer_func: Any):
                 shape_a, shape_b = shape_b, shape_a
                 type_a, type_b = type_b, type_a
 
-            # Check if both shapes are hydroelastic - route to SDF-SDF pipeline
+            # Check if both shapes are hydroelastic - route to SDF hydroelastic pipeline.
+            # Analytic plane + SDF pairs are supported; plane-plane pairs have no finite contact patch.
             is_hydro_a = (shape_flags[shape_a] & ShapeFlags.HYDROELASTIC) != 0
             is_hydro_b = (shape_flags[shape_b] & ShapeFlags.HYDROELASTIC) != 0
             if is_hydro_a and is_hydro_b and shape_pairs_sdf_sdf:
-                idx = wp.atomic_add(shape_pairs_sdf_sdf_count, 0, 1)
-                if idx < shape_pairs_sdf_sdf.shape[0]:
-                    shape_pairs_sdf_sdf[idx] = wp.vec2i(shape_a, shape_b)
+                if type_a != GeoType.PLANE or type_b != GeoType.PLANE:
+                    idx = wp.atomic_add(shape_pairs_sdf_sdf_count, 0, 1)
+                    if idx < shape_pairs_sdf_sdf.shape[0]:
+                        shape_pairs_sdf_sdf[idx] = wp.vec2i(shape_a, shape_b)
                 continue
 
             # Get shape data

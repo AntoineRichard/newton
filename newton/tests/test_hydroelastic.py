@@ -116,7 +116,10 @@ def build_stacked_cubes_scene(
             gap=contact_gap,
         )
 
-    builder.add_ground_plane()
+    # Keep the ground plane non-hydroelastic so this scene exercises only the
+    # cube-cube hydroelastic pairs (analytic hydroelastic planes are supported
+    # but would add plane-cube pairs and change the expected sdf-sdf count).
+    builder.add_ground_plane(cfg=newton.ModelBuilder.ShapeConfig(mu=0.5, gap=contact_gap, is_hydroelastic=False))
 
     initial_positions = []
     for i in range(NUM_CUBES):
@@ -282,7 +285,9 @@ def test_buffer_fraction_no_crash(test, device):
         sdf_narrow_band_range=(-narrow_band, narrow_band),
         gap=contact_gap,
     )
-    builder.add_ground_plane()
+    # Analytic hydroelastic planes are supported; keep the ground non-hydroelastic
+    # here so these scenes exercise only the intended volumetric hydroelastic pairs.
+    builder.add_ground_plane(cfg=newton.ModelBuilder.ShapeConfig(is_hydroelastic=False))
 
     for i in range(num_cubes):
         z_pos = cube_half + i * cube_half * 2.0
@@ -491,7 +496,9 @@ def _build_cube_sphere_scene(device, cube_half=0.1, sphere_radius=0.1):
     )
     builder = newton.ModelBuilder()
     builder.default_shape_cfg = shape_cfg
-    builder.add_ground_plane()
+    # Analytic hydroelastic planes are supported; keep the ground non-hydroelastic
+    # here so these scenes exercise only the intended volumetric hydroelastic pairs.
+    builder.add_ground_plane(cfg=newton.ModelBuilder.ShapeConfig(is_hydroelastic=False))
 
     cube_body = builder.add_body(
         xform=wp.transform(wp.vec3(0.0, 0.0, cube_half), wp.quat_identity()),
@@ -658,7 +665,9 @@ def _build_cube_cube_scene(device, cube_half_lower=0.2, cube_half_upper=0.1, kh_
         )
 
     builder = newton.ModelBuilder()
-    builder.add_ground_plane()
+    # Analytic hydroelastic planes are supported; keep the ground non-hydroelastic
+    # here so these scenes exercise only the intended volumetric hydroelastic pairs.
+    builder.add_ground_plane(cfg=newton.ModelBuilder.ShapeConfig(is_hydroelastic=False))
 
     lower_body = builder.add_body(
         xform=wp.transform(wp.vec3(0.0, 0.0, cube_half_lower), wp.quat_identity()),
@@ -1019,7 +1028,9 @@ def _build_offset_cube_sphere_scene(device, kh, cube_half=0.1, sphere_radius=0.1
     )
     builder = newton.ModelBuilder()
     builder.default_shape_cfg = shape_cfg
-    builder.add_ground_plane()
+    # Analytic hydroelastic planes are supported; keep the ground non-hydroelastic
+    # here so these scenes exercise only the intended volumetric hydroelastic pairs.
+    builder.add_ground_plane(cfg=newton.ModelBuilder.ShapeConfig(is_hydroelastic=False))
 
     cube_body = builder.add_body(
         xform=wp.transform(wp.vec3(0.0, 0.0, cube_half), wp.quat_identity()),
@@ -1229,6 +1240,123 @@ def test_entry_k_eff_matches_shape_harmonic_mean(test, device):
     )
 
 
+def test_hydroelastic_plane_cylinder_contact_surface(test, device):
+    """Hydroelastic ground planes produce a finite 2D patch against an SDF cylinder."""
+    radius = 0.055
+    width = 0.045
+    sink_depth = 0.003
+    narrow_band = 0.02
+
+    plane_cfg = newton.ModelBuilder.ShapeConfig(
+        is_hydroelastic=True,
+        gap=0.0,
+        kh=1.0e9,
+        mu=0.0,
+    )
+    wheel_cfg = newton.ModelBuilder.ShapeConfig(
+        is_hydroelastic=True,
+        sdf_max_resolution=64,
+        sdf_narrow_band_range=(-narrow_band, narrow_band),
+        gap=0.0,
+        kh=1.0e9,
+        mu=0.0,
+    )
+
+    builder = newton.ModelBuilder()
+    plane_shape = builder.add_ground_plane(cfg=plane_cfg)
+    body = builder.add_body(
+        xform=wp.transform(wp.vec3(0.0, 0.0, radius - sink_depth), wp.quat_identity()),
+        label="wheel",
+    )
+    wheel_xform = wp.transform(
+        wp.vec3(0.0, 0.0, 0.0),
+        wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), -0.5 * np.pi),
+    )
+    wheel_shape = builder.add_shape_cylinder(
+        body=body,
+        xform=wheel_xform,
+        radius=radius,
+        half_height=0.5 * width,
+        cfg=wheel_cfg,
+    )
+
+    model = builder.finalize(device=device)
+    state = model.state()
+    newton.eval_fk(model, model.joint_q, model.joint_qd, state)
+
+    hydro_config = HydroelasticSDF.Config(
+        output_contact_surface=True,
+        reduce_contacts=False,
+        buffer_fraction=1.0,
+        buffer_mult_iso=4,
+        buffer_mult_contact=4,
+    )
+    collision_pipeline = newton.CollisionPipeline(
+        model,
+        rigid_contact_max=100000,
+        broad_phase="explicit",
+        sdf_hydroelastic_config=hydro_config,
+    )
+    contacts = collision_pipeline.contacts()
+    collision_pipeline.collide(state, contacts)
+
+    test.assertIsNotNone(collision_pipeline.hydroelastic_sdf, "Expected a hydroelastic pipeline")
+    sdf_sdf_count = int(collision_pipeline.narrow_phase.shape_pairs_sdf_sdf_count.numpy()[0])
+    test.assertEqual(sdf_sdf_count, 1, f"Expected one hydroelastic plane-cylinder pair, got {sdf_sdf_count}")
+
+    rigid_count = int(contacts.rigid_contact_count.numpy()[0])
+    test.assertGreater(rigid_count, 0, "Expected plane-cylinder hydro contacts")
+
+    contact_surface = collision_pipeline.hydroelastic_sdf.get_contact_surface()
+    test.assertIsNotNone(contact_surface, "Expected hydroelastic contact surface data")
+    num_faces = int(contact_surface.face_contact_count.numpy()[0])
+    test.assertGreater(num_faces, 0, "Expected non-empty hydroelastic contact surface")
+
+    pairs = contact_surface.contact_surface_shape_pair.numpy()[:num_faces]
+    expected_pair = np.array([plane_shape, wheel_shape], dtype=pairs.dtype)
+    test.assertTrue(
+        np.all(pairs == expected_pair),
+        f"Expected all hydro faces to use pair {(plane_shape, wheel_shape)}, got {np.unique(pairs, axis=0)}",
+    )
+
+    vertices = contact_surface.contact_surface_point.numpy()[: num_faces * 3].reshape(num_faces, 3, 3)
+    points = vertices.reshape(-1, 3)
+    spans = points.max(axis=0) - points.min(axis=0)
+    edge_1 = vertices[:, 1] - vertices[:, 0]
+    edge_2 = vertices[:, 2] - vertices[:, 0]
+    total_area = 0.5 * float(np.linalg.norm(np.cross(edge_1, edge_2), axis=1).sum())
+    projected_area = 0.5 * float(np.abs(edge_1[:, 0] * edge_2[:, 1] - edge_1[:, 1] * edge_2[:, 0]).sum())
+
+    expected_chord = 2.0 * np.sqrt(max(0.0, 2.0 * radius * sink_depth - sink_depth * sink_depth))
+    expected_width = width
+    expected_area = expected_chord * expected_width
+
+    test.assertAlmostEqual(
+        spans[0],
+        expected_chord,
+        delta=0.20 * expected_chord,
+        msg=f"Patch chord mismatch: span={spans}, expected_chord={expected_chord}",
+    )
+    test.assertAlmostEqual(
+        spans[1],
+        expected_width,
+        delta=0.10 * expected_width,
+        msg=f"Patch width mismatch: span={spans}, expected_width={expected_width}",
+    )
+    test.assertAlmostEqual(
+        projected_area,
+        expected_area,
+        delta=0.20 * expected_area,
+        msg=f"Projected patch area mismatch: got {projected_area}, expected {expected_area}",
+    )
+    test.assertAlmostEqual(
+        total_area,
+        expected_area,
+        delta=0.20 * expected_area,
+        msg=f"Hydro surface area mismatch: got {total_area}, expected footprint area {expected_area}",
+    )
+
+
 def test_mujoco_hydroelastic_penetration_depth(test, device):
     """Test that hydroelastic penetration depth matches expectation.
 
@@ -1320,7 +1448,9 @@ def test_mujoco_hydroelastic_penetration_depth(test, device):
         upper_shape_indices.append(shape_upper)
         initial_upper_positions.append(np.array([x_pos, 0.0, upper_z]))
 
-    builder.add_ground_plane()
+    # Analytic hydroelastic planes are supported; keep the ground non-hydroelastic
+    # here so these scenes exercise only the intended volumetric hydroelastic pairs.
+    builder.add_ground_plane(cfg=newton.ModelBuilder.ShapeConfig(is_hydroelastic=False))
     model = builder.finalize(device=device)
 
     solver = newton.solvers.SolverMuJoCo(
@@ -1619,6 +1749,13 @@ add_function_test(
     "test_entry_k_eff_matches_shape_harmonic_mean",
     test_entry_k_eff_matches_shape_harmonic_mean,
     devices=cuda_devices,
+)
+add_function_test(
+    TestHydroelastic,
+    "test_hydroelastic_plane_cylinder_contact_surface",
+    test_hydroelastic_plane_cylinder_contact_surface,
+    devices=cuda_devices,
+    check_output=False,
 )
 
 add_function_test(
