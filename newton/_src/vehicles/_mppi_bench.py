@@ -41,7 +41,7 @@ def _track_id(generator: str, seed: int, params: dict) -> str:
     return f"{generator} s{seed}" + (f" {extra}" if extra else "")
 
 
-def _build_example(generator, seed, params, num_samples, horizon, rollout_substeps, device, brake_channel=False):
+def _build_example(generator, seed, params, num_samples, horizon, rollout_substeps, device, brake_mode="none"):
     # Lazy import: the example lives in newton.examples and pulls in the viewer
     # stack; keep it out of module import time.
     import importlib  # noqa: PLC0415
@@ -59,7 +59,7 @@ def _build_example(generator, seed, params, num_samples, horizon, rollout_subste
         track_generator=generator,
         track_param=dict(params),
         device=device,
-        brake_channel=brake_channel,
+        brake_mode=brake_mode,
     )
     example = ex_mod.Example(viewer, args)
     return example, viewer
@@ -76,7 +76,7 @@ def bench_track(
     rollout_substeps=4,
     device="cuda:0",
     warmup=1,
-    brake_channel=False,
+    brake_mode="none",
 ) -> dict:
     """Run one track headless and return its metric dict.
 
@@ -94,7 +94,7 @@ def bench_track(
     """
     params = params or {}
     example, viewer = _build_example(
-        generator, seed, params, num_samples, horizon, rollout_substeps, device, brake_channel
+        generator, seed, params, num_samples, horizon, rollout_substeps, device, brake_mode
     )
 
     drive = np.empty(frames, dtype=np.float64)
@@ -129,7 +129,42 @@ def bench_track(
 
     lap_dist = float(example.total_s.numpy()[0])
     track_len = float(example.track_len)
+    v_profile = example._v_profile.numpy().astype(np.float64)
+    cum_s = example._cum_s.numpy().astype(np.float64)
     viewer.close()
+
+    # hairpin-entry braking: locate the two deepest reference-speed minima
+    # (well separated) within the arc the hero actually covered, and measure
+    # the peak decel and brake the hero produced inside the 5 m of centerline
+    # leading into each
+    reached = cum_s <= max(lap_dist, 0.0)  # spawn is at s = 0
+    profile_masked = np.where(reached, v_profile, np.inf)
+    order = np.argsort(profile_masked)
+    hairpin_idx = []
+    for i in order:
+        if not np.isfinite(profile_masked[i]):
+            break
+        s_h = float(cum_s[i])
+        if all(min(abs(s_h - float(cum_s[j])), track_len - abs(s_h - float(cum_s[j]))) > 8.0 for j in hairpin_idx):
+            hairpin_idx.append(int(i))
+        if len(hairpin_idx) == 2:
+            break
+    decel = np.concatenate([[0.0], np.maximum(0.0, -np.diff(speed)) * 60.0])
+    hairpins = []
+    for i in hairpin_idx:
+        s_h = float(cum_s[i])
+        rel = (s_h - hero_s) % track_len  # forward distance from hero to the apex
+        window = rel <= 5.0
+        hairpins.append(
+            {
+                "s": s_h,
+                "v_min_ref": float(v_profile[i]),
+                "peak_decel": float(decel[window].max()) if window.any() else 0.0,
+                "mean_decel": float(decel[window].mean()) if window.any() else 0.0,
+                "max_brake": float(brake[window].max()) if window.any() else 0.0,
+                "frames_in_window": int(window.sum()),
+            }
+        )
 
     dd = np.diff(drive)
     dst = np.diff(steer)
@@ -169,6 +204,8 @@ def bench_track(
         "peak_decel": float(np.max(np.maximum(0.0, -np.diff(speed))) * 60.0) if frames > 1 else 0.0,
         "mean_brake": float(brake.mean()),
         "max_brake": float(brake.max()),
+        "hairpins": hairpins,
+        "brake_mode": brake_mode,
     }
 
 

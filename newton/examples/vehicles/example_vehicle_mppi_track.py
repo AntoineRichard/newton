@@ -209,48 +209,72 @@ def _steer_scale(speed: float) -> float:
     return 1.0 / (1.0 + (speed / STEER_SPEED_REF) ** 2.0)
 
 
+# --brake-mode codes: how a sampled command reaches the brake actuator.
+# The rc_car has no friction brake -- ``brake_target`` models the ESC's
+# regen/drag braking (resistive torque, cannot reverse the wheel), so the
+# question is only how the planner's action space maps onto it.
+BRAKE_MODE_NONE = 0  # brake always 0 (today's behavior; negative drive = weak motor drag)
+BRAKE_MODE_CHANNEL = 1  # third sampled channel in [-1, 1], rectified to [0, 1]
+BRAKE_MODE_ESC = 2  # RC-transmitter-faithful: drive < 0 -> ESC brake |drive|, drive 0
+
+
+@wp.func
+def _map_brake(drive_cmd: float, brake_cmd: float, brake_mode: int) -> wp.vec2f:
+    """Map (drive, optional brake channel) to executed (drive, brake).
+
+    ``channel`` mode rectifies the sampled brake channel: a one-sided [0, 1]
+    bound makes the clamped exploration noise strictly positive, so the
+    softmax update ratchets the nominal brake up until the car cannot launch
+    (measured: permanent ~0.5 brake, lap distance 0). ``esc`` mode folds
+    braking into the throttle axis like a real RC transmitter: negative
+    drive engages the ESC brake instead of requesting reverse wheel speed.
+    """
+    if brake_mode == BRAKE_MODE_ESC:
+        if drive_cmd < 0.0:
+            return wp.vec2f(0.0, wp.min(-drive_cmd, 1.0))
+        return wp.vec2f(drive_cmd, 0.0)
+    if brake_mode == BRAKE_MODE_CHANNEL:
+        return wp.vec2f(drive_cmd, wp.max(brake_cmd, 0.0))
+    return wp.vec2f(drive_cmd, 0.0)
+
+
 @wp.kernel
 def _apply_sample_commands(
     samples: wp.array3d[float],
     t: int,
-    brake_col: int,
+    brake_mode: int,
     speed: wp.array[float],
     drive: wp.array[wp.float32],
     steer: wp.array[wp.float32],
     brake: wp.array[wp.float32],
 ):
     v = wp.tid()
-    drive[v] = samples[v, t, 0]
+    bc = float(0.0)
+    if brake_mode == BRAKE_MODE_CHANNEL:
+        bc = samples[v, t, 2]
+    db = _map_brake(samples[v, t, 0], bc, brake_mode)
+    drive[v] = db[0]
     steer[v] = samples[v, t, 1] * _steer_scale(speed[v])
-    # optional friction-brake channel (default-off diagnosis knob): when the
-    # planner samples a third command it drives the real brake actuator, which
-    # the motor-torque servo (negative drive) cannot substitute for. The
-    # channel is sampled in [-1, 1] and rectified here: a one-sided [0, 1]
-    # bound makes the clamped exploration noise strictly positive, so the
-    # softmax update ratchets the nominal brake up until the car cannot
-    # launch (measured: permanent ~0.5 brake, lap distance 0)
-    if brake_col >= 0:
-        brake[v] = wp.max(samples[v, t, brake_col], 0.0)
-    else:
-        brake[v] = 0.0
+    brake[v] = db[1]
 
 
 @wp.kernel
 def _apply_nominal_command(
     nominal: wp.array2d[float],
-    brake_col: int,
+    brake_mode: int,
     speed: wp.array[float],
     drive: wp.array[wp.float32],
     steer: wp.array[wp.float32],
     brake: wp.array[wp.float32],
 ):
     v = wp.tid()
-    drive[v] = nominal[0, 0]
+    bc = float(0.0)
+    if brake_mode == BRAKE_MODE_CHANNEL:
+        bc = nominal[0, 2]
+    db = _map_brake(nominal[0, 0], bc, brake_mode)
+    drive[v] = db[0]
     steer[v] = nominal[0, 1] * _steer_scale(speed[v])
-    if brake_col >= 0:
-        brake[v] = wp.max(nominal[0, brake_col], 0.0)
-    else:
-        brake[v] = 0.0
+    brake[v] = db[1]
 
 
 @wp.kernel
@@ -590,26 +614,38 @@ class Example:
                 "horizon * rollout_substeps + 8 must be even so state buffers "
                 "return to their starting roles each frame (CUDA graph replay)"
             )
-        # optional friction-brake channel (Step 2b diagnosis, default-off): the
-        # per-step motor servo (negative drive) can only shed ~1 N·m of torque,
-        # which decelerates no harder than coasting; a sampled brake channel
-        # reaches the 20 N·m friction brake so the planner can express real
-        # threshold braking into hairpins. brake_col is the sample index of the
-        # brake command (-1 when disabled -> today's 2-channel behavior).
-        self._brake_channel = bool(getattr(args, "brake_channel", False))
-        self._brake_col = 2 if self._brake_channel else -1
-        dim = 3 if self._brake_channel else 2
+        # brake mode (Step 2b diagnosis, default "none"): the per-step motor
+        # servo (negative drive) can only shed ~1 N·m of torque, which
+        # decelerates no harder than coasting; both non-default modes give the
+        # planner the ESC's ~20 N·m regen/drag brake so it can express real
+        # threshold braking into hairpins. "channel" samples a third command;
+        # "esc" is RC-transmitter-faithful: braking folds into the throttle
+        # axis, negative drive = ESC brake (as on a real VXL, where the
+        # negative transmitter half engages brake, not reverse).
+        mode_name = getattr(args, "brake_mode", "none") or "none"
+        try:
+            self._brake_mode = {"none": BRAKE_MODE_NONE, "channel": BRAKE_MODE_CHANNEL, "esc": BRAKE_MODE_ESC}[
+                mode_name
+            ]
+        except KeyError:
+            raise ValueError(f"unsupported --brake-mode {mode_name!r}") from None
+        dim = 3 if self._brake_mode == BRAKE_MODE_CHANNEL else 2
         # drive in [-0.3, 1.0]: enough negative torque to brake hard for
         # corners (measured backward travel is cost-killed, so reverse cannot
         # become a cruise mode); the drive cap is fully open because the
         # reference speed profile, not the command bound, disciplines
-        # corner-entry speed (uncapping measured faster AND smoother)
+        # corner-entry speed (uncapping measured faster AND smoother).
+        # In esc mode the negative half never means reverse (it is remapped to
+        # the ESC brake), so the axis opens to the full [-1, 1] transmitter
+        # range; full negative drive = full brake current.
+        drive_lo = -1.0 if self._brake_mode == BRAKE_MODE_ESC else -0.3
         sigma = (0.35, 0.45, 0.35)[:dim]
         beta = (0.85, 0.6, 0.6)[:dim]  # brake wants steer-like (lighter) smoothing
-        # brake is sampled in [-1, 1] and rectified to [0, 1] at the apply
-        # kernels (negative half = "no brake") so exploration noise around a
-        # zero nominal stays zero-mean instead of ratcheting the brake on
-        bounds_lo = (-0.3, -1.0, -1.0)[:dim]
+        # channel mode: brake is sampled in [-1, 1] and rectified to [0, 1] at
+        # the apply kernels (negative half = "no brake") so exploration noise
+        # around a zero nominal stays zero-mean instead of ratcheting the
+        # brake on
+        bounds_lo = (drive_lo, -1.0, -1.0)[:dim]
         bounds_hi = (1.0, 1.0, 1.0)[:dim]
         self.planner = nv.ControllerMPPI(
             config=nv.ControllerMPPI.Config(
@@ -888,7 +924,7 @@ class Example:
             wp.launch(
                 _apply_sample_commands,
                 dim=self.num_worlds,
-                inputs=[self.planner.samples, t, self._brake_col, self.car_speed, cmd.drive, cmd.steer, cmd.brake],
+                inputs=[self.planner.samples, t, self._brake_mode, self.car_speed, cmd.drive, cmd.steer, cmd.brake],
                 device=dev,
             )
             for _ in range(self.rollout_substeps):
@@ -930,7 +966,7 @@ class Example:
         wp.launch(
             _apply_nominal_command,
             dim=self.num_worlds,
-            inputs=[self.planner.nominal, self._brake_col, self.car_speed, cmd.drive, cmd.steer, cmd.brake],
+            inputs=[self.planner.nominal, self._brake_mode, self.car_speed, cmd.drive, cmd.steer, cmd.brake],
             device=dev,
         )
         for _ in range(self.sim_substeps):
@@ -1379,10 +1415,13 @@ class Example:
         parser.add_argument("--rollout-substeps", type=int, default=4, help="solver substeps per rollout control step")
         parser.add_argument("--track-seed", type=int, default=0, help="base seed for track generation")
         parser.add_argument(
-            "--brake-channel",
-            action="store_true",
-            help="sample a third (friction-brake) command channel so the planner can "
-            "express real braking (Step 2b diagnosis knob; default off)",
+            "--brake-mode",
+            type=str,
+            default="none",
+            choices=("none", "channel", "esc"),
+            help="how the planner reaches the ESC regen brake: none (today: brake "
+            "always 0), channel (third sampled command), or esc (RC-transmitter-"
+            "faithful: negative drive engages the brake instead of reverse)",
         )
         parser.add_argument(
             "--track-generator",

@@ -143,3 +143,61 @@ different sessions is comparable, 0.070–0.084).
 Annealing experiments (Tasks 2–4) run against the default (2-channel) baseline
 above; the brake channel is available as a validated knob if corner-entry
 braking becomes the bottleneck.
+
+## Regen-braking reframing and ESC mode (user correction, 2026-07-07)
+
+A real electric RC car (e.g. a Traxxas VXL setup) has **no friction brake** —
+braking is regen/drag braking through the motor ESC, and the transmitter folds
+it into the throttle axis: the negative throttle half commands ESC brake, not
+reverse. Our `brake_target` mechanism is already physically ESC-like
+(resistive torque, zero-crossing clamp, cannot reverse the wheel) — only the
+"friction brake" label above was off. `brake_max_torque` should be read as the
+**ESC brake-current limit** (to be calibrated against the real VXL, not
+treated as a hydraulic constant).
+
+`--brake-channel` is superseded by `--brake-mode {none, channel, esc}`
+(default `none` = today's behavior):
+
+- `channel`: third sampled command in [-1, 1], rectified to [0, 1] (as above).
+- `esc` (interface-faithful): the action space stays 2-D; at command
+  application, `drive >= 0` → throttle with brake 0, `drive < 0` → throttle 0,
+  `brake = |drive|`. The drive axis opens to the full transmitter range
+  `[-1, 1]` (its negative half no longer means reverse). The [0, 1]-bound
+  ratchet pathology cannot recur here: the brake engages only while the
+  sampled drive is negative, and the drive axis's exploration noise is
+  symmetric — confirmed empirically (mean brake 0.012, car launches normally).
+
+### Head-to-head (tuning track, 240 frames, 3 paired same-session repeats)
+
+| Mode | Lap dist [m] | Peak decel [m/s²] | Hairpin-1 entry decel [m/s²] | mean/max brake | ΔRMS drive | ΔRMS steer | Rev | OOB |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| none | 19.97 ± 0.20 | 7.2 ± 0.2 | 7.2 ± 0.2 | 0.000 / 0.00 | 0.0458 | 0.0749 | 93 | 0.00 |
+| channel | 20.53 ± 0.16 | 23.9 ± 4.2 | 18.9 ± 2.4 | 0.012 / 0.68 | 0.0416 | 0.0831 | 89 | 0.00 |
+| esc | 20.30 ± 0.21 | 21.6 ± 4.0 | 21.6 ± 4.0 | 0.012 / 0.30 | 0.0649 | 0.0830 | 91 | 0.00 |
+
+Raw per-run JSON: `2026-07-07-mppi-task1-brake-modes.json`. Hairpin-entry
+metrics come from the harness's new per-run hairpin instrumentation (deepest
+reference-speed minima within the driven arc; 5 m entry window). The second
+hairpin lies beyond the ~20 m covered in 240 frames, so only hairpin 1 is
+populated at this frame budget.
+
+### Notes on the folded axis (esc)
+
+In esc mode the brake half-axis implicitly inherits the drive channel's AR(1)
+smoothing and noise (β = 0.85, σ = 0.35). Braking onset is not blunted — esc
+posts the strongest hairpin-1 entry decel (21.6 m/s²) of the three modes — so
+the drive smoothing parameters remain serviceable when the axis does double
+duty. The visible cost is executed-drive jitter (ΔRMS 0.065 vs 0.046),
+because the executed command now crosses zero between throttle and brake;
+physically this is ESC current chatter, not a mechanical concern, but a small
+zero deadband or a slightly higher drive β is the obvious knob if it bothers.
+
+### Recommendation
+
+**Prefer `esc`**: it is interface-faithful to the real vehicle, brakes just as
+hard into the measured hairpin (21.6 vs 18.9 m/s² entry decel), matches
+channel's lap distance within noise (20.30 vs 20.53 m, ≈1 %), needs no extra
+action dimension, and is immune to the rectification pathology by
+construction. Both modes stay in the example as cheap flags; the default
+remains `none` until the user flips it, and Tasks 2–4 baselines stay
+unconfounded.
