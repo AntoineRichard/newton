@@ -78,6 +78,53 @@ class TestControllerMPPI(unittest.TestCase):
         with self.assertRaises(ValueError):
             planner.update(wp.zeros(8, dtype=wp.float32, device=planner.device))
 
+    def test_sigma_horizon_schedule_default_is_flat(self):
+        planner = _make()
+        np.testing.assert_allclose(planner._sigma_schedule.numpy(), np.ones(8, dtype=np.float32))
+
+    def test_sigma_horizon_factor_one_is_bit_identical(self):
+        a, b = _make(), _make()
+        a._set_sigma_horizon_factor(1.0)
+        a.sample()
+        b.sample()
+        np.testing.assert_array_equal(a.samples.numpy(), b.samples.numpy())
+
+    def test_sigma_horizon_schedule_shape(self):
+        planner = _make()
+        factor = 3.0
+        planner._set_sigma_horizon_factor(factor)
+        h = planner.config.horizon
+        expected = factor ** (np.arange(h, dtype=np.float64) / (h - 1))
+        np.testing.assert_allclose(planner._sigma_schedule.numpy(), expected, rtol=1e-6)
+        # monotone increasing: calm near the executed step, exploratory far out
+        sched = planner._sigma_schedule.numpy()
+        self.assertTrue(np.all(np.diff(sched) > 0.0))
+        self.assertAlmostEqual(float(sched[0]), 1.0, places=6)
+        self.assertAlmostEqual(float(sched[-1]), factor, places=5)
+
+    def test_sigma_horizon_factor_grows_far_horizon_variance(self):
+        # white noise (beta=0) and wide bounds so the per-step sample std
+        # tracks sigma * schedule directly
+        planner = _make(
+            num_samples=4096, beta=0.0, sigma=(0.1, 0.1), bounds_lo=(-100.0, -100.0), bounds_hi=(100.0, 100.0)
+        )
+        planner._set_sigma_horizon_factor(3.0)
+        planner.sample()
+        std = planner.samples.numpy()[1:].std(axis=0)  # [H, A]
+        for a in range(2):
+            self.assertGreater(float(std[-1, a]), 2.0 * float(std[0, a]))
+            # non-decreasing within sampling tolerance
+            self.assertTrue(np.all(np.diff(std[:, a]) > -0.01 * float(std[0, a])))
+
+    def test_sigma_horizon_factor_respects_bounds(self):
+        planner = _make(sigma=(1.0, 1.0))
+        planner._set_sigma_horizon_factor(4.0)
+        planner.sample()
+        samples = planner.samples.numpy()
+        self.assertLessEqual(float(samples.max()), 1.0 + 1e-6)
+        self.assertGreaterEqual(float(samples.min()), -1.0 - 1e-6)
+        np.testing.assert_allclose(samples[0], planner.nominal.numpy(), atol=1e-6)
+
     def test_shift_rolls_and_repeats_last(self):
         planner = _make()
         nom = np.arange(8 * 2, dtype=np.float32).reshape(8, 2) * 0.01

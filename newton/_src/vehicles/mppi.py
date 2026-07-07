@@ -15,6 +15,7 @@ import warp as wp
 def _sample_sequences(
     nominal: wp.array2d[float],
     sigma: wp.array[float],
+    sigma_schedule: wp.array[float],
     bounds_lo: wp.array[float],
     bounds_hi: wp.array[float],
     beta: wp.array[float],
@@ -38,7 +39,7 @@ def _sample_sequences(
     scale = wp.sqrt(wp.max(0.0, 1.0 - b * b))
     n = float(0.0)
     for t in range(horizon):
-        eps = sigma[a] * wp.randn(state)
+        eps = sigma[a] * sigma_schedule[t] * wp.randn(state)
         if t == 0:
             n = eps
         else:
@@ -181,6 +182,9 @@ class ControllerMPPI:
             self.noise = wp.zeros((k, h, a), dtype=wp.float32)
             self.weights = wp.zeros(k, dtype=wp.float32)
             self.sigma = wp.array(cfg.sigma, dtype=wp.float32)
+            # per-horizon-step noise scale (experimental, private): defaults to
+            # all-ones, which reproduces the flat-sigma sampler bit-for-bit
+            self._sigma_schedule = wp.ones(h, dtype=wp.float32)
             self.bounds_lo = wp.array(cfg.bounds_lo, dtype=wp.float32)
             self.bounds_hi = wp.array(cfg.bounds_hi, dtype=wp.float32)
             self._temperature = wp.array([cfg.temperature], dtype=wp.float32)
@@ -205,6 +209,24 @@ class ControllerMPPI:
         else:
             self._beta.assign(np.asarray(value, dtype=np.float32))
 
+    def _set_sigma_horizon_factor(self, value: float) -> None:
+        """Sets the horizon-annealed noise schedule (experimental, private).
+
+        Scales the per-step exploration noise by ``value ** (t / (H - 1))``:
+        the executed step ``t = 0`` keeps the configured ``sigma`` while the
+        far horizon end explores with ``value * sigma`` (DIAL-MPC-style
+        horizon annealing). ``1.0`` restores the flat schedule bit-for-bit.
+        Safe while a CUDA graph is captured (device-array write only).
+
+        Args:
+            value: Far-horizon noise multiplier; must be > 0.
+        """
+        if value <= 0.0:
+            raise ValueError("sigma horizon factor must be > 0")
+        h = self.config.horizon
+        schedule = float(value) ** (np.arange(h, dtype=np.float64) / (h - 1))
+        self._sigma_schedule.assign(schedule.astype(np.float32))
+
     def sample(self) -> None:
         """Fills :attr:`samples` with the clamped nominal plus smoothed Gaussian noise."""
         cfg = self.config
@@ -214,6 +236,7 @@ class ControllerMPPI:
             inputs=[
                 self.nominal,
                 self.sigma,
+                self._sigma_schedule,
                 self.bounds_lo,
                 self.bounds_hi,
                 self._beta,

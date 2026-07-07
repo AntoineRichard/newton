@@ -77,6 +77,7 @@ def bench_track(
     device="cuda:0",
     warmup=1,
     brake_mode="none",
+    sigma_horizon_factor=1.0,
 ) -> dict:
     """Run one track headless and return its metric dict.
 
@@ -96,6 +97,8 @@ def bench_track(
     example, viewer = _build_example(
         generator, seed, params, num_samples, horizon, rollout_substeps, device, brake_mode
     )
+    if sigma_horizon_factor != 1.0:
+        example.planner._set_sigma_horizon_factor(sigma_horizon_factor)
 
     drive = np.empty(frames, dtype=np.float64)
     steer = np.empty(frames, dtype=np.float64)
@@ -206,6 +209,7 @@ def bench_track(
         "max_brake": float(brake.max()),
         "hairpins": hairpins,
         "brake_mode": brake_mode,
+        "sigma_horizon_factor": sigma_horizon_factor,
     }
 
 
