@@ -133,10 +133,10 @@ class TestControllerMPPI(unittest.TestCase):
         # the decision variable is the nominal itself (no separate knot buffer)
         self.assertIs(planner._knots, planner.nominal)
 
-    def _make_knots(self, n_knots, horizon=8, **overrides):
+    def _make_knots(self, n_knots, horizon=8, device=None, **overrides):
         kwargs = {"num_samples": 64, "horizon": horizon, "dim": 2, "sigma": (0.3, 0.4), "seed": 11}
         kwargs.update(overrides)
-        return nv.ControllerMPPI(config=nv.ControllerMPPI.Config(**kwargs), _n_knots=n_knots)
+        return nv.ControllerMPPI(config=nv.ControllerMPPI.Config(**kwargs), device=device, _n_knots=n_knots)
 
     def test_knots_shapes(self):
         planner = self._make_knots(4)
@@ -207,6 +207,135 @@ class TestControllerMPPI(unittest.TestCase):
         self.assertTrue(np.isfinite(nominal).all())
         self.assertLessEqual(float(nominal.max()), 1.0 + 1e-6)
         self.assertGreaterEqual(float(nominal.min()), -1.0 - 1e-6)
+
+    def test_knots_cpu_device_full_cycle(self):
+        # mirror test_cpu_device_full_cycle with the knot control path enabled
+        planner = self._make_knots(4, device="cpu")
+        self.assertTrue(planner._use_knots)
+        planner.sample()
+        samples = planner.samples.numpy()
+        self.assertEqual(samples.shape, (64, 8, 2))
+        self.assertTrue(np.isfinite(samples).all())
+        np.testing.assert_allclose(samples[0], planner.nominal.numpy(), atol=1e-6)
+        costs = wp.array(np.linspace(0.0, 10.0, 64, dtype=np.float32), dtype=wp.float32, device="cpu")
+        planner.update(costs)
+        planner.shift()
+        nominal = planner.nominal.numpy()
+        self.assertTrue(np.isfinite(nominal).all())
+        self.assertLessEqual(float(nominal.max()), 1.0 + 1e-6)
+        self.assertGreaterEqual(float(nominal.min()), -1.0 - 1e-6)
+
+    # --- RA-MPPI zero-mean sample fraction (experiment A) ----------------
+
+    def test_zero_mean_fraction_validation(self):
+        with self.assertRaises(ValueError):
+            nv.ControllerMPPI(config=nv.ControllerMPPI.Config(num_samples=8), _zero_mean_fraction=-0.1)
+        with self.assertRaises(ValueError):
+            nv.ControllerMPPI(config=nv.ControllerMPPI.Config(num_samples=8), _zero_mean_fraction=1.5)
+
+    def test_zero_mean_fraction_default_is_flat(self):
+        planner = _make()
+        self.assertEqual(int(planner._zero_mean_count.numpy()[0]), 0)
+
+    def test_zero_mean_fraction_count(self):
+        planner = _make(num_samples=64)
+        planner._set_zero_mean_fraction(0.3)
+        self.assertEqual(int(planner._zero_mean_count.numpy()[0]), int(np.ceil(0.3 * 64)))
+
+    def test_zero_mean_fraction_zero_nominal_is_bit_identical(self):
+        # with an all-zero nominal, nominal + eps == eps, so zero-mean samples
+        # equal ordinary samples: the sampler and update must be bit-identical
+        a, b = _make(), _make()
+        b._set_zero_mean_fraction(0.2)
+        a.sample()
+        b.sample()
+        np.testing.assert_array_equal(a.samples.numpy(), b.samples.numpy())
+        costs = np.linspace(0.0, 5.0, 64, dtype=np.float32)
+        a.update(wp.array(costs, dtype=wp.float32, device=a.device))
+        b.update(wp.array(costs, dtype=wp.float32, device=b.device))
+        np.testing.assert_array_equal(a.nominal.numpy(), b.nominal.numpy())
+
+    def test_zero_mean_samples_are_pure_noise(self):
+        # with a large nominal offset, the first ceil(f*K) non-hero samples are
+        # centered on zero (pure noise), the rest on the nominal
+        planner = _make(num_samples=64, sigma=(0.05, 0.05))
+        planner._set_zero_mean_fraction(0.25)
+        count = int(planner._zero_mean_count.numpy()[0])
+        nom = np.full((8, 2), 0.8, dtype=np.float32)
+        planner.nominal.assign(nom)
+        planner.sample()
+        samples = planner.samples.numpy()
+        # zero-mean samples sit near 0, ordinary samples near the 0.8 nominal
+        self.assertLess(float(np.abs(samples[1 : count + 1]).mean()), 0.2)
+        self.assertGreater(float(samples[count + 1 :].mean()), 0.6)
+
+    def test_zero_mean_update_uses_deviation_from_nominal(self):
+        # the stored noise is s - nominal even for zero-mean samples, so a
+        # winner-take-all update lands the nominal exactly on the winning
+        # sample (a naive u-not-(u-nominal) delta would miss when nominal != 0)
+        planner = _make(num_samples=64, sigma=(0.05, 0.05))
+        planner._set_zero_mean_fraction(1.0)  # every non-hero sample zero-mean
+        planner.set_temperature(1e-3)
+        planner.nominal.assign(np.full((8, 2), 0.5, dtype=np.float32))
+        planner.sample()
+        samples = planner.samples.numpy()
+        costs = np.full(64, 1e3, dtype=np.float32)
+        costs[7] = 0.0
+        planner.update(wp.array(costs, dtype=wp.float32, device=planner.device))
+        np.testing.assert_allclose(planner.nominal.numpy(), samples[7], atol=1e-3)
+
+    # --- Tsallis / deformed-exponential weighting (experiment B) ---------
+
+    def test_tsallis_q_validation(self):
+        with self.assertRaises(ValueError):
+            nv.ControllerMPPI(config=nv.ControllerMPPI.Config(num_samples=8), _tsallis_q=0.0)
+
+    def test_tsallis_q_default_is_one(self):
+        planner = _make()
+        self.assertEqual(float(planner._tsallis_q.numpy()[0]), 1.0)
+
+    def test_tsallis_q_one_is_bit_identical(self):
+        a, b = _make(), _make()
+        b._set_tsallis_q(1.0)  # explicit no-op
+        a.sample()
+        b.sample()
+        costs = np.linspace(0.0, 5.0, 64, dtype=np.float32)
+        a.update(wp.array(costs, dtype=wp.float32, device=a.device))
+        b.update(wp.array(costs, dtype=wp.float32, device=b.device))
+        np.testing.assert_array_equal(a.weights.numpy(), b.weights.numpy())
+        np.testing.assert_array_equal(a.nominal.numpy(), b.nominal.numpy())
+
+    def test_tsallis_q_shifts_ess(self):
+        # with the q-exponential and the min-cost shift, q < 1 has compact
+        # support (elite concentration -> lower ESS) while q > 1 has heavier
+        # tails (more uniform averaging -> higher ESS) than the q = 1 softmax
+        costs = np.linspace(0.0, 30.0, 64, dtype=np.float32)
+
+        def ess_for(q):
+            p = _make()
+            p.set_temperature(10.0)
+            if q is not None:
+                p._set_tsallis_q(q)
+            p.sample()
+            p.update(wp.array(costs, dtype=wp.float32, device=p.device))
+            return float(p.ess.numpy()[0])
+
+        base = ess_for(None)
+        self.assertLess(ess_for(0.5), base)  # elite concentration
+        self.assertGreater(ess_for(2.0), base)  # heavier-tailed averaging
+
+    def test_tsallis_q_matches_deformed_exponential(self):
+        # q = 2: exp_2(x) = [1 - x]_+^{-1}, x = -(cost - min)/lambda, so the
+        # (unnormalized) weight is 1 / (1 + (cost - min)/lambda)
+        planner = _make(device="cpu")
+        lam = 7.0
+        planner.set_temperature(lam)
+        planner._set_tsallis_q(2.0)
+        planner.sample()
+        costs = np.linspace(2.0, 40.0, 64, dtype=np.float32)
+        planner.update(wp.array(costs, dtype=wp.float32, device="cpu"))
+        expected = 1.0 / (1.0 + (costs - costs.min()) / lam)
+        np.testing.assert_allclose(planner.weights.numpy(), expected, rtol=1e-5, atol=1e-6)
 
     def test_shift_rolls_and_repeats_last(self):
         planner = _make()

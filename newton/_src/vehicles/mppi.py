@@ -21,6 +21,7 @@ def _sample_sequences(
     beta: wp.array[float],
     seed: int,
     counter: wp.array[wp.int32],
+    zero_mean_count: wp.array[wp.int32],
     noise: wp.array3d[float],
     samples: wp.array3d[float],
 ):
@@ -37,6 +38,14 @@ def _sample_sequences(
     state = wp.rand_init(seed, (counter[0] * noise.shape[0] + k) * nominal.shape[1] + a)
     b = beta[a]
     scale = wp.sqrt(wp.max(0.0, 1.0 - b * b))
+    # RA-MPPI zero-mean fraction: the first zero_mean_count non-hero samples
+    # draw pure smoothed noise (u = eps) instead of nominal + eps, which pulls
+    # the softmax average back toward zero and damps accumulated nominal drift.
+    # Default 0 reproduces the plain sampler bit-for-bit. The stored noise is
+    # ALWAYS the deviation from nominal (s - nominal), so update() -- which
+    # adds the weighted average of noise to nominal -- stays consistent whether
+    # or not a sample is zero-mean.
+    zero_mean = k <= zero_mean_count[0]
     n = float(0.0)
     for t in range(horizon):
         eps = sigma[a] * sigma_schedule[t] * wp.randn(state)
@@ -44,9 +53,13 @@ def _sample_sequences(
             n = eps
         else:
             n = b * n + scale * eps
-        s = wp.clamp(nominal[t, a] + n, bounds_lo[a], bounds_hi[a])
+        if zero_mean:
+            s = wp.clamp(n, bounds_lo[a], bounds_hi[a])
+        else:
+            s = wp.clamp(nominal[t, a] + n, bounds_lo[a], bounds_hi[a])
         samples[k, t, a] = s
-        # effective (post-clamp) noise so update() respects the bounds
+        # effective (post-clamp) deviation from nominal so update() respects
+        # the bounds and remains unbiased for zero-mean samples
         noise[k, t, a] = s - nominal[t, a]
 
 
@@ -99,10 +112,23 @@ def _softmax_weights(
     costs: wp.array[float],
     min_cost: wp.array[float],
     temperature: wp.array[float],
+    tsallis_q: wp.array[float],
     weights: wp.array[float],
 ):
     k = wp.tid()
-    weights[k] = wp.exp(-(costs[k] - min_cost[0]) / wp.max(temperature[0], 1.0e-6))
+    x = -(costs[k] - min_cost[0]) / wp.max(temperature[0], 1.0e-6)
+    q = tsallis_q[0]
+    if q == 1.0:
+        # exact softmax (Boltzmann) weighting -- bit-identical default path
+        weights[k] = wp.exp(x)
+    else:
+        # Tsallis / deformed-exponential weighting: w ~ exp_q(-cost/lambda),
+        # exp_q(x) = [1 + (1 - q) x]_+^{1/(1-q)}. As q grows the weight sharpens
+        # from soft averaging toward hard elite (CEM-style) selection, trading
+        # averaging smoothness for elite concentration (watch ESS). q -> 1
+        # recovers the exponential above.
+        base = wp.max(1.0 + (1.0 - q) * x, 0.0)
+        weights[k] = wp.pow(base, 1.0 / (1.0 - q))
 
 
 @wp.kernel
@@ -144,9 +170,10 @@ def _shift_nominal(nominal: wp.array2d[float]):
 def _shift_knots(knots: wp.array2d[float], delta: float):
     # warm-start the knot spline by ONE fine control step (not one knot):
     # new_knots[j] = spline(j + delta), delta = (n-1)/(H-1) knot units.
-    # The ascending in-place loop is safe because delta < 1: writing knot j
-    # only reads knots j and j+1, which have not been overwritten yet. The
-    # last knot repeats (spline extended by holding the final value).
+    # The ascending in-place loop is safe because delta <= 1 (delta == 1 only
+    # when n_knots == horizon): writing knot j reads knots j0 = min(j+1, n-2)
+    # and j0+1, which are >= j and have not been overwritten yet. The last knot
+    # repeats (spline extended by holding the final value).
     a = wp.tid()
     n = knots.shape[0]
     for j in range(n - 1):
@@ -186,6 +213,14 @@ class ControllerMPPI:
     and default-off (``None`` reproduces the per-step sampler bit-for-bit);
     :attr:`samples` and :attr:`nominal` keep their horizon-resolution shapes
     regardless, so the rollout caller is unaffected.
+
+    Two further private, default-off smoothing knobs from the MPPI literature
+    are available: ``_zero_mean_fraction`` (RA-MPPI) draws a fraction of the
+    samples as pure noise rather than noise about the nominal, and
+    ``_tsallis_q`` replaces the softmax weighting with a deformed exponential
+    that sharpens toward elite selection as ``q`` grows. Both default to the
+    bit-identical baseline (``0.0`` and ``1.0``) and are runtime-tunable via
+    :meth:`_set_zero_mean_fraction` and :meth:`_set_tsallis_q`.
     """
 
     @dataclass
@@ -217,6 +252,8 @@ class ControllerMPPI:
         device: wp.context.Device | str | None = None,
         *,
         _n_knots: int | None = None,
+        _zero_mean_fraction: float = 0.0,
+        _tsallis_q: float = 1.0,
     ):
         cfg = config if config is not None else ControllerMPPI.Config()
         if cfg.num_samples < 2:
@@ -277,10 +314,18 @@ class ControllerMPPI:
             self.bounds_hi = wp.array(cfg.bounds_hi, dtype=wp.float32)
             self._temperature = wp.array([cfg.temperature], dtype=wp.float32)
             self._beta = wp.array(betas, dtype=wp.float32)
+            # RA-MPPI zero-mean sample count and Tsallis weighting exponent
+            # (experimental, private): defaults reproduce the plain sampler and
+            # exact softmax bit-for-bit. Held in device arrays so they stay
+            # graph-capturable and runtime-tunable like set_temperature/set_beta.
+            self._zero_mean_count = wp.zeros(1, dtype=wp.int32)
+            self._tsallis_q = wp.array([1.0], dtype=wp.float32)
             self._counter = wp.zeros(1, dtype=wp.int32)
             self._min_cost = wp.zeros(1, dtype=wp.float32)
             self._weight_sum = wp.zeros(1, dtype=wp.float32)
             self.ess = wp.zeros(1, dtype=wp.float32)
+        self._set_zero_mean_fraction(_zero_mean_fraction)
+        self._set_tsallis_q(_tsallis_q)
 
     def set_temperature(self, value: float) -> None:
         """Sets the softmax temperature (safe while a CUDA graph is captured)."""
@@ -314,6 +359,41 @@ class ControllerMPPI:
         n = self._n_dec
         schedule = float(value) ** (np.arange(n, dtype=np.float64) / (n - 1))
         self._sigma_schedule.assign(schedule.astype(np.float32))
+
+    def _set_zero_mean_fraction(self, value: float) -> None:
+        """Sets the RA-MPPI zero-mean sample fraction (experimental, private).
+
+        The first ``ceil(value * num_samples)`` non-hero samples (sample 0 stays
+        the pure nominal) draw pure smoothed noise ``u = eps`` rather than
+        ``nominal + eps``, a Williams-lineage smoothing trick that pulls the
+        softmax average toward zero and damps accumulated nominal drift. ``0.0``
+        (default) reproduces the plain sampler bit-for-bit. Safe while a CUDA
+        graph is captured (device-array write only).
+
+        Args:
+            value: Fraction of samples drawn zero-mean, in [0, 1].
+        """
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("zero-mean fraction must be in [0, 1]")
+        count = int(np.ceil(value * self.config.num_samples))
+        self._zero_mean_count.fill_(count)
+
+    def _set_tsallis_q(self, value: float) -> None:
+        """Sets the Tsallis weighting exponent q (experimental, private).
+
+        Replaces the softmax weight ``exp(-cost/lambda)`` with the deformed
+        exponential ``exp_q(-cost/lambda)``; ``q`` grows the weighting from soft
+        averaging toward hard elite selection (trading averaging smoothness for
+        elite concentration). ``1.0`` (default) is the exact softmax path,
+        bit-for-bit. Safe while a CUDA graph is captured (device-array write
+        only).
+
+        Args:
+            value: Deformed-exponential exponent; must be > 0.
+        """
+        if value <= 0.0:
+            raise ValueError("tsallis q must be > 0")
+        self._tsallis_q.fill_(float(value))
 
     def _sync_nominal(self) -> None:
         """Interpolates the knot decision variable into the horizon nominal.
@@ -350,6 +430,7 @@ class ControllerMPPI:
                 self._beta,
                 cfg.seed,
                 self._counter,
+                self._zero_mean_count,
             ],
             outputs=[self.noise, knot_out],
             device=self.device,
@@ -382,7 +463,7 @@ class ControllerMPPI:
         wp.launch(
             _softmax_weights,
             dim=cfg.num_samples,
-            inputs=[costs, self._min_cost, self._temperature, self.weights],
+            inputs=[costs, self._min_cost, self._temperature, self._tsallis_q, self.weights],
             device=self.device,
         )
         wp.launch(_sum_weights, dim=1, inputs=[self.weights, self._weight_sum, self.ess], device=self.device)

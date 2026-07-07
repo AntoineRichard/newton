@@ -96,6 +96,8 @@ def bench_track(
     beta=None,
     w_rate=None,
     w_exec=None,
+    zero_mean_fraction=0.0,
+    tsallis_q=1.0,
 ) -> dict:
     """Run one track headless and return its metric dict.
 
@@ -117,6 +119,12 @@ def bench_track(
     )
     if sigma_horizon_factor != 1.0:
         example.planner._set_sigma_horizon_factor(sigma_horizon_factor)
+    # Task 3b literature-informed knobs (default-off no-ops): RA-MPPI zero-mean
+    # sample fraction and Tsallis deformed-exponential weighting exponent.
+    if zero_mean_fraction != 0.0:
+        example.planner._set_zero_mean_fraction(zero_mean_fraction)
+    if tsallis_q != 1.0:
+        example.planner._set_tsallis_q(tsallis_q)
     # Decision-5 removal-ablation knobs: override the existing smoothness
     # machinery post-construction (AR(1) beta, the w_rate cost, the t=0
     # exec-coupling weight w_exec) to test what the spline prior subsumes.
@@ -137,6 +145,7 @@ def bench_track(
     v_des = np.empty(frames, dtype=np.float64)
     mean_cost = np.empty(frames, dtype=np.float64)
     best_cost = np.empty(frames, dtype=np.float64)
+    ess = np.empty(frames, dtype=np.float64)
     hero_s = np.empty(frames, dtype=np.float64)
     oob = np.zeros(frames, dtype=np.int32)
 
@@ -157,6 +166,7 @@ def bench_track(
         v_des[f] = tel["v_des"]
         mean_cost[f] = tel["mean_cost"]
         best_cost[f] = tel["best_cost"]
+        ess[f] = tel["ess"]
         hero_s[f] = float(example.car_s.numpy()[0])
         oob[f] = int(tel["hero_oob"])
 
@@ -225,6 +235,7 @@ def bench_track(
         "lap_frac": lap_dist / track_len if track_len else float("nan"),
         "mean_cost": float(mean_cost.mean()),
         "best_cost": float(best_cost.mean()),
+        "mean_ess": float(ess.mean()),
         "drms_drive": float(np.sqrt(np.mean(dd**2))),
         "drms_steer": float(np.sqrt(np.mean(dst**2))),
         "steer_reversals": reversals,
@@ -246,6 +257,8 @@ def bench_track(
         "beta": beta,
         "w_rate": w_rate,
         "w_exec": w_exec,
+        "zero_mean_fraction": zero_mean_fraction,
+        "tsallis_q": tsallis_q,
     }
 
 
