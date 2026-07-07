@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Evaluate, and where it pays off, adopt the sampling improvements from DIAL-MPC (Diffusion-Inspired Annealing for Legged MPC) into `newton.vehicles.ControllerMPPI`, so the wheeled-racing planner explores better and jitters less **at fixed compute** on the existing `example_vehicle_mppi_track` benchmark. Each ingredient is gated by an explicit equal-compute ablation against today's single-pass MPPI; ingredients that do not beat that gate are recorded as rejected, not merged.
+**Goal:** Evaluate, and where it pays off, adopt the sampling improvements from DIAL-MPC (Diffusion-Inspired Annealing for Legged MPC) into `newton.vehicles.ControllerMPPI`, so the wheeled-racing planner explores better and jitters less on the existing `example_vehicle_mppi_track` benchmark. Each ingredient runs an explicit equal-compute ablation against today's single-pass MPPI as evidence to report (see Decisions: not an auto-reject gate — the deployment path is a lighter rollout model); ingredients that win on neither the equal-compute nor the above-budget arm are recorded as rejected, not merged.
 
 **Architecture:** `ControllerMPPI` today is a single-pass MPPI: one `sample()` (nominal + AR(1)-smoothed Gaussian noise, fixed per-channel `sigma`), the caller rolls out `K` Newton worlds over the horizon and accumulates costs, then one softmax-weighted `update()` and a `shift()`. DIAL-MPC keeps that MPPI update as its inner step but wraps it in an outer "diffusion" loop that re-samples/re-rolls the horizon `N_diffuse` times with an annealed covariance, uses a horizon-dependent noise schedule (more noise far in the horizon, less near the executed step), and parameterizes the control as a coarse spline. We port the cheap, structurally-free ingredients first (horizon-annealed noise), then the medium one (spline knots), and treat the expensive outer loop as an experiment gated hard on compute-matched wins. See the source: `newton/_src/vehicles/mppi.py` and the example `newton/examples/vehicles/example_vehicle_mppi_track.py`.
 
@@ -77,18 +77,18 @@ Reported: ~13.4× lower tracking error vs. MPPI and +50% over an RL baseline on 
 
 - **Rollouts are the budget.** One plan update is already `~128` solver substeps × 1024 worlds in a CUDA graph. `N_diffuse = 4` makes that `~4×`. There is no free lunch: the fair question is not "does annealing beat vanilla MPPI?" but "does `N_diffuse` iterations of `K/N_diffuse` samples beat one pass of `K` samples **at equal total rollouts**?" DIAL's own paper does not answer this.
 - **Low-dimensional action space undercuts the headline motivation.** Diffusion-style annealing exists to escape local minima and tame variance in high-dimensional non-convex sampling. With `A = 2–3` and dense sampling, MPPI's landscape is far tamer; the marginal value of iterative denoising is expected to be small. Where local minima *do* bite us (inside vs. outside line through a corner; which side of an obstacle), a few outer iterations with annealed noise *could* help — but that is exactly what the equal-compute ablation must prove.
-- **The near-free ingredient likely captures most of the realizable benefit.** The horizon-annealed schedule targets our actual documented failure mode (near-term jitter) at ~zero compute and no CUDA-graph disruption. Spline is a bounded experiment. The outer loop is high-risk, high-cost and must clear a hard gate.
+- **The near-free ingredient likely captures most of the realizable benefit.** The horizon-annealed schedule targets our actual documented failure mode (near-term jitter) at ~zero compute and no CUDA-graph disruption. Spline is a bounded experiment. The outer loop is the costliest experiment but gets a fair trial (Decision 1): rollout cost on today's Newton backend is not the deployment constraint.
 
-### The equal-compute gate (applies to every step)
+### The equal-compute comparison (applies to every step)
 
-Benchmark = `example_vehicle_mppi_track` at a **fixed total rollout budget** `B = N_diffuse · K · H · rollout_substeps`, fixed track seed set, fixed frame count. Report, averaged over a seed sweep (≥ 8 track seeds):
+Benchmark = `example_vehicle_mppi_track` at a **fixed total rollout budget** `B = N_diffuse · K · H · rollout_substeps`, fixed frame count. Track protocol (per Decision 4): tune on the ONE user-picked track from the candidate grid, then validate every keep/reject decision on 4 other tracks. Report per track:
 - **Lap time / distance-per-N-frames** (primary racing metric; hero lap odometer `total_s`).
 - **Mean tracking cost** and **best/mean sample cost**.
 - **Control smoothness**: RMS of executed `Δdrive`, `Δsteer` between frames (jitter proxy) and steering reversal count.
 - **Robustness**: fraction of seeds finishing without a wall-kill of the hero.
 - **Compute**: wall-clock per `step()` and effective steps/s (must stay real-time-capable, i.e. ≥ 60 Hz-equivalent headroom that today's config has).
 
-A step is **kept only if** it beats today's single-pass MPPI **at equal `B`** on the primary metric without regressing smoothness or robustness. Otherwise it is recorded as rejected (mirror the existing "rejected findings" commits on this branch).
+Keep/reject rule (per Decisions 1–2): smoothness ranks **at least equal** to lap distance. A step is **kept** if, at equal `B`, it improves smoothness without a meaningful lap-distance or robustness loss (smoother-but-marginally-shorter = keep), or improves lap distance without regressing smoothness/robustness. A smoothness regression = reject. The equal-compute comparison is **evidence to report**, not an auto-reject gate — for Task 4 in particular, an above-budget win is still interesting given the lighter-rollout deployment path. Rejected steps are recorded (mirror the existing "rejected findings" commits on this branch).
 
 ---
 
@@ -102,11 +102,11 @@ Establishes the equal-compute gate before touching the sampler, so every later s
 - Create: `newton/_src/vehicles/_mppi_bench.py` *(internal helper; not public API)* or a scratch script under the session scratchpad — a headless driver that runs `example_vehicle_mppi_track` over a seed sweep and emits the metrics above as JSON.
 - Reference only: `newton/examples/vehicles/example_vehicle_mppi_track.py` (metrics already exposed: `total_s`, `costs`, `ess`, executed `nominal[0]`).
 
-**Interfaces:** produces a `bench(seeds, frames, config_overrides) -> dict` returning per-seed and aggregate lap distance, mean/best/mean cost, executed-command RMS jitter, steering-reversal count, hero-kill fraction, and steps/s.
+**Interfaces:** produces a `bench(tracks, frames, config_overrides) -> dict` returning per-track and aggregate lap distance, mean/best/mean cost, executed-command RMS jitter, steering-reversal count, hero-kill fraction, and steps/s.
 
 - [ ] **Step 1:** Add executed-command logging to the harness (differences of `planner.nominal[0]` across frames) and a wall-clock timer around `step()`. Do **not** modify the example's control logic.
-- [ ] **Step 2:** Run the sweep (≥ 8 seeds, both `bezier` and `repulsive` generators, default `--num-samples`/`--horizon`) and record baseline JSON. Commit the numbers as the reference in the plan's results section (below) or a committed `docs/superpowers/notes/` file.
-- [ ] **Acceptance:** reproducible baseline numbers with variance across seeds; harness runs headless (`--viewer null`) and CUDA-graph path intact.
+- [ ] **Step 2 (track protocol, Decision 4):** baseline on the ONE user-picked tuning track (chosen from the 16-candidate grid) plus the 4 validation tracks, default `--num-samples`/`--horizon`. Record baseline JSON; commit the numbers as the reference in the plan's results section (below) or a committed `docs/superpowers/notes/` file.
+- [ ] **Acceptance:** reproducible baseline numbers on all 5 tracks; harness runs headless (`--viewer null`) and CUDA-graph path intact.
 
 **Commit:** `Add MPPI racing benchmark harness for annealing experiments`
 
@@ -121,13 +121,13 @@ The cheap win: make `sigma` depend on the horizon step `t` — less noise near `
 - Modify: `newton/tests/test_vehicles_mppi.py`.
 
 **Design:**
-- New `Config` field, e.g. `sigma_horizon_factor: float = 1.0` (1.0 ⇒ flat ⇒ **bit-identical to today**). Effective per-step std: `sigma_t = sigma_a · f(t)` with a monotone schedule, e.g. `f(t) = exp((H-1-t)/(H) · ln(sigma_horizon_factor))` so the near-term step is calmest and the far step scales by `sigma_horizon_factor`. Store the precomputed `[H, A]` (or `[H]`) schedule in a device array so it stays graph-capturable and runtime-tunable.
+- New knob `sigma_horizon_factor: float = 1.0` (1.0 ⇒ flat ⇒ **bit-identical to today**). Per Decision 3 it stays **example-level/private** (internal `_src` field or `set_*` method, not a public `Config` field) until proven; promotion to the public `Config` happens only on keep. Effective per-step std: `sigma_t = sigma_a · f(t)` with a monotone schedule, e.g. `f(t) = exp((H-1-t)/(H) · ln(sigma_horizon_factor))` so the near-term step is calmest and the far step scales by `sigma_horizon_factor`. Store the precomputed `[H, A]` (or `[H]`) schedule in a device array so it stays graph-capturable and runtime-tunable.
 - The AR(1) `beta` smoothing stays; the schedule multiplies `eps` per step.
 
 - [ ] **Step 1 (TDD):** Add failing tests — with `sigma_horizon_factor = 1.0`, samples are unchanged vs. the current implementation (regression lock, seed-matched); with `factor > 1.0`, per-step sample variance increases monotonically with `t` (measure across many samples); bounds still respected; sample 0 still the nominal.
-- [ ] **Step 2:** Implement the schedule; verify the `factor = 1.0` regression test passes bit-for-bit.
-- [ ] **Step 3:** Sweep the factor on the benchmark (e.g. {1.0, 1.5, 2.0, 3.0}) at fixed `B`; pick the best.
-- [ ] **Acceptance (gate):** at equal compute, the best factor reduces executed-command RMS jitter and/or steering-reversal count **without** hurting lap distance or hero-kill fraction. If no factor helps, record rejected and leave the field defaulting to 1.0 (no-op) or revert. Update `docs/generate_api.py` output; CHANGELOG under `Added` only if kept.
+- [ ] **Step 2:** Implement the schedule (private surface); verify the `factor = 1.0` regression test passes bit-for-bit.
+- [ ] **Step 3:** Sweep the factor on the tuning track (e.g. {1.0, 1.5, 2.0, 3.0}) at fixed `B`; pick the best; validate on the 4 validation tracks.
+- [ ] **Acceptance (per Decision 2):** at equal compute, the best factor reduces executed-command RMS jitter and/or steering-reversal count without regressing hero-kill fraction; a small lap-distance cost is acceptable if smoothness clearly improves. If no factor helps, record rejected and leave the knob defaulting to 1.0 (no-op) or revert. Only on keep: promote to public `Config`, update `docs/generate_api.py` output, CHANGELOG under `Added`.
 
 **Commit (if kept):** `Add horizon-annealed noise schedule to ControllerMPPI`
 
@@ -142,22 +142,23 @@ Represent the plan by `n_knots` coarse control knots interpolated to the `H` fin
 - Modify: `newton/tests/test_vehicles_mppi.py`.
 
 **Design:**
-- New `Config` field `n_knots: int | None = None` (`None` ⇒ per-step, **today's behavior**). When set, the planner's decision variable is `[n_knots, A]`; `samples`/`noise` are sampled at knots, then a linear (or Catmull-Rom) interpolation kernel expands to `[K, H, A]` for the caller's rollout. `update()` averages noise at knot resolution; `shift()` shifts knots.
+- New knob `n_knots: int | None = None` (`None` ⇒ per-step, **today's behavior**); per Decision 3 it stays example-level/private until proven, promoted to the public `Config` only on keep. When set, the planner's decision variable is `[n_knots, A]`; `samples`/`noise` are sampled at knots, then a linear (or Catmull-Rom) interpolation kernel expands to `[K, H, A]` for the caller's rollout. `update()` averages noise at knot resolution; `shift()` shifts knots.
 - Keep the interpolation kernel graph-capturable; expose the expanded `[K, H, A]` `samples` unchanged so the example's rollout loop is untouched.
 - Interaction: with knots, the AR(1) `beta` and the Task-2 horizon schedule act at knot resolution (document this).
 
 - [ ] **Step 1 (TDD):** Failing tests — `n_knots = None` reproduces current shapes/behavior; with knots, `samples` has shape `[K, H, A]`, sample 0 equals the interpolated nominal, interpolation is exact at knot locations, bounds respected after interpolation+clamp.
-- [ ] **Step 2:** Implement knots + interpolation; verify `None` path is bit-identical.
-- [ ] **Step 3:** Benchmark `n_knots ∈ {4, 6, 8, H}` at fixed `B`; compare against the Task-2 winner.
-- [ ] **Acceptance (gate):** at equal compute, some `n_knots` beats the Task-2 config on smoothness without regressing lap distance/robustness. The example may need light retuning of the rate/exec-coupling costs (knots already smooth); note any changes. If it does not beat Task 2, record rejected; keep `n_knots` defaulting to `None`.
+- [ ] **Step 2:** Implement knots + interpolation (private surface); verify `None` path is bit-identical.
+- [ ] **Step 3:** Benchmark `n_knots ∈ {4, 6, 8, H}` at fixed `B` on the tuning track; compare against the Task-2 winner; validate on the 4 validation tracks.
+- [ ] **Step 4 (removal ablation, Decision 5):** with the best `n_knots`, empirically test REMOVING the existing smoothness machinery — AR(1) `beta` (set to 0), the `w_rate` cost, and `EXEC_COUPLING` — individually and together. If splines subsume some of it, prefer the cleaner config (remove); if removal regresses, keep stacking and record why.
+- [ ] **Acceptance (per Decision 2):** at equal compute, some `n_knots` beats the Task-2 config on smoothness without regressing robustness; a small lap-distance cost is acceptable. Record the Step-4 removal-ablation outcome either way. If knots do not beat Task 2, record rejected; keep `n_knots` defaulting to `None`.
 
 **Commit (if kept):** `Add spline-knot control parameterization to ControllerMPPI`
 
 ---
 
-### Task 4: Outer diffusion-annealing loop (`N_diffuse`) — gated experiment
+### Task 4: Outer diffusion-annealing loop (`N_diffuse`) — fair trial
 
-The expensive ingredient. Wrap the sample→rollout→update cycle in an outer loop with per-iteration annealed `sigma`, holding total rollouts fixed for the ablation.
+The expensive ingredient, given a **fair trial** (Decision 1): GPU budget is flexible for experiments, and the deployment path is a lighter rollout model (kinematic/dynamic bicycle model or a small learned dynamics net), so `N_diffuse > 1` is not ruled out by today's Newton-rollout cost. Wrap the sample→rollout→update cycle in an outer loop with per-iteration annealed `sigma`. Run the equal-compute ablation as evidence to report alongside an above-budget run — not as an auto-reject gate. Follow-up note: a bicycle-model rollout backend is plausible future work that would enable much larger annealing budgets.
 
 **Files:**
 - Modify: `newton/_src/vehicles/mppi.py` — add per-iteration noise-scale control (a `set_diffuse_scale(i)` writing a device scalar consumed by `_sample_sequences`). The **loop itself lives in the example/harness**, not the planner, so the planner stays a primitive and CUDA-graph capture of the multi-iteration cycle is explicit.
@@ -171,8 +172,9 @@ The expensive ingredient. Wrap the sample→rollout→update cycle in an outer l
 
 - [ ] **Step 1 (TDD):** Failing tests — `set_diffuse_scale(1.0)` + `N_diffuse = 1` reproduces single-pass behavior bit-for-bit; the annealed scale correctly shrinks sampled noise variance across iterations.
 - [ ] **Step 2:** Implement `set_diffuse_scale`; wire the outer loop + per-iteration restore in the example behind `--n-diffuse`.
-- [ ] **Step 3:** Verify CUDA-graph capture of the full cycle; confirm real-time headroom (`N_diffuse` will cut steps/s ~`N_diffuse×` at equal `K`, so the ablation must reduce `K` to hold `B`).
-- [ ] **Acceptance (gate — hard):** at **equal total rollouts `B`**, DIAL-style `(N_diffuse > 1, annealed)` must beat single-pass MPPI on lap distance or robustness (e.g. escaping a bad racing-line local minimum) without regressing smoothness or dropping below real-time. If it does not — the expected outcome given the low-dim action space — record rejected with the numbers and **do not merge the outer loop**; keep the near-free Task 2 (and Task 3 if kept) as the shipped improvement.
+- [ ] **Step 3:** Verify CUDA-graph capture of the full cycle; measure steps/s (`N_diffuse` cuts steps/s ~`N_diffuse×` at equal `K`; the equal-compute arm reduces `K` to hold `B`, the above-budget arm keeps `K`).
+- [ ] **Step 4 (evidence):** run both arms on the tuning track, validate on the 4 validation tracks: (a) equal-compute `(N_diffuse = D, K = K0/D)` vs. `(1, K0)`; (b) above-budget `(N_diffuse = D, K = K0)`. Report both — the equal-compute ablation is evidence, not an auto-reject gate.
+- [ ] **Acceptance (per Decisions 1–2):** keep if either arm beats single-pass MPPI on smoothness or lap distance/robustness (e.g. escaping a bad racing-line local minimum) without a smoothness regression, weighing smoothness at least equal to lap distance. The above-budget arm counts because deployment targets a lighter rollout backend. If neither arm wins, record rejected with the numbers and do not merge the outer loop; keep the near-free Task 2 (and Task 3 if kept) as the shipped improvement.
 
 **Commit (if kept):** `Add optional diffusion-annealing outer loop to MPPI rollout`
 **Commit (if rejected):** `Record DIAL-MPC outer-loop annealing findings as rejected`
@@ -200,10 +202,10 @@ The expensive ingredient. Wrap the sample→rollout→update cycle in an outer l
 
 ---
 
-## Open questions for the human
+## Decisions (2026-07-07)
 
-1. **Compute ceiling.** Today's config runs a full `H·rollout_substeps·K` rollout per frame in real time. Is there spare GPU budget to spend on `N_diffuse > 1` (raising `B`), or must every experiment hold total rollouts fixed (the equal-compute gate as written)? This decides whether Task 4 is even worth attempting beyond the ablation.
-2. **Primary success metric.** Lap time is the racing goal, but the loudest known defect is steering jitter. If a step trades a hair of lap distance for markedly smoother control, do we keep it? Please rank: lap distance vs. smoothness vs. robustness.
-3. **Public-API surface.** Are new opt-in `Config` fields (`sigma_horizon_factor`, `n_knots`) acceptable additions to the shipped `ControllerMPPI`, or should annealing experiments live entirely in the example until proven, keeping the planner minimal?
-4. **Scope of the gate.** Is an 8-seed sweep across both track generators sufficient evidence to keep/reject, or do you want a larger sweep / a specific hard track (e.g. a hairpin known to trap the racing line) as the local-minimum stress test for Task 4?
-5. **Spline vs. existing smoothness machinery.** We already fight jitter with AR(1) `beta`, a rate cost, exec-coupling, and speed-scaled steering. If spline knots help, do we *remove* some of that machinery (cleaner) or stack it (safer)?
+1. **Compute ceiling: flexible for experiments.** GPU budget is not a hard wall during experimentation; the practical deployment path is a lighter rollout model (kinematic/dynamic bicycle model or a small learned dynamics net), so `N_diffuse > 1` is **not** ruled out by rollout cost. Task 4 is a **fair trial**, not an expected reject. The equal-compute ablation stays, but as **evidence to report**, not an auto-reject gate. Follow-up (out of scope here): a bicycle-model rollout backend is plausible future work that would enable much larger annealing budgets.
+2. **Metric ranking: smoothness ranks at least equal to lap distance.** Steering jitter on straights costs top speed, so a smoother-but-marginally-shorter result is a **KEEP**. Acceptance criteria across all tasks: a smoothness regression = reject; a smoothness win at small lap-distance cost = keep. Robustness (hero-kill fraction) must not regress.
+3. **New knobs stay example-level/private until proven.** No new public `ControllerMPPI.Config` fields during experimentation — new knobs live in the example / internal (`_src`) surface. Once an ingredient is proven kept, expose it on the public `Config` (then run `docs/generate_api.py` and add the CHANGELOG entry).
+4. **Track protocol: one picked track first, then 4-track validation.** Initial tuning happens on ONE user-picked "interesting" track selected from a generated candidate grid (16 candidates rendered for the user to choose from). Each kept/rejected decision is then validated on 4 other tracks. This replaces the blanket ≥8-seed sweep as the primary protocol; a wider seed sweep remains optional supporting evidence.
+5. **Spline vs. existing smoothness machinery: empirically test removal.** Once spline knots are in, explicitly ablate REMOVING the current machinery (AR(1) `beta`, rate cost, exec-coupling) rather than only stacking on top — see the added ablation step in Task 3.
