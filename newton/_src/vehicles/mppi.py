@@ -140,6 +140,22 @@ def _shift_nominal(nominal: wp.array2d[float]):
         nominal[t, a] = nominal[t + 1, a]
 
 
+@wp.kernel
+def _shift_knots(knots: wp.array2d[float], delta: float):
+    # warm-start the knot spline by ONE fine control step (not one knot):
+    # new_knots[j] = spline(j + delta), delta = (n-1)/(H-1) knot units.
+    # The ascending in-place loop is safe because delta < 1: writing knot j
+    # only reads knots j and j+1, which have not been overwritten yet. The
+    # last knot repeats (spline extended by holding the final value).
+    a = wp.tid()
+    n = knots.shape[0]
+    for j in range(n - 1):
+        p = float(j) + delta
+        j0 = wp.min(int(p), n - 2)
+        f = p - float(j0)
+        knots[j, a] = knots[j0, a] * (1.0 - f) + knots[j0 + 1, a] * f
+
+
 class ControllerMPPI:
     """Model Predictive Path Integral planner over externally simulated rollouts.
 
@@ -379,6 +395,15 @@ class ControllerMPPI:
         self._sync_nominal()
 
     def shift(self) -> None:
-        """Rolls the nominal one step forward, repeating the final row."""
-        wp.launch(_shift_nominal, dim=self.config.dim, inputs=[self._knots], device=self.device)
+        """Rolls the nominal one step forward, repeating the final row.
+
+        With knots enabled, the knot spline is resampled one fine control
+        step later (``delta = (n_knots - 1) / (horizon - 1)`` knot units), so
+        the warm-start advances by exactly one executed step either way.
+        """
+        if self._use_knots:
+            delta = (self._n_dec - 1) / (self.config.horizon - 1)
+            wp.launch(_shift_knots, dim=self.config.dim, inputs=[self._knots, float(delta)], device=self.device)
+        else:
+            wp.launch(_shift_nominal, dim=self.config.dim, inputs=[self._knots], device=self.device)
         self._sync_nominal()

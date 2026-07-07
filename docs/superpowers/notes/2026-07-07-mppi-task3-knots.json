@@ -1,0 +1,658 @@
+{
+ "None": [
+  {
+   "track": "hull s4 hull_displacement=0.35",
+   "generator": "hull",
+   "seed": 4,
+   "params": {
+    "hull_displacement": 0.35
+   },
+   "track_len_m": 120.07014465332031,
+   "frames": 240,
+   "num_samples": 1024,
+   "horizon": 48,
+   "rollout_substeps": 4,
+   "rollout_budget": 196608,
+   "lap_dist_m": 20.37407112121582,
+   "lap_frac": 0.16968473870038278,
+   "mean_cost": 4.971095370252927,
+   "best_cost": -127.42538083394369,
+   "drms_drive": 0.07106058433241637,
+   "drms_steer": 0.08600844623116286,
+   "steer_reversals": 89,
+   "hero_oob_frac": 0.0,
+   "finished": true,
+   "steps_per_s": 4.324963180908833,
+   "mean_speed": 4.95926222971951,
+   "max_speed": 8.161046981811523,
+   "peak_decel": 24.210433959960938,
+   "mean_brake": 0.006219955914032956,
+   "max_brake": 0.3786374628543854,
+   "hairpins": [
+    {
+     "s": 19.555057525634766,
+     "v_min_ref": 3.5097508430480957,
+     "peak_decel": 24.210433959960938,
+     "mean_decel": 5.222433993690892,
+     "max_brake": 0.3786374628543854,
+     "frames_in_window": 57
+    },
+    {
+     "s": 0.0,
+     "v_min_ref": 4.323470592498779,
+     "peak_decel": 0.0,
+     "mean_decel": 0.0,
+     "max_brake": 0.0,
+     "frames_in_window": 0
+    }
+   ],
+   "brake_mode": "esc",
+   "sigma_horizon_factor": 1.0,
+   "w_underspeed": 0.5,
+   "n_knots": null,
+   "beta": null,
+   "w_rate": null,
+   "w_exec": null
+  },
+  {
+   "track": "hull s4 hull_displacement=0.35",
+   "generator": "hull",
+   "seed": 4,
+   "params": {
+    "hull_displacement": 0.35
+   },
+   "track_len_m": 120.07014465332031,
+   "frames": 240,
+   "num_samples": 1024,
+   "horizon": 48,
+   "rollout_substeps": 4,
+   "rollout_budget": 196608,
+   "lap_dist_m": 20.52984046936035,
+   "lap_frac": 0.17098205826799293,
+   "mean_cost": 4.02556317076087,
+   "best_cost": -128.50254658063253,
+   "drms_drive": 0.07076296837251488,
+   "drms_steer": 0.09847634611644414,
+   "steer_reversals": 106,
+   "hero_oob_frac": 0.0,
+   "finished": true,
+   "steps_per_s": 4.320181045838034,
+   "mean_speed": 4.977741667286804,
+   "max_speed": 8.328977584838867,
+   "peak_decel": 19.90729808807373,
+   "mean_brake": 0.009696928795650213,
+   "max_brake": 0.226562961935997,
+   "hairpins": [
+    {
+     "s": 19.555057525634766,
+     "v_min_ref": 3.5097508430480957,
+     "peak_decel": 19.90729808807373,
+     "mean_decel": 6.430719933419858,
+     "max_brake": 0.226562961935997,
+     "frames_in_window": 53
+    },
+    {
+     "s": 0.0,
+     "v_min_ref": 4.323470592498779,
+     "peak_decel": 0.0,
+     "mean_decel": 0.0,
+     "max_brake": 0.0,
+     "frames_in_window": 0
+    }
+   ],
+   "brake_mode": "esc",
+   "sigma_horizon_factor": 1.0,
+   "w_underspeed": 0.5,
+   "n_knots": null,
+   "beta": null,
+   "w_rate": null,
+   "w_exec": null
+  },
+  {
+   "track": "hull s4 hull_displacement=0.35",
+   "generator": "hull",
+   "seed": 4,
+   "params": {
+    "hull_displacement": 0.35
+   },
+   "track_len_m": 120.07014465332031,
+   "frames": 240,
+   "num_samples": 1024,
+   "horizon": 48,
+   "rollout_substeps": 4,
+   "rollout_budget": 196608,
+   "lap_dist_m": 20.367162704467773,
+   "lap_frac": 0.16962720219313535,
+   "mean_cost": 6.795727517455816,
+   "best_cost": -128.25080013275146,
+   "drms_drive": 0.07039280274828451,
+   "drms_steer": 0.09474044989956135,
+   "steer_reversals": 93,
+   "hero_oob_frac": 0.0,
+   "finished": true,
+   "steps_per_s": 4.3204004632472035,
+   "mean_speed": 4.935359987989068,
+   "max_speed": 8.152535438537598,
+   "peak_decel": 9.043693542480469,
+   "mean_brake": 0.0023939636594150215,
+   "max_brake": 0.11780741065740585,
+   "hairpins": [
+    {
+     "s": 19.555057525634766,
+     "v_min_ref": 3.5097508430480957,
+     "peak_decel": 8.916049003601074,
+     "mean_decel": 4.410734602383205,
+     "max_brake": 0.113785520195961,
+     "frames_in_window": 56
+    },
+    {
+     "s": 0.0,
+     "v_min_ref": 4.323470592498779,
+     "peak_decel": 0.0,
+     "mean_decel": 0.0,
+     "max_brake": 0.0,
+     "frames_in_window": 0
+    }
+   ],
+   "brake_mode": "esc",
+   "sigma_horizon_factor": 1.0,
+   "w_underspeed": 0.5,
+   "n_knots": null,
+   "beta": null,
+   "w_rate": null,
+   "w_exec": null
+  }
+ ],
+ "8": [
+  {
+   "track": "hull s4 hull_displacement=0.35",
+   "generator": "hull",
+   "seed": 4,
+   "params": {
+    "hull_displacement": 0.35
+   },
+   "track_len_m": 120.07014465332031,
+   "frames": 240,
+   "num_samples": 1024,
+   "horizon": 48,
+   "rollout_substeps": 4,
+   "rollout_budget": 196608,
+   "lap_dist_m": 19.041593551635742,
+   "lap_frac": 0.15858724586877712,
+   "mean_cost": 56.703849120934805,
+   "best_cost": -139.2389183362325,
+   "drms_drive": 0.06420792949355596,
+   "drms_steer": 0.09289303276137675,
+   "steer_reversals": 120,
+   "hero_oob_frac": 0.0,
+   "finished": true,
+   "steps_per_s": 4.313131703911366,
+   "mean_speed": 4.695447489075984,
+   "max_speed": 7.701979637145996,
+   "peak_decel": 5.658731460571289,
+   "mean_brake": 0.0,
+   "max_brake": 0.0,
+   "hairpins": [
+    {
+     "s": 18.963760375976562,
+     "v_min_ref": 3.6571409702301025,
+     "peak_decel": 5.41900634765625,
+     "mean_decel": 2.5739158283580434,
+     "max_brake": 0.0,
+     "frames_in_window": 66
+    },
+    {
+     "s": 0.0,
+     "v_min_ref": 4.323470592498779,
+     "peak_decel": 0.0,
+     "mean_decel": 0.0,
+     "max_brake": 0.0,
+     "frames_in_window": 0
+    }
+   ],
+   "brake_mode": "esc",
+   "sigma_horizon_factor": 1.0,
+   "w_underspeed": 0.5,
+   "n_knots": 8,
+   "beta": null,
+   "w_rate": null,
+   "w_exec": null
+  },
+  {
+   "track": "hull s4 hull_displacement=0.35",
+   "generator": "hull",
+   "seed": 4,
+   "params": {
+    "hull_displacement": 0.35
+   },
+   "track_len_m": 120.07014465332031,
+   "frames": 240,
+   "num_samples": 1024,
+   "horizon": 48,
+   "rollout_substeps": 4,
+   "rollout_budget": 196608,
+   "lap_dist_m": 19.78447151184082,
+   "lap_frac": 0.16477427897638264,
+   "mean_cost": 53.54809375603994,
+   "best_cost": -138.90624256134032,
+   "drms_drive": 0.060584868504968116,
+   "drms_steer": 0.08692434706259171,
+   "steer_reversals": 116,
+   "hero_oob_frac": 0.0,
+   "finished": true,
+   "steps_per_s": 4.302240192263745,
+   "mean_speed": 4.829706385793785,
+   "max_speed": 7.678858280181885,
+   "peak_decel": 5.63715934753418,
+   "mean_brake": 2.4923728778958322e-05,
+   "max_brake": 0.005981694906949997,
+   "hairpins": [
+    {
+     "s": 19.555057525634766,
+     "v_min_ref": 3.5097508430480957,
+     "peak_decel": 5.158967971801758,
+     "mean_decel": 3.4814706156330724,
+     "max_brake": 0.005981694906949997,
+     "frames_in_window": 62
+    },
+    {
+     "s": 0.0,
+     "v_min_ref": 4.323470592498779,
+     "peak_decel": 0.0,
+     "mean_decel": 0.0,
+     "max_brake": 0.0,
+     "frames_in_window": 0
+    }
+   ],
+   "brake_mode": "esc",
+   "sigma_horizon_factor": 1.0,
+   "w_underspeed": 0.5,
+   "n_knots": 8,
+   "beta": null,
+   "w_rate": null,
+   "w_exec": null
+  },
+  {
+   "track": "hull s4 hull_displacement=0.35",
+   "generator": "hull",
+   "seed": 4,
+   "params": {
+    "hull_displacement": 0.35
+   },
+   "track_len_m": 120.07014465332031,
+   "frames": 240,
+   "num_samples": 1024,
+   "horizon": 48,
+   "rollout_substeps": 4,
+   "rollout_budget": 196608,
+   "lap_dist_m": 19.772985458374023,
+   "lap_frac": 0.16467861778183707,
+   "mean_cost": 59.93063416381677,
+   "best_cost": -139.04397158622743,
+   "drms_drive": 0.07389836748337729,
+   "drms_steer": 0.10074484998862228,
+   "steer_reversals": 120,
+   "hero_oob_frac": 0.0,
+   "finished": true,
+   "steps_per_s": 4.321036736712845,
+   "mean_speed": 4.811607611396661,
+   "max_speed": 7.545305252075195,
+   "peak_decel": 8.302774429321289,
+   "mean_brake": 0.0003417555863658587,
+   "max_brake": 0.08202134072780609,
+   "hairpins": [
+    {
+     "s": 19.555057525634766,
+     "v_min_ref": 3.5097508430480957,
+     "peak_decel": 8.302774429321289,
+     "mean_decel": 3.8374927043914795,
+     "max_brake": 0.08202134072780609,
+     "frames_in_window": 60
+    },
+    {
+     "s": 0.0,
+     "v_min_ref": 4.323470592498779,
+     "peak_decel": 0.0,
+     "mean_decel": 0.0,
+     "max_brake": 0.0,
+     "frames_in_window": 0
+    }
+   ],
+   "brake_mode": "esc",
+   "sigma_horizon_factor": 1.0,
+   "w_underspeed": 0.5,
+   "n_knots": 8,
+   "beta": null,
+   "w_rate": null,
+   "w_exec": null
+  }
+ ],
+ "12": [
+  {
+   "track": "hull s4 hull_displacement=0.35",
+   "generator": "hull",
+   "seed": 4,
+   "params": {
+    "hull_displacement": 0.35
+   },
+   "track_len_m": 120.07014465332031,
+   "frames": 240,
+   "num_samples": 1024,
+   "horizon": 48,
+   "rollout_substeps": 4,
+   "rollout_budget": 196608,
+   "lap_dist_m": 20.086769104003906,
+   "lap_frac": 0.1672919538991198,
+   "mean_cost": 42.521992567181584,
+   "best_cost": -138.953626871109,
+   "drms_drive": 0.07321009623026745,
+   "drms_steer": 0.10331984388500548,
+   "steer_reversals": 117,
+   "hero_oob_frac": 0.0,
+   "finished": true,
+   "steps_per_s": 4.321838612807437,
+   "mean_speed": 4.878678948339075,
+   "max_speed": 7.709781646728516,
+   "peak_decel": 8.224382400512695,
+   "mean_brake": 0.0006142072990769521,
+   "max_brake": 0.13434159755706787,
+   "hairpins": [
+    {
+     "s": 19.555057525634766,
+     "v_min_ref": 3.5097508430480957,
+     "peak_decel": 8.224382400512695,
+     "mean_decel": 4.103278867129622,
+     "max_brake": 0.13434159755706787,
+     "frames_in_window": 58
+    },
+    {
+     "s": 0.0,
+     "v_min_ref": 4.323470592498779,
+     "peak_decel": 0.0,
+     "mean_decel": 0.0,
+     "max_brake": 0.0,
+     "frames_in_window": 0
+    }
+   ],
+   "brake_mode": "esc",
+   "sigma_horizon_factor": 1.0,
+   "w_underspeed": 0.5,
+   "n_knots": 12,
+   "beta": null,
+   "w_rate": null,
+   "w_exec": null
+  },
+  {
+   "track": "hull s4 hull_displacement=0.35",
+   "generator": "hull",
+   "seed": 4,
+   "params": {
+    "hull_displacement": 0.35
+   },
+   "track_len_m": 120.07014465332031,
+   "frames": 240,
+   "num_samples": 1024,
+   "horizon": 48,
+   "rollout_substeps": 4,
+   "rollout_budget": 196608,
+   "lap_dist_m": 20.48365020751953,
+   "lap_frac": 0.17059736428786834,
+   "mean_cost": 47.69236732174953,
+   "best_cost": -139.05997387568155,
+   "drms_drive": 0.06443304819637868,
+   "drms_steer": 0.10877027244163907,
+   "steer_reversals": 112,
+   "hero_oob_frac": 0.0,
+   "finished": true,
+   "steps_per_s": 4.168373814304369,
+   "mean_speed": 4.9357532719926285,
+   "max_speed": 7.778046607971191,
+   "peak_decel": 10.519037246704102,
+   "mean_brake": 0.0016756209816473225,
+   "max_brake": 0.08264730125665665,
+   "hairpins": [
+    {
+     "s": 19.555057525634766,
+     "v_min_ref": 3.5097508430480957,
+     "peak_decel": 10.519037246704102,
+     "mean_decel": 4.831421600197846,
+     "max_brake": 0.08264730125665665,
+     "frames_in_window": 53
+    },
+    {
+     "s": 0.0,
+     "v_min_ref": 4.323470592498779,
+     "peak_decel": 0.0,
+     "mean_decel": 0.0,
+     "max_brake": 0.0,
+     "frames_in_window": 0
+    }
+   ],
+   "brake_mode": "esc",
+   "sigma_horizon_factor": 1.0,
+   "w_underspeed": 0.5,
+   "n_knots": 12,
+   "beta": null,
+   "w_rate": null,
+   "w_exec": null
+  },
+  {
+   "track": "hull s4 hull_displacement=0.35",
+   "generator": "hull",
+   "seed": 4,
+   "params": {
+    "hull_displacement": 0.35
+   },
+   "track_len_m": 120.07014465332031,
+   "frames": 240,
+   "num_samples": 1024,
+   "horizon": 48,
+   "rollout_substeps": 4,
+   "rollout_budget": 196608,
+   "lap_dist_m": 20.354534149169922,
+   "lap_frac": 0.1695220257120516,
+   "mean_cost": 46.23518619487683,
+   "best_cost": -139.89710119565328,
+   "drms_drive": 0.07430167938301868,
+   "drms_steer": 0.09392921142977768,
+   "steer_reversals": 122,
+   "hero_oob_frac": 0.0,
+   "finished": true,
+   "steps_per_s": 4.3238029734601735,
+   "mean_speed": 4.920945019911354,
+   "max_speed": 7.687839984893799,
+   "peak_decel": 6.483278274536133,
+   "mean_brake": 0.0005050037953575763,
+   "max_brake": 0.04520774260163307,
+   "hairpins": [
+    {
+     "s": 19.555057525634766,
+     "v_min_ref": 3.5097508430480957,
+     "peak_decel": 6.483278274536133,
+     "mean_decel": 4.542378319634332,
+     "max_brake": 0.04520774260163307,
+     "frames_in_window": 54
+    },
+    {
+     "s": 0.0,
+     "v_min_ref": 4.323470592498779,
+     "peak_decel": 0.0,
+     "mean_decel": 0.0,
+     "max_brake": 0.0,
+     "frames_in_window": 0
+    }
+   ],
+   "brake_mode": "esc",
+   "sigma_horizon_factor": 1.0,
+   "w_underspeed": 0.5,
+   "n_knots": 12,
+   "beta": null,
+   "w_rate": null,
+   "w_exec": null
+  }
+ ],
+ "16": [
+  {
+   "track": "hull s4 hull_displacement=0.35",
+   "generator": "hull",
+   "seed": 4,
+   "params": {
+    "hull_displacement": 0.35
+   },
+   "track_len_m": 120.07014465332031,
+   "frames": 240,
+   "num_samples": 1024,
+   "horizon": 48,
+   "rollout_substeps": 4,
+   "rollout_budget": 196608,
+   "lap_dist_m": 20.22966194152832,
+   "lap_frac": 0.16848203189841754,
+   "mean_cost": 34.59278503985455,
+   "best_cost": -138.61732425689698,
+   "drms_drive": 0.07536804101696562,
+   "drms_steer": 0.11419577649132184,
+   "steer_reversals": 98,
+   "hero_oob_frac": 0.0,
+   "finished": true,
+   "steps_per_s": 4.338519289761335,
+   "mean_speed": 4.90260330249245,
+   "max_speed": 7.792696952819824,
+   "peak_decel": 16.616392135620117,
+   "mean_brake": 0.00363269633235177,
+   "max_brake": 0.24787171185016632,
+   "hairpins": [
+    {
+     "s": 19.555057525634766,
+     "v_min_ref": 3.5097508430480957,
+     "peak_decel": 16.616392135620117,
+     "mean_decel": 4.388680207101922,
+     "max_brake": 0.24787171185016632,
+     "frames_in_window": 57
+    },
+    {
+     "s": 0.0,
+     "v_min_ref": 4.323470592498779,
+     "peak_decel": 0.0,
+     "mean_decel": 0.0,
+     "max_brake": 0.0,
+     "frames_in_window": 0
+    }
+   ],
+   "brake_mode": "esc",
+   "sigma_horizon_factor": 1.0,
+   "w_underspeed": 0.5,
+   "n_knots": 16,
+   "beta": null,
+   "w_rate": null,
+   "w_exec": null
+  },
+  {
+   "track": "hull s4 hull_displacement=0.35",
+   "generator": "hull",
+   "seed": 4,
+   "params": {
+    "hull_displacement": 0.35
+   },
+   "track_len_m": 120.07014465332031,
+   "frames": 240,
+   "num_samples": 1024,
+   "horizon": 48,
+   "rollout_substeps": 4,
+   "rollout_budget": 196608,
+   "lap_dist_m": 20.264739990234375,
+   "lap_frac": 0.16877417820012589,
+   "mean_cost": 34.77890235967934,
+   "best_cost": -138.63480672836303,
+   "drms_drive": 0.07029446939214108,
+   "drms_steer": 0.1157500426998422,
+   "steer_reversals": 105,
+   "hero_oob_frac": 0.0,
+   "finished": true,
+   "steps_per_s": 4.275377451331908,
+   "mean_speed": 4.8993984051824855,
+   "max_speed": 7.873976230621338,
+   "peak_decel": 13.926115036010742,
+   "mean_brake": 0.0028053226104627054,
+   "max_brake": 0.22938746213912964,
+   "hairpins": [
+    {
+     "s": 19.555057525634766,
+     "v_min_ref": 3.5097508430480957,
+     "peak_decel": 13.926115036010742,
+     "mean_decel": 4.4580208022018954,
+     "max_brake": 0.22938746213912964,
+     "frames_in_window": 58
+    },
+    {
+     "s": 0.0,
+     "v_min_ref": 4.323470592498779,
+     "peak_decel": 0.0,
+     "mean_decel": 0.0,
+     "max_brake": 0.0,
+     "frames_in_window": 0
+    }
+   ],
+   "brake_mode": "esc",
+   "sigma_horizon_factor": 1.0,
+   "w_underspeed": 0.5,
+   "n_knots": 16,
+   "beta": null,
+   "w_rate": null,
+   "w_exec": null
+  },
+  {
+   "track": "hull s4 hull_displacement=0.35",
+   "generator": "hull",
+   "seed": 4,
+   "params": {
+    "hull_displacement": 0.35
+   },
+   "track_len_m": 120.07014465332031,
+   "frames": 240,
+   "num_samples": 1024,
+   "horizon": 48,
+   "rollout_substeps": 4,
+   "rollout_budget": 196608,
+   "lap_dist_m": 20.400487899780273,
+   "lap_frac": 0.1699047499166658,
+   "mean_cost": 37.537593672672905,
+   "best_cost": -138.7422344048818,
+   "drms_drive": 0.07649510762036134,
+   "drms_steer": 0.10402432086278439,
+   "steer_reversals": 108,
+   "hero_oob_frac": 0.0,
+   "finished": true,
+   "steps_per_s": 4.3294426632069705,
+   "mean_speed": 4.935170551141103,
+   "max_speed": 7.84063720703125,
+   "peak_decel": 8.038702011108398,
+   "mean_brake": 0.0015885358831534784,
+   "max_brake": 0.09993042051792145,
+   "hairpins": [
+    {
+     "s": 19.555057525634766,
+     "v_min_ref": 3.5097508430480957,
+     "peak_decel": 8.038702011108398,
+     "mean_decel": 4.894112820895213,
+     "max_brake": 0.09993042051792145,
+     "frames_in_window": 53
+    },
+    {
+     "s": 0.0,
+     "v_min_ref": 4.323470592498779,
+     "peak_decel": 0.0,
+     "mean_decel": 0.0,
+     "max_brake": 0.0,
+     "frames_in_window": 0
+    }
+   ],
+   "brake_mode": "esc",
+   "sigma_horizon_factor": 1.0,
+   "w_underspeed": 0.5,
+   "n_knots": 16,
+   "beta": null,
+   "w_rate": null,
+   "w_exec": null
+  }
+ ]
+}

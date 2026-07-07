@@ -182,6 +182,21 @@ class TestControllerMPPI(unittest.TestCase):
         self.assertLessEqual(float(samples.max()), 1.0 + 1e-6)
         self.assertGreaterEqual(float(samples.min()), -1.0 - 1e-6)
 
+    def test_knots_shift_advances_one_fine_step(self):
+        # the warm-start must advance one executed control step, not one knot:
+        # horizon 7, 4 knots -> knots at t = 0, 2, 4, 6, delta = 0.5 knots =
+        # 1 fine step; shifted knot j equals the old spline at t_j + 1
+        planner = self._make_knots(4, horizon=7)
+        knots = np.array([[0.1, -0.2], [0.4, 0.5], [-0.3, 0.2], [0.0, -0.6]], dtype=np.float32)
+        planner._knots.assign(knots)
+        planner._sync_nominal()
+        before = planner.nominal.numpy().copy()
+        planner.shift()
+        after = planner.nominal.numpy()
+        for j in range(3):
+            np.testing.assert_allclose(after[2 * j], before[2 * j + 1], atol=1e-6)
+        np.testing.assert_allclose(after[6], before[6], atol=1e-6)  # last knot held
+
     def test_knots_full_cycle_stays_finite_and_bounded(self):
         planner = self._make_knots(4)
         planner.sample()
