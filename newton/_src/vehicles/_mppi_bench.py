@@ -41,7 +41,9 @@ def _track_id(generator: str, seed: int, params: dict) -> str:
     return f"{generator} s{seed}" + (f" {extra}" if extra else "")
 
 
-def _build_example(generator, seed, params, num_samples, horizon, rollout_substeps, device, brake_mode="none"):
+def _build_example(
+    generator, seed, params, num_samples, horizon, rollout_substeps, device, brake_mode="none", w_underspeed=None
+):
     # Lazy import: the example lives in newton.examples and pulls in the viewer
     # stack; keep it out of module import time.
     import importlib  # noqa: PLC0415
@@ -60,6 +62,7 @@ def _build_example(generator, seed, params, num_samples, horizon, rollout_subste
         track_param=dict(params),
         device=device,
         brake_mode=brake_mode,
+        w_underspeed=w_underspeed,
     )
     example = ex_mod.Example(viewer, args)
     return example, viewer
@@ -78,6 +81,7 @@ def bench_track(
     warmup=1,
     brake_mode="none",
     sigma_horizon_factor=1.0,
+    w_underspeed=None,
 ) -> dict:
     """Run one track headless and return its metric dict.
 
@@ -95,7 +99,7 @@ def bench_track(
     """
     params = params or {}
     example, viewer = _build_example(
-        generator, seed, params, num_samples, horizon, rollout_substeps, device, brake_mode
+        generator, seed, params, num_samples, horizon, rollout_substeps, device, brake_mode, w_underspeed
     )
     if sigma_horizon_factor != 1.0:
         example.planner._set_sigma_horizon_factor(sigma_horizon_factor)
@@ -134,6 +138,7 @@ def bench_track(
     track_len = float(example.track_len)
     v_profile = example._v_profile.numpy().astype(np.float64)
     cum_s = example._cum_s.numpy().astype(np.float64)
+    example_w_under = example.cost_params.numpy()[8]
     viewer.close()
 
     # hairpin-entry braking: locate the two deepest reference-speed minima
@@ -210,6 +215,7 @@ def bench_track(
         "hairpins": hairpins,
         "brake_mode": brake_mode,
         "sigma_horizon_factor": sigma_horizon_factor,
+        "w_underspeed": float(example_w_under),
     }
 
 

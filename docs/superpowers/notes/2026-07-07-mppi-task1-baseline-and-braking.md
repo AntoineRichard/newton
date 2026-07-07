@@ -268,3 +268,84 @@ kept in the code because Task 4's annealed outer loop reuses the same
 device-array noise-scaling mechanism. Follow-up filed in these notes: fix the
 esc-mode low-speed stall on flowing tracks before re-testing exploration
 schedules.
+
+## ESC-mode low-speed crawl: diagnosis and fix (follow-up from Task 2)
+
+### Reproduction and instrumentation (bezier s0, esc, flat sigma)
+
+Confirmed: lap 10.95, mean speed 2.71 m/s vs v_des 5.52. The time course is
+the tell — this is not a launch problem:
+
+| Frames | Speed [m/s] | Executed drive (mean) | Frames braking | Horizon steps with drive < 0 |
+| --- | --- | --- | --- | --- |
+| 0–60 | 2.06 | +0.66 | 0 % | 0 % |
+| 60–120 | 5.95 | +0.82 | 0 % | 27 % |
+| 120–180 | 2.74 | −0.43 | 87 % | **99 %** |
+| 180–240 | **0.10** | −0.33 | 78 % | 56 % |
+
+The car runs cleanly at ~6 m/s, brakes for a corner, overshoots to a
+standstill, and **stays parked for 60+ frames** with v_des ≈ 5 and ESS ≈ 396
+(~40 % of K — the softmax is nearly uniform).
+
+### Mechanism (hypotheses tested)
+
+- **(a) equilibrium trap — CONFIRMED, binding.** The one-sided over-speed
+  penalty never punishes going slow, so a standstill is nearly cost-free; the
+  progress reward's spread across samples that all start from 0 m/s is too
+  small for temperature 15 to concentrate on (ESS 396). Direct test: the
+  purely structural fix (b) below does *not* rescue the crawl (bez s0 lap
+  10.1 with it), while a cost-side shortfall penalty does (lap 20.7–21.1).
+- **(b) sampling asymmetry — CONTRIBUTING.** In `none` mode the drive bound
+  −0.3 truncates the noise, biasing the post-clamp mean positive near the
+  bound — a built-in self-recovery that esc's symmetric [−1, 1] axis lost.
+  Restoring the tight bound (with a brake gain) alone does NOT fix the crawl
+  (lap 10.1 / 4.7 on the bezier tracks): the bias is too weak against
+  amplified small-negative ESC drag. Rejected as the primary fix; the bound
+  stays open.
+- **(c) warm-start persistence — CONFIRMED as the trap's memory.** After the
+  overshoot, 99 % of the nominal's horizon steps are negative; with zero-mean
+  noise and a flat cost landscape the softmax average has no direction, so
+  `shift()` re-seeds the braking plan forever.
+
+### Fix (esc-mode defaults, example-level)
+
+1. **Anti-stall shortfall penalty** (the load-bearing part): new cost term
+   `w_under * max(0, min(v_des, V_STALL) - speed)^2` with `V_STALL = 1.5 m/s`
+   and `w_under = 0.5` (default in esc mode, 0 otherwise — `--w-underspeed`
+   overrides). Gating by an absolute stall floor rather than tracking v_des
+   matters: an ungated (or margin-gated) shortfall measurably raises hull
+   drive jitter ~40 % (controlled same-session: ΔRMS drive 0.072 → 0.098–0.107)
+   because it turns into a speed-tracking gradient during normal running.
+   `w_under = 0.25` is too weak (crawl returns: bez s0 10.3, s9 4.8).
+2. **Transmitter deadband**: esc commands in (−0.05, 0) coast; the remaining
+   negative span maps linearly to the full [0, 1] brake range. A neutral zone
+   like a real transmitter, so near-zero exploration noise does not drag the
+   ESC brake.
+
+### Acceptance (all 5 tracks, esc-fixed vs none, 240 frames)
+
+| Track | none lap [m] | esc-fixed lap [m] | esc hairpin-1 decel [m/s²] | ΔRMS drv/str (esc) | OOB |
+| --- | --- | --- | --- | --- | --- |
+| hull s4 (tuning) | 20.09 | 20.41 | 22.0 | 0.083 / 0.100 | 0.00 |
+| bezier s0 (was 10.5, crawl) | 19.88 | 20.59 | 29.0 | 0.054 / 0.099 | 0.00 |
+| bezier s9 (was 4.8–12.9) | 16.36 | 16.62 | 22.3 | 0.064 / 0.090 | 0.00 |
+| checkpoint s5 (paired) | 22.28 | 23.31 | — | 0.060 / 0.100 | 0.00 |
+| repulsive s3 (paired) | 22.68 | 22.53 | — | 0.055 / 0.057 | 0.00 |
+
+Both bezier tracks recover to (or beyond) their none-mode laps; hull's
+hairpin braking authority is preserved (hp1 22.0 vs Task-1 esc 21.6 ± 4;
+`none` manages only 7–8). Checkpoint/repulsive jitter matches none-mode.
+Raw JSON: `2026-07-07-mppi-esc-crawl-fix.json` (includes the rejected
+bounded-axis, margin-gate, and w=0.25 arms).
+
+**Residual (honest):** on hull, the esc-fixed drive ΔRMS (0.082–0.089) sits
+~15–30 % above the esc-w0 range (0.061–0.073). The shortfall term reshapes
+which braking rollouts win near hairpins even when the executed speed never
+drops below the stall floor (rollout samples do). All lighter variants tried
+(margin gate, stall floor 3.0→1.5, w 0.25) either kept the jitter or
+reintroduced the crawl; recorded as a known cost of the fix. Steer ΔRMS and
+reversals stay within the esc baseline range everywhere.
+
+Task-1's "esc within noise of channel" conclusion (measured only on hull s4)
+survives: hull was never affected by the crawl, and the fixed esc mode now
+also holds up on the 4 validation tracks.

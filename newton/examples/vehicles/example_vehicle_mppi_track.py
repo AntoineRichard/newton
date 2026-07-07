@@ -65,6 +65,23 @@ A_ACC = 6.0  # [m/s^2] forward pass acceleration limit
 A_BRK = 14.0  # [m/s^2] backward pass braking limit
 V_CAP = 17.0  # [m/s] profile ceiling (full motor speed; the profile does the discipline)
 PROX_MARGIN = 0.15  # [m] graded wall-proximity band
+# anti-stall speed floor [m/s]: the under-speed shortfall penalty only pulls
+# the car up to this speed (or v_des if lower), not to v_des itself, so it
+# repairs the braking-trap standstill (measured: parked at 0.1 m/s with
+# v_des ~ 5) without adding a speed-tracking gradient during normal running
+# (which measurably raises drive jitter ~40%)
+V_STALL = 1.5
+# esc mode: transmitter-style mapping of the negative drive half-axis. The
+# drive bounds stay [-0.3, 1.0] (same as none mode; the tight lower bound
+# limits how deep the nominal can sink into braking, and clamping the
+# symmetric exploration noise there biases the post-clamp noise mean
+# positive, helping the softmax average recover toward throttle when the
+# cost landscape is flat). Commands in (-ESC_DEADBAND, 0) coast -- a neutral
+# zone like a real transmitter, so near-zero exploration noise does not drag
+# the ESC brake -- and the remaining (-0.3, -ESC_DEADBAND) span maps linearly
+# to the full [0, 1] brake range.
+ESC_DEADBAND = 0.05
+ESC_BRAKE_GAIN = 1.0 / (1.0 - ESC_DEADBAND)
 # multiplier on the t=0 command-rate term that couples each new plan to the
 # previously executed command (the within-rollout w_rate alone is far too
 # weak to suppress replan-to-replan steering flicker)
@@ -230,8 +247,10 @@ def _map_brake(drive_cmd: float, brake_cmd: float, brake_mode: int) -> wp.vec2f:
     drive engages the ESC brake instead of requesting reverse wheel speed.
     """
     if brake_mode == BRAKE_MODE_ESC:
+        if drive_cmd < -ESC_DEADBAND:
+            return wp.vec2f(0.0, wp.min((-drive_cmd - ESC_DEADBAND) * ESC_BRAKE_GAIN, 1.0))
         if drive_cmd < 0.0:
-            return wp.vec2f(0.0, wp.min(-drive_cmd, 1.0))
+            return wp.vec2f(0.0, 0.0)  # neutral zone: coast
         return wp.vec2f(drive_cmd, 0.0)
     if brake_mode == BRAKE_MODE_CHANNEL:
         return wp.vec2f(drive_cmd, wp.max(brake_cmd, 0.0))
@@ -303,7 +322,7 @@ def _accumulate_cost(
     t: int,
     horizon: int,
     total_len: float,
-    params: wp.array[float],  # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term, w_center]
+    params: wp.array[float],  # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term, w_center, w_under]
     u_prev: wp.array[float],
     s_prev: wp.array[float],
     back_dist: wp.array[float],
@@ -343,6 +362,15 @@ def _accumulate_cost(
     # progress reward alone pushes speed up everywhere else
     over = wp.max(0.0, speed[e] - v_des[e])
     c += params[1] * over * over
+    # under-speed shortfall penalty (default 0): the progress reward alone
+    # leaves standstill nearly cost-free, so on the esc mode's symmetric
+    # drive axis a deep-negative (braking) nominal is a warm-start trap --
+    # the softmax noise average is zero-mean and nothing climbs back out
+    # (measured: parked at 0.1 m/s for 60+ frames with v_des ~5). A small
+    # quadratic shortfall restores the climb-out gradient without touching
+    # corner-entry braking, which targets v_des itself, not below it.
+    under = wp.max(0.0, wp.min(v_des[e], V_STALL) - speed[e])
+    c += params[8] * under * under
     if t == horizon - 1:
         # terminal over-speed cost: a cheap stand-in for a value function at
         # the horizon end (Vazquez-style terminal speed limit)
@@ -637,7 +665,7 @@ class Example:
         # corner-entry speed (uncapping measured faster AND smoother).
         # In esc mode the negative half never means reverse (it is remapped to
         # the ESC brake), so the axis opens to the full [-1, 1] transmitter
-        # range; full negative drive = full brake current.
+        # range.
         drive_lo = -1.0 if self._brake_mode == BRAKE_MODE_ESC else -0.3
         sigma = (0.35, 0.45, 0.35)[:dim]
         beta = (0.85, 0.6, 0.6)[:dim]  # brake wants steer-like (lighter) smoothing
@@ -673,8 +701,15 @@ class Example:
         self.u_prev = wp.zeros(2, dtype=wp.float32, device=device)
         self.start_oob = wp.zeros(E, dtype=wp.int32, device=device)
         self.back_dist = wp.zeros(E, dtype=wp.float32, device=device)
-        # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term, w_center]
-        self.cost_params = wp.array([30.0, 2.0, 0.05, 1000.0, 2.0, 10.0, 20.0, 2.0], dtype=wp.float32, device=device)
+        # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term, w_center, w_under]
+        # w_under defaults to 0 outside esc mode (preserves the none/channel
+        # baselines); in esc mode it repairs the braking-trap standstill
+        w_under = getattr(args, "w_underspeed", None)
+        if w_under is None:
+            w_under = 0.5 if self._brake_mode == BRAKE_MODE_ESC else 0.0
+        self.cost_params = wp.array(
+            [30.0, 2.0, 0.05, 1000.0, 2.0, 10.0, 20.0, 2.0, float(w_under)], dtype=wp.float32, device=device
+        )
         self.ribbon = wp.zeros(horizon, dtype=wp.vec3, device=device)
         # hero lap odometer (display + tests): unwrapped centerline arc length
         self.total_s = wp.zeros(1, dtype=wp.float32, device=device)
@@ -1062,7 +1097,17 @@ class Example:
             new_sigma[0], new_sigma[1] = self.ui_sigma_drive, self.ui_sigma_steer
             self.planner.sigma.assign(new_sigma)
         changed = False
-        labels = ("W progress", "W speed", "W steer", "Kill penalty", "W rate", "W proximity", "W terminal", "W center")
+        labels = (
+            "W progress",
+            "W speed",
+            "W steer",
+            "Kill penalty",
+            "W rate",
+            "W proximity",
+            "W terminal",
+            "W center",
+            "W underspeed",
+        )
         for i, label in enumerate(labels):
             hi = 1.0 if i == 2 else (2000.0 if i == 3 else (20.0 if i in (1, 4, 7) else 100.0))
             c, self.ui_cost[i] = ui.slider_float(label, self.ui_cost[i], 0.0, hi)
@@ -1414,6 +1459,13 @@ class Example:
         parser.add_argument("--horizon", type=int, default=48, help="MPPI planning horizon in control steps")
         parser.add_argument("--rollout-substeps", type=int, default=4, help="solver substeps per rollout control step")
         parser.add_argument("--track-seed", type=int, default=0, help="base seed for track generation")
+        parser.add_argument(
+            "--w-underspeed",
+            type=float,
+            default=None,
+            help="under-speed shortfall cost weight; default: 0.5 in esc brake mode "
+            "(repairs the braking standstill trap), 0.0 otherwise",
+        )
         parser.add_argument(
             "--brake-mode",
             type=str,
