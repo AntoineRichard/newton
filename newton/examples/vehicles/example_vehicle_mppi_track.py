@@ -213,6 +213,7 @@ def _steer_scale(speed: float) -> float:
 def _apply_sample_commands(
     samples: wp.array3d[float],
     t: int,
+    brake_col: int,
     speed: wp.array[float],
     drive: wp.array[wp.float32],
     steer: wp.array[wp.float32],
@@ -221,12 +222,23 @@ def _apply_sample_commands(
     v = wp.tid()
     drive[v] = samples[v, t, 0]
     steer[v] = samples[v, t, 1] * _steer_scale(speed[v])
-    brake[v] = 0.0
+    # optional friction-brake channel (default-off diagnosis knob): when the
+    # planner samples a third command it drives the real brake actuator, which
+    # the motor-torque servo (negative drive) cannot substitute for. The
+    # channel is sampled in [-1, 1] and rectified here: a one-sided [0, 1]
+    # bound makes the clamped exploration noise strictly positive, so the
+    # softmax update ratchets the nominal brake up until the car cannot
+    # launch (measured: permanent ~0.5 brake, lap distance 0)
+    if brake_col >= 0:
+        brake[v] = wp.max(samples[v, t, brake_col], 0.0)
+    else:
+        brake[v] = 0.0
 
 
 @wp.kernel
 def _apply_nominal_command(
     nominal: wp.array2d[float],
+    brake_col: int,
     speed: wp.array[float],
     drive: wp.array[wp.float32],
     steer: wp.array[wp.float32],
@@ -235,7 +247,10 @@ def _apply_nominal_command(
     v = wp.tid()
     drive[v] = nominal[0, 0]
     steer[v] = nominal[0, 1] * _steer_scale(speed[v])
-    brake[v] = 0.0
+    if brake_col >= 0:
+        brake[v] = wp.max(nominal[0, brake_col], 0.0)
+    else:
+        brake[v] = 0.0
 
 
 @wp.kernel
@@ -575,27 +590,42 @@ class Example:
                 "horizon * rollout_substeps + 8 must be even so state buffers "
                 "return to their starting roles each frame (CUDA graph replay)"
             )
+        # optional friction-brake channel (Step 2b diagnosis, default-off): the
+        # per-step motor servo (negative drive) can only shed ~1 N·m of torque,
+        # which decelerates no harder than coasting; a sampled brake channel
+        # reaches the 20 N·m friction brake so the planner can express real
+        # threshold braking into hairpins. brake_col is the sample index of the
+        # brake command (-1 when disabled -> today's 2-channel behavior).
+        self._brake_channel = bool(getattr(args, "brake_channel", False))
+        self._brake_col = 2 if self._brake_channel else -1
+        dim = 3 if self._brake_channel else 2
+        # drive in [-0.3, 1.0]: enough negative torque to brake hard for
+        # corners (measured backward travel is cost-killed, so reverse cannot
+        # become a cruise mode); the drive cap is fully open because the
+        # reference speed profile, not the command bound, disciplines
+        # corner-entry speed (uncapping measured faster AND smoother)
+        sigma = (0.35, 0.45, 0.35)[:dim]
+        beta = (0.85, 0.6, 0.6)[:dim]  # brake wants steer-like (lighter) smoothing
+        # brake is sampled in [-1, 1] and rectified to [0, 1] at the apply
+        # kernels (negative half = "no brake") so exploration noise around a
+        # zero nominal stays zero-mean instead of ratcheting the brake on
+        bounds_lo = (-0.3, -1.0, -1.0)[:dim]
+        bounds_hi = (1.0, 1.0, 1.0)[:dim]
         self.planner = nv.ControllerMPPI(
             config=nv.ControllerMPPI.Config(
                 num_samples=self.num_worlds,
                 horizon=horizon,
-                dim=2,
-                sigma=(0.35, 0.45),
+                dim=dim,
+                sigma=sigma,
                 # temperature tuned so the effective sample size sits in the
                 # healthy 5-20% of K band (ESS ~30-90 here); at 0.05 the
                 # softmax was argmin-degenerate (ESS = 1)
                 temperature=15.0,
                 # more noise smoothing on drive than steering, per the
                 # colored-noise MPPI guidance
-                beta=(0.85, 0.6),
-                # drive in [-0.3, 1.0]: enough negative torque to brake hard
-                # for corners (measured backward travel is cost-killed, so
-                # reverse cannot become a cruise mode); the drive cap is fully
-                # open because the reference speed profile, not the command
-                # bound, disciplines corner-entry speed (uncapping measured
-                # faster AND smoother)
-                bounds_lo=(-0.3, -1.0),
-                bounds_hi=(1.0, 1.0),
+                beta=beta,
+                bounds_lo=bounds_lo,
+                bounds_hi=bounds_hi,
             ),
             device=self.model.device,
         )
@@ -657,7 +687,7 @@ class Example:
         self._hud_font_bold = None
         self._hud_font_tried = False
         self.ui_temperature = float(self.planner.config.temperature)
-        self.ui_sigma_drive, self.ui_sigma_steer = (float(v) for v in self.planner.config.sigma)
+        self.ui_sigma_drive, self.ui_sigma_steer = (float(v) for v in self.planner.config.sigma[:2])
         self.ui_cost = list(self.cost_params.numpy())
 
         # prime pose/projection buffers so the lap odometer starts at the
@@ -858,7 +888,7 @@ class Example:
             wp.launch(
                 _apply_sample_commands,
                 dim=self.num_worlds,
-                inputs=[self.planner.samples, t, self.car_speed, cmd.drive, cmd.steer, cmd.brake],
+                inputs=[self.planner.samples, t, self._brake_col, self.car_speed, cmd.drive, cmd.steer, cmd.brake],
                 device=dev,
             )
             for _ in range(self.rollout_substeps):
@@ -900,7 +930,7 @@ class Example:
         wp.launch(
             _apply_nominal_command,
             dim=self.num_worlds,
-            inputs=[self.planner.nominal, self.car_speed, cmd.drive, cmd.steer, cmd.brake],
+            inputs=[self.planner.nominal, self._brake_col, self.car_speed, cmd.drive, cmd.steer, cmd.brake],
             device=dev,
         )
         for _ in range(self.sim_substeps):
@@ -992,7 +1022,9 @@ class Example:
         changed_d, self.ui_sigma_drive = ui.slider_float("Sigma drive", self.ui_sigma_drive, 0.05, 1.0)
         changed_s, self.ui_sigma_steer = ui.slider_float("Sigma steer", self.ui_sigma_steer, 0.05, 1.0)
         if changed_d or changed_s:
-            self.planner.sigma.assign(np.array([self.ui_sigma_drive, self.ui_sigma_steer], dtype=np.float32))
+            new_sigma = self.planner.sigma.numpy()
+            new_sigma[0], new_sigma[1] = self.ui_sigma_drive, self.ui_sigma_steer
+            self.planner.sigma.assign(new_sigma)
         changed = False
         labels = ("W progress", "W speed", "W steer", "Kill penalty", "W rate", "W proximity", "W terminal", "W center")
         for i, label in enumerate(labels):
@@ -1346,6 +1378,12 @@ class Example:
         parser.add_argument("--horizon", type=int, default=48, help="MPPI planning horizon in control steps")
         parser.add_argument("--rollout-substeps", type=int, default=4, help="solver substeps per rollout control step")
         parser.add_argument("--track-seed", type=int, default=0, help="base seed for track generation")
+        parser.add_argument(
+            "--brake-channel",
+            action="store_true",
+            help="sample a third (friction-brake) command channel so the planner can "
+            "express real braking (Step 2b diagnosis knob; default off)",
+        )
         parser.add_argument(
             "--track-generator",
             type=str,
