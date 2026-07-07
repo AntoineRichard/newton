@@ -125,12 +125,13 @@ The cheap win: make `sigma` depend on the horizon step `t` — less noise near `
 - New knob `sigma_horizon_factor: float = 1.0` (1.0 ⇒ flat ⇒ **bit-identical to today**). Per Decision 3 it stays **example-level/private** (internal `_src` field or `set_*` method, not a public `Config` field) until proven; promotion to the public `Config` happens only on keep. Effective per-step std: `sigma_t = sigma_a · f(t)` with a monotone schedule, e.g. `f(t) = exp((H-1-t)/(H) · ln(sigma_horizon_factor))` so the near-term step is calmest and the far step scales by `sigma_horizon_factor`. Store the precomputed `[H, A]` (or `[H]`) schedule in a device array so it stays graph-capturable and runtime-tunable.
 - The AR(1) `beta` smoothing stays; the schedule multiplies `eps` per step.
 
-- [ ] **Step 1 (TDD):** Add failing tests — with `sigma_horizon_factor = 1.0`, samples are unchanged vs. the current implementation (regression lock, seed-matched); with `factor > 1.0`, per-step sample variance increases monotonically with `t` (measure across many samples); bounds still respected; sample 0 still the nominal.
-- [ ] **Step 2:** Implement the schedule (private surface); verify the `factor = 1.0` regression test passes bit-for-bit.
-- [ ] **Step 3:** Sweep the factor on the tuning track (e.g. {1.0, 1.5, 2.0, 3.0}) at fixed `B`; pick the best; validate on the 4 validation tracks.
-- [ ] **Acceptance (per Decision 2):** at equal compute, the best factor reduces executed-command RMS jitter and/or steering-reversal count without regressing hero-kill fraction; a small lap-distance cost is acceptable if smoothness clearly improves. If no factor helps, record rejected and leave the knob defaulting to 1.0 (no-op) or revert. Only on keep: promote to public `Config`, update `docs/generate_api.py` output, CHANGELOG under `Added`.
+- [x] **Step 1 (TDD):** Add failing tests — with `sigma_horizon_factor = 1.0`, samples are unchanged vs. the current implementation (regression lock, seed-matched); with `factor > 1.0`, per-step sample variance increases monotonically with `t` (measure across many samples); bounds still respected; sample 0 still the nominal. *(Done: 5 tests in `test_vehicles_mppi.py`, verified failing before the implementation.)*
+- [x] **Step 2:** Implement the schedule (private surface); verify the `factor = 1.0` regression test passes bit-for-bit. *(Done: `_set_sigma_horizon_factor` + `_sigma_schedule` device array in `mppi.py`; factor 1.0 bit-identical.)*
+- [x] **Step 3:** Sweep the factor on the tuning track (e.g. {1.0, 1.5, 2.0, 3.0}) at fixed `B`; pick the best; validate on the 4 validation tracks. *(Done: esc brake mode, 3 paired reps on tuning + paired validation; tables in the Task-1/2 notes file.)*
+- [x] **Acceptance (per Decision 2):** at equal compute, the best factor reduces executed-command RMS jitter and/or steering-reversal count without regressing hero-kill fraction; a small lap-distance cost is acceptable if smoothness clearly improves. If no factor helps, record rejected and leave the knob defaulting to 1.0 (no-op) or revert. Only on keep: promote to public `Config`, update `docs/generate_api.py` output, CHANGELOG under `Added`. *(**REJECTED**: no factor improves smoothness — drive ΔRMS −9 % at best (within noise), steer ΔRMS drifts up, reversals worsen 98 → 109; validation lap wins on the bezier tracks come from rescuing an esc-mode low-speed stall (separate finding, follow-up filed) and bundle steer-jitter increases. Knob stays private, default 1.0 no-op; structurally the schedule cannot calm t=0 (schedule[0]=1), so the near-term-jitter hypothesis was untestable by this knob.)*
 
 **Commit (if kept):** `Add horizon-annealed noise schedule to ControllerMPPI`
+**Outcome:** rejected — see `docs/superpowers/notes/2026-07-07-mppi-task1-baseline-and-braking.md` (Task 2 section).
 
 ---
 
@@ -195,8 +196,8 @@ The expensive ingredient, given a **fair trial** (Decision 1): GPU budget is fle
 
 | Config | Total rollouts B | Lap dist (mean ± sd) | Mean cost | Δcmd RMS (jitter) | Steer reversals | Hero-kill frac | Steps/s | Kept? |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Baseline single-pass MPPI | — | | | | | | | ref |
-| + horizon-annealed sigma | = | | | | | | | ? |
+| Baseline single-pass MPPI (esc brake, hull s4) | 196 608 | 20.32 ± 0.17 | — | drv 0.0667 / str 0.0816 | 98 | 0.00 | 4.3 | ref |
+| + horizon-annealed sigma (f=2.0, best) | = | 20.34 ± 0.17 | — | drv 0.0609 / str 0.0866 | 104 | 0.00 | 4.3 | REJECTED |
 | + spline knots | = | | | | | | | ? |
 | DIAL outer loop (D=2) | = | | | | | | | ? |
 | DIAL outer loop (D=4) | = | | | | | | | ? |

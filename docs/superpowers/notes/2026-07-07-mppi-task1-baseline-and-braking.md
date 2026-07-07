@@ -201,3 +201,70 @@ action dimension, and is immune to the rectification pathology by
 construction. Both modes stay in the example as cheap flags; the default
 remains `none` until the user flips it, and Tasks 2–4 baselines stay
 unconfounded.
+
+## Task 2 — horizon-annealed noise schedule (REJECTED)
+
+Implementation: private `ControllerMPPI._set_sigma_horizon_factor(f)` scales
+the per-step exploration noise by `f ** (t / (H - 1))` — the executed step
+keeps the configured sigma, the far horizon end explores with `f * sigma`.
+The schedule lives in a device array (`_sigma_schedule`, all-ones default),
+so it is CUDA-graph-safe and runtime-tunable like `set_temperature`/`set_beta`;
+`f = 1.0` (default) is bit-identical to the flat sampler (regression-locked by
+`test_sigma_horizon_factor_one_is_bit_identical`). Unit tests cover schedule
+shape/monotonicity, far-horizon variance growth, and bounds.
+
+All runs below use `--brake-mode esc` (accepted braking model). Task-1
+baselines are NOT comparable; every comparison is paired same-session.
+
+### Tuning-track sweep (hull s4, 240 frames, 3 paired reps, equal compute)
+
+| Factor | Lap dist [m] | ΔRMS drive | ΔRMS steer | Steer rev | OOB |
+| --- | --- | --- | --- | --- | --- |
+| 1.0 (flat) | 20.32 ± 0.17 | 0.0667 ± 0.0046 | 0.0816 ± 0.0049 | 98 ± 6 | 0.00 |
+| 1.5 | 20.39 ± 0.08 | 0.0649 ± 0.0038 | 0.0811 ± 0.0066 | 103 ± 4 | 0.00 |
+| 2.0 | 20.34 ± 0.17 | 0.0609 ± 0.0031 | 0.0866 ± 0.0085 | 104 ± 10 | 0.00 |
+| 3.0 | 20.37 ± 0.13 | 0.0635 ± 0.0039 | 0.0861 ± 0.0124 | 109 ± 5 | 0.00 |
+
+No factor improves smoothness: executed-drive ΔRMS moves at most −9 % (within
+the ±0.005 rep noise), executed-steer ΔRMS drifts up at f ≥ 2, and steering
+reversals monotonically worsen (98 → 109). Lap distance is flat. The named
+secondary metric — ESC-mode zero-crossing drive jitter, 0.065 — is **not
+reliably reduced** by any factor.
+
+Structural note: with `sigma_t = sigma * f^(t/(H-1))` the executed step's
+noise is unchanged by construction (`schedule[0] = 1`); the knob only adds
+far-horizon exploration. It therefore cannot calm t = 0 — the jitter
+hypothesis this task targeted needed near-term *reduction*, which is the same
+knob as lowering sigma itself.
+
+### Validation (f = 2.0 vs 1.0, esc mode, paired; bezier tracks x2 reps)
+
+| Track | Lap f=1.0 | Lap f=2.0 | ΔRMS steer f=1.0 → f=2.0 |
+| --- | --- | --- | --- |
+| bezier s0 | 10.50 (10.52, 10.48) | 19.10 (19.85, 18.35) | 0.054 → 0.108 |
+| bezier s9 hairpins | 8.81 (4.77, 12.85) | 12.75 (12.73, 12.76) | 0.057 → 0.076 |
+| checkpoint s5 | 23.29 | 23.41 | 0.105 → 0.105 |
+| repulsive s3 | 22.56 | 22.60 | 0.059 → 0.061 |
+
+Raw JSON: `2026-07-07-mppi-task2-sigma-horizon.json`.
+
+The bezier rows expose a **separate esc-mode finding**: at flat sigma the
+esc-mode car reproducibly crawls on bezier s0 (lap 10.5 both reps, mean speed
+2.6 m/s vs 19.8 m lap in Task 1's `none` mode) and collapses intermittently
+on bezier s9 (4.8 vs 12.9). Extra far-horizon exploration (f = 2.0) largely
+rescues both — but with steer jitter doubling on s0, and the f=1.0 jitter
+numbers are flattered by the low speed (a crawling car barely steers). This
+is an exploration-rescue of an esc-mode low-speed stall, not the near-term
+smoothness win the task targeted; the stall itself deserves a dedicated
+follow-up (suspect: the drive axis opened to [-1, 1] hovers near zero/negative
+where ESC drag is cost-neutral at low speed).
+
+### Verdict (Decision 2: smoothness >= lap distance)
+
+**REJECTED.** No factor improves smoothness anywhere; the tuning track shows
+a mild reversal regression and validation's lap wins come bundled with steer
+jitter increases. The knob stays private and defaults to 1.0 (exact no-op),
+kept in the code because Task 4's annealed outer loop reuses the same
+device-array noise-scaling mechanism. Follow-up filed in these notes: fix the
+esc-mode low-speed stall on flowing tracks before re-testing exploration
+schedules.
