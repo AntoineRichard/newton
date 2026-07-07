@@ -42,10 +42,16 @@ _ASSET_DIR = Path(newton.examples.get_asset("wheeled"))
 TRACK_HALF_WIDTH = 0.5  # [m]
 # per-generator generation settings: scale calibrated to a ~22-26 m footprint,
 # N_max sized to the generator's perimeter (repulsive tracks are space-filling:
-# ~128 m of track in a 26 m footprint vs ~85 m for bezier)
+# ~128 m of track in a 26 m footprint vs ~85 m for bezier; the other families
+# normalize to a bezier-like footprint at the same scale, ~360 points max at
+# half_width 0.5, so bezier's settings fit them)
 TRACK_GENERATOR_SETTINGS = {
     "bezier": (17.0, 512),
+    "checkpoint": (17.0, 512),
+    "hull": (17.0, 512),
+    "polar": (17.0, 512),
     "repulsive": (10.0, 1024),
+    "voronoi": (17.0, 512),
 }
 CONE_SPACING = 0.5  # [m]
 CAR_HALF_EXTENTS = (0.29, 0.15)  # oriented OOB box [m] (Slash-class rc car)
@@ -1311,7 +1317,7 @@ class Example:
             type=str,
             default="bezier",
             choices=sorted(TRACK_GENERATOR_SETTINGS),
-            help="track_gen generator family (repulsive needs the track_gen branch that provides it)",
+            help="track_gen generator family",
         )
         parser.set_defaults(num_frames=240)
         return parser
