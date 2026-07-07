@@ -82,6 +82,23 @@ V_STALL = 1.5
 # to the full [0, 1] brake range.
 ESC_DEADBAND = 0.05
 ESC_BRAKE_GAIN = 1.0 / (1.0 - ESC_DEADBAND)
+# esc-mode anti-stall crawl assist: minimum executed drive while the hero is
+# below V_STALL. The cost-side shortfall terms alone cannot break the parked
+# equilibrium under heavy softmax averaging (Tsallis q > 1, ESS ~800): from a
+# standstill with a deep-braking nominal, escape needs sustained throttle the
+# sampler around that nominal essentially never draws, so every sample's
+# rollout arc is ~0 and the shortfall is a constant offset with no gradient --
+# while any escape-ward sample still pays the ~100-unit t=0 exec-coupling
+# cost. Flooring only the EXECUTED hero command (never the sampled rollouts)
+# physically restores forward motion, which restores arc diversity across the
+# samples, and the progress/shortfall costs then pull the nominal itself back
+# to throttle.
+ANTI_STALL_DRIVE = 0.5
+# consecutive frames the hero must sit below V_STALL before the crawl assist
+# engages: a genuine stall lasts 60+ frames, while a legitimate hairpin-apex
+# dip below V_STALL lasts only a few -- engaging instantly measurably chatters
+# the executed drive in hull's hairpin cluster (drive dRMS +28% at q = 1.0)
+ANTI_STALL_DWELL_FRAMES = 18
 # multiplier on the t=0 command-rate term that couples each new plan to the
 # previously executed command (the within-rollout w_rate alone is far too
 # weak to suppress replan-to-replan steering flicker)
@@ -281,6 +298,8 @@ def _apply_sample_commands(
 def _apply_nominal_command(
     nominal: wp.array2d[float],
     brake_mode: int,
+    anti_stall_drive: float,
+    stall_frames: wp.array[wp.int32],
     speed: wp.array[float],
     drive: wp.array[wp.float32],
     steer: wp.array[wp.float32],
@@ -294,14 +313,25 @@ def _apply_nominal_command(
     drive[v] = db[0]
     steer[v] = nominal[0, 1] * _steer_scale(speed[v])
     brake[v] = db[1]
+    # anti-stall crawl assist (executed command only; sampled rollouts are
+    # never floored): once the hero has dwelt below the stall gate, override
+    # braking/coasting with a minimum drive so it physically escapes the
+    # parked equilibrium the cost landscape cannot break under heavy softmax
+    # averaging. The dwell keeps legitimate hairpin-apex dips untouched.
+    if anti_stall_drive > 0.0 and stall_frames[0] >= ANTI_STALL_DWELL_FRAMES:
+        drive[v] = wp.max(drive[v], anti_stall_drive)
+        brake[v] = 0.0
 
 
 @wp.kernel
-def _zero_plan_buffers(costs: wp.array[float], dead: wp.array[wp.int32], back_dist: wp.array[float]):
+def _zero_plan_buffers(
+    costs: wp.array[float], dead: wp.array[wp.int32], back_dist: wp.array[float], arc: wp.array[float]
+):
     e = wp.tid()
     costs[e] = 0.0
     dead[e] = 0
     back_dist[e] = 0.0
+    arc[e] = 0.0
 
 
 @wp.kernel
@@ -322,10 +352,13 @@ def _accumulate_cost(
     t: int,
     horizon: int,
     total_len: float,
-    params: wp.array[float],  # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term, w_center, w_under, w_exec]
+    stall_arc_floor: float,
+    params: wp.array[float],
+    # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term, w_center, w_under, w_exec, w_stall_arc]
     u_prev: wp.array[float],
     s_prev: wp.array[float],
     back_dist: wp.array[float],
+    arc: wp.array[float],
     dead: wp.array[wp.int32],
     costs: wp.array[float],
 ):
@@ -357,6 +390,9 @@ def _accumulate_cost(
             dead[e] = 1
             costs[e] = costs[e] + kill
             return
+        # net arc covered over the whole rollout so far, for the trajectory
+        # progress-shortfall term below
+        arc[e] = arc[e] + ds
     c = -params[0] * ds
     # one-sided reference-speed penalty: the profile caps corner-entry speed,
     # progress reward alone pushes speed up everywhere else
@@ -375,6 +411,20 @@ def _accumulate_cost(
         # terminal over-speed cost: a cheap stand-in for a value function at
         # the horizon end (Vazquez-style terminal speed limit)
         c += params[6] * over * over
+        # trajectory-level progress-shortfall (anti-stall): penalize how far the
+        # whole rollout fell short of a modest floor arc (V_STALL * horizon_dt).
+        # Unlike the per-step under-speed term -- which penalizes every
+        # near-stall sample's instantaneous speed EQUALLY and so gives the
+        # softmax no gradient to prefer an escaping rollout over a parked one --
+        # this single terminal term scales with the whole rollout's distance,
+        # so it is immune to the low-speed per-step cost flatness that traps the
+        # planner (esc braking overshoot -> standstill, seen under heavy q>1
+        # averaging with ESS ~800). It is silent whenever a rollout averages
+        # above V_STALL (all racing rollouts do), so it does not disturb
+        # cornering or top speed. Applied only to on-track (non-recovery) plans.
+        if start_oob[e] == 0:
+            short = wp.max(0.0, stall_arc_floor - arc[e])
+            c += params[10] * short * short
     steer = samples[e, t, 1]
     c += params[2] * steer * steer
     if t > 0:
@@ -403,6 +453,15 @@ def _accumulate_cost(
         # no kills; penalize distance outside the band so plans steer back in
         c += params[0] * wp.max(0.0, -clearance[e])
     costs[e] = costs[e] + c
+
+
+@wp.kernel
+def _update_stall_frames(speed: wp.array[float], stall_frames: wp.array[wp.int32]):
+    # consecutive executed frames the hero has spent below the stall gate
+    if speed[0] < V_STALL:
+        stall_frames[0] = stall_frames[0] + 1
+    else:
+        stall_frames[0] = 0
 
 
 @wp.kernel
@@ -708,21 +767,48 @@ class Example:
         self.u_prev = wp.zeros(2, dtype=wp.float32, device=device)
         self.start_oob = wp.zeros(E, dtype=wp.int32, device=device)
         self.back_dist = wp.zeros(E, dtype=wp.float32, device=device)
-        # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term, w_center, w_under, w_exec]
+        self.arc = wp.zeros(E, dtype=wp.float32, device=device)
+        # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term, w_center, w_under, w_exec, w_stall_arc]
         # w_under defaults to 0 outside esc mode (preserves the none/channel
         # baselines); in esc mode it repairs the braking-trap standstill.
         # w_exec (the t=0 exec-coupling weight) defaults to w_rate*EXEC_COUPLING
         # so behavior is unchanged; the Task-3 removal ablation can zero it.
+        # w_stall_arc: trajectory-level progress-shortfall (Task 3c anti-stall
+        # hardening), default 0. Unlike the per-step w_under it discriminates a
+        # parked rollout from an escaping one -- but measured on the q = 1.2
+        # bezier-s0 crawl it is NOT sufficient alone (w up to 200 still parks:
+        # from a standstill with a deep-braking nominal no sample's rollout
+        # escapes, so the shortfall is a constant offset with no gradient) and
+        # NOT needed once the executed-command anti-stall floor exists (w = 0
+        # vs 80 identical within noise). Kept as an off-by-default knob and a
+        # recorded finding.
         w_under = getattr(args, "w_underspeed", None)
         if w_under is None:
             w_under = 0.5 if self._brake_mode == BRAKE_MODE_ESC else 0.0
+        w_stall_arc = getattr(args, "w_stall_arc", None)
+        if w_stall_arc is None:
+            w_stall_arc = 0.0
+        # anti-stall crawl assist (executed drive floor below V_STALL),
+        # esc-mode default; see ANTI_STALL_DRIVE
+        anti_stall = getattr(args, "anti_stall_drive", None)
+        if anti_stall is None:
+            anti_stall = ANTI_STALL_DRIVE if self._brake_mode == BRAKE_MODE_ESC else 0.0
+        self._anti_stall_drive = float(anti_stall)
+        self.stall_frames = wp.zeros(1, dtype=wp.int32, device=device)
+        # ESS-aware temperature sharpening (default-off; see _adapt_temperature)
+        ess_max = getattr(args, "ess_max", None)
+        self._ess_max = float(ess_max) if ess_max is not None else None
+        self._adaptive_temp = float(self.planner.config.temperature)
         w_rate = 2.0
         w_exec = w_rate * EXEC_COUPLING
         self.cost_params = wp.array(
-            [30.0, 2.0, 0.05, 1000.0, w_rate, 10.0, 20.0, 2.0, float(w_under), w_exec],
+            [30.0, 2.0, 0.05, 1000.0, w_rate, 10.0, 20.0, 2.0, float(w_under), w_exec, float(w_stall_arc)],
             dtype=wp.float32,
             device=device,
         )
+        # floor arc a rollout should cover to not count as stalled: a mean speed
+        # of V_STALL over the horizon (each horizon step advances one frame_dt)
+        self._stall_arc_floor = float(V_STALL * horizon * self.frame_dt)
         self.ribbon = wp.zeros(horizon, dtype=wp.vec3, device=device)
         # hero lap odometer (display + tests): unwrapped centerline arc length
         self.total_s = wp.zeros(1, dtype=wp.float32, device=device)
@@ -963,7 +1049,9 @@ class Example:
         self._snapshot_hero()
         self._broadcast_hero()
         self.planner.sample()
-        wp.launch(_zero_plan_buffers, dim=self.num_worlds, inputs=[self.costs, self.dead, self.back_dist], device=dev)
+        wp.launch(
+            _zero_plan_buffers, dim=self.num_worlds, inputs=[self.costs, self.dead, self.back_dist, self.arc], device=dev
+        )
         self._gather_and_track()
         wp.copy(self.s_prev, self.car_s, count=self.num_worlds)
         wp.launch(_record_start_oob, dim=self.num_worlds, inputs=[self.contact.oob, self.start_oob], device=dev)
@@ -992,10 +1080,12 @@ class Example:
                     t,
                     horizon,
                     self.track_len,
+                    self._stall_arc_floor,
                     self.cost_params,
                     self.u_prev,
                     self.s_prev,
                     self.back_dist,
+                    self.arc,
                     self.dead,
                     self.costs,
                 ],
@@ -1014,13 +1104,25 @@ class Example:
         wp.launch(
             _apply_nominal_command,
             dim=self.num_worlds,
-            inputs=[self.planner.nominal, self._brake_mode, self.car_speed, cmd.drive, cmd.steer, cmd.brake],
+            inputs=[
+                self.planner.nominal,
+                self._brake_mode,
+                self._anti_stall_drive,
+                self.stall_frames,
+                self.car_speed,
+                cmd.drive,
+                cmd.steer,
+                cmd.brake,
+            ],
             device=dev,
         )
         for _ in range(self.sim_substeps):
             self._substep(self.sim_dt)
         self.planner.shift()
         self._gather_and_track()
+        # anti-stall dwell counter: advanced once per executed frame, from the
+        # hero's post-step speed (rollouts never touch it)
+        wp.launch(_update_stall_frames, dim=1, inputs=[self.car_speed, self.stall_frames], device=dev)
         # hero lap odometer for telemetry and tests (rollouts never touch it:
         # it only advances here, once per executed frame)
         wp.launch(
@@ -1042,6 +1144,31 @@ class Example:
             self._plan_and_execute()
         self.sim_time += self.frame_dt
         self._update_telemetry()
+        self._adapt_temperature()
+
+    def _adapt_temperature(self):
+        """ESS-aware softmax temperature sharpening (default-off).
+
+        When the effective sample size exceeds ``--ess-max``, the per-step
+        costs are too flat for the configured temperature and the weighted
+        update degenerates toward the raw sample mean -- measured failure:
+        under Tsallis q > 1 averaging the ESS reaches ~400+ on hairpin
+        approach, the braking commitment lags ~12 frames, and the car blows
+        the corner. Sharpening (lowering) the temperature restores commitment;
+        the temperature relaxes back toward the configured baseline once the
+        ESS re-enters the healthy band. Runs on the host between frames and
+        writes through :meth:`ControllerMPPI.set_temperature` (a device-array
+        write), so the CUDA graph stays valid.
+        """
+        if self._ess_max is None:
+            return
+        ess = self._telemetry["ess"]
+        base = float(self.planner.config.temperature)
+        if ess > self._ess_max:
+            self._adaptive_temp = max(self._adaptive_temp * 0.75, 0.2 * base)
+        elif ess < 0.5 * self._ess_max and self._adaptive_temp < base:
+            self._adaptive_temp = min(self._adaptive_temp * 1.1, base)
+        self.planner.set_temperature(self._adaptive_temp)
 
     def _update_telemetry(self):
         t = self._telemetry
@@ -1485,6 +1612,31 @@ class Example:
             default=None,
             help="under-speed shortfall cost weight; default: 0.5 in esc brake mode "
             "(repairs the braking standstill trap), 0.0 otherwise",
+        )
+        parser.add_argument(
+            "--w-stall-arc",
+            type=float,
+            default=None,
+            help="trajectory-level progress-shortfall cost weight (anti-stall); "
+            "default 0.0 (measured: neither sufficient nor needed once the "
+            "anti-stall drive floor is active)",
+        )
+        parser.add_argument(
+            "--anti-stall-drive",
+            type=float,
+            default=None,
+            help="executed-command drive floor while the hero is below the stall speed "
+            "(crawl assist; never applied to sampled rollouts); default: 0.5 in esc "
+            "brake mode, 0.0 otherwise",
+        )
+        parser.add_argument(
+            "--ess-max",
+            type=float,
+            default=None,
+            help="ESS-aware temperature sharpening (default: off): when the effective "
+            "sample size exceeds this, the softmax temperature is lowered between "
+            "frames until the ESS re-enters the band (restores update commitment "
+            "when per-step costs are too flat, e.g. under Tsallis q > 1 averaging)",
         )
         parser.add_argument(
             "--brake-mode",

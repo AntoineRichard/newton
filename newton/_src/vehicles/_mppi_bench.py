@@ -51,6 +51,9 @@ def _build_example(
     device,
     brake_mode="none",
     w_underspeed=None,
+    w_stall_arc=None,
+    anti_stall_drive=None,
+    ess_max=None,
     n_knots=None,
 ):
     # Lazy import: the example lives in newton.examples and pulls in the viewer
@@ -72,6 +75,9 @@ def _build_example(
         device=device,
         brake_mode=brake_mode,
         w_underspeed=w_underspeed,
+        w_stall_arc=w_stall_arc,
+        anti_stall_drive=anti_stall_drive,
+        ess_max=ess_max,
         n_knots=n_knots,
     )
     example = ex_mod.Example(viewer, args)
@@ -92,6 +98,9 @@ def bench_track(
     brake_mode="none",
     sigma_horizon_factor=1.0,
     w_underspeed=None,
+    w_stall_arc=None,
+    anti_stall_drive=None,
+    ess_max=None,
     n_knots=None,
     beta=None,
     w_rate=None,
@@ -115,7 +124,19 @@ def bench_track(
     """
     params = params or {}
     example, viewer = _build_example(
-        generator, seed, params, num_samples, horizon, rollout_substeps, device, brake_mode, w_underspeed, n_knots
+        generator,
+        seed,
+        params,
+        num_samples,
+        horizon,
+        rollout_substeps,
+        device,
+        brake_mode,
+        w_underspeed,
+        w_stall_arc,
+        anti_stall_drive,
+        ess_max,
+        n_knots,
     )
     if sigma_horizon_factor != 1.0:
         example.planner._set_sigma_horizon_factor(sigma_horizon_factor)
@@ -175,6 +196,7 @@ def bench_track(
     v_profile = example._v_profile.numpy().astype(np.float64)
     cum_s = example._cum_s.numpy().astype(np.float64)
     example_w_under = example.cost_params.numpy()[8]
+    example_w_stall_arc = example.cost_params.numpy()[10]
     viewer.close()
 
     # hairpin-entry braking: locate the two deepest reference-speed minima
@@ -253,6 +275,9 @@ def bench_track(
         "brake_mode": brake_mode,
         "sigma_horizon_factor": sigma_horizon_factor,
         "w_underspeed": float(example_w_under),
+        "w_stall_arc": float(example_w_stall_arc),
+        "anti_stall_drive": float(example._anti_stall_drive),
+        "ess_max": ess_max,
         "n_knots": n_knots,
         "beta": beta,
         "w_rate": w_rate,
