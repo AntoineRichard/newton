@@ -430,3 +430,92 @@ all 5 tracks — the strongest result of the plan so far, and it directly
 repairs the Task-1 residual (esc drive chatter). The knob stays private
 (`_n_knots`, example `--n-knots`) until Task 5 consolidates; promotion to
 the public `Config` + CHANGELOG belongs there per the plan.
+
+## Task 3b — literature-informed sampler/weighting knobs (both REJECTED)
+
+Two near-free ideas from the jitter literature review, layered on the Task-3
+baseline arm (**esc brake mode + `_n_knots = 12`**, w_under = 0.5). Both are
+private, default-off, and bit-identical to the baseline at their defaults
+(`_zero_mean_fraction = 0.0`, `_tsallis_q = 1.0`); both live in device arrays
+(graph-safe, runtime-tunable). All runs: hull s4, 240 frames, 3 paired
+same-session reps. Raw JSON: `2026-07-07-mppi-task3b-zeromean.json`,
+`...-zeromean-valid.json`, `...-tsallis.json`, `...-tsallis-valid.json`.
+
+### Experiment A — RA-MPPI zero-mean sample fraction
+
+The first `ceil(f·K)` non-hero samples draw pure smoothed noise (`u = ε`)
+instead of `nominal + ε`; the stored per-sample delta stays `s − nominal` so
+the softmax update is unbiased (unit-tested: winner-take-all lands the nominal
+exactly on a zero-mean winner even with a nonzero nominal).
+
+| f | Lap dist [m] | ΔRMS drive | ΔRMS steer | Steer rev | ESS | OOB |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0.0 (baseline) | 20.44 ± 0.09 | 0.0417 | 0.0525 | 74 | 107 | 0.00 |
+| 0.1 | 20.62 ± 0.05 | 0.0424 | 0.0528 | 76 | 97 | 0.00 |
+| 0.2 | 19.91 ± 0.46 | 0.0423 | 0.0555 | 83 | 92 | 0.00 |
+| 0.3 | 20.31 ± 0.22 | 0.0444 | 0.0550 | 82 | 78 | 0.00 |
+
+No fraction improves smoothness: drive ΔRMS is flat-to-worse, steer ΔRMS and
+reversals drift up at f ≥ 0.2. f = 0.1 (the only non-regressing arm) was
+validated on the 4 tracks (1 rep, paired vs f = 0.0):
+
+| Track | Lap f0.0 → f0.1 | ΔRMS steer f0.0 → f0.1 |
+| --- | --- | --- |
+| bezier s0 | 20.10 → 20.78 | 0.0610 → 0.0643 |
+| bezier s9 | 12.74 → 17.95 | 0.0594 → 0.0724 |
+| checkpoint s5 | 23.21 → 23.16 | 0.0638 → 0.0632 |
+| repulsive s3 | 22.43 → 22.60 | 0.0472 → 0.0470 |
+
+**REJECTED.** The one large lap gain (bezier s9 +41 %) is the familiar esc
+low-speed stall-rescue (ESS 374 → 111) bundled with a steer-jitter increase
+(+22 %) — the same non-smoothness win Task 2 was rejected for; elsewhere
+smoothness is flat-to-worse. Knob stays private, default 0.0 (no-op).
+
+### Experiment B — Tsallis deformed-exponential weighting
+
+Weights ∝ `exp_q(−cost/λ) = [1 + (1−q)x]_+^{1/(1−q)}`, `x = −(cost−min)/λ`;
+`q = 1.0` is the exact softmax path (bit-identical). **Direction finding
+(counter to the review's a-priori framing):** with this q-exponential and the
+min-cost shift, **q > 1 gives heavier tails → MORE averaging (higher ESS)**,
+while **q < 1 has compact support → elite concentration (lower ESS)**. Elite
+selection (q < 1) is therefore the opposite of a smoothing move here.
+
+| q | Lap dist [m] | ΔRMS drive | ΔRMS steer | Steer rev | ESS | OOB |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1.0 (baseline) | 20.48 ± 0.05 | 0.0410 | 0.0558 | 69 | 111 | 0.00 |
+| **1.2** | 20.51 ± 0.11 | 0.0373 | 0.0456 | 69 | 158 | 0.00 |
+| 1.5 | 18.08 ± 0.19 | 0.0268 | 0.0360 | 70 | 317 | 0.00 |
+| 2.0 | 17.42 ± 0.11 | 0.0225 | 0.0276 | 71 | 626 | 0.00 |
+| 0.7 (elite) | 20.37 ± 0.14 | 0.0526 | 0.0692 | 85 | 75 | 0.00 |
+| 0.5 (elite) | 20.52 ± 0.05 | 0.0528 | 0.0805 | 82 | 62 | 0.00 |
+
+On hull, **more averaging smooths, elite roughens**: q = 1.2 cuts drive ΔRMS
+−9 % and steer ΔRMS −18 % at *equal* lap and reversals (a real Decision-2
+win); q ≥ 1.5 smooths harder but over-damps and sheds 12–15 % lap; q < 1
+(elite) worsens both jitter axes — the elite-concentration hypothesis for
+straight-line jitter is refuted on this task. q = 1.2 (the hull win) was
+validated on the 4 tracks (1 rep, paired vs q = 1.0):
+
+| Track | Lap q1.0 → q1.2 | ΔRMS drive | ΔRMS steer | ESS q1.0 → q1.2 |
+| --- | --- | --- | --- | --- |
+| bezier s0 | **20.72 → 10.28** | 0.0430 → 0.0298 | 0.0646 → 0.0315 | 92 → 479 |
+| bezier s9 | 12.98 → 16.31 | 0.0384 → 0.0426 | 0.0590 → 0.0618 | 367 → 212 |
+| checkpoint s5 | 23.12 → 23.32 | 0.0462 → 0.0384 | 0.0639 → 0.0592 | 118 → 166 |
+| repulsive s3 | 22.43 → 22.72 | 0.0326 → 0.0296 | 0.0475 → 0.0438 | 206 → 257 |
+
+bezier s0's lap **halved** — an anomaly, so repeated (2 more reps): q1.2 laps
+10.09 / 10.50 (mean speed 2.5 vs baseline 5.1 m/s, ESS ~470) vs q1.0 21.0 /
+20.8. Reproducible: q > 1's heavier averaging over-damps throttle commitment
+in esc's flat-cost low-speed regime and **induces the Task-2 esc crawl** on an
+otherwise-healthy track.
+
+**REJECTED (as a default).** q = 1.2 is a genuine, understood smoothness win
+on hull, checkpoint, and repulsive (drive/steer −8 to −18 % at flat lap) and
+rescues the already-stalled bezier s9 — the most promising knob of the two —
+but it reproducibly triggers a −50 % lap crawl on bezier s0, a robustness
+regression that disqualifies it under Decision 2 (Task 3 was kept precisely
+because it regressed nowhere). Knob stays private, default q = 1.0 (no-op),
+kept in the code as a documented finding: the smoothing gain is real where the
+car is not in the esc low-speed regime, so it is worth revisiting once the esc
+stall is more robustly fixed (a stronger/broader anti-stall term). Elite
+weighting (q < 1) is rejected outright — it roughens control everywhere.

@@ -1,0 +1,82 @@
+{
+  "bezier s0": {
+    "f0.0": {
+      "lap_dist_m": 20.102725982666016,
+      "drms_drive": 0.04557572231370174,
+      "drms_steer": 0.06098327790559959,
+      "steer_reversals": 71,
+      "hero_oob_frac": 0.0,
+      "mean_ess": 88.4954487512509,
+      "steps_per_s": 4.743796999447246
+    },
+    "f0.1": {
+      "lap_dist_m": 20.78339385986328,
+      "drms_drive": 0.043288058032263446,
+      "drms_steer": 0.06434567420068858,
+      "steer_reversals": 77,
+      "hero_oob_frac": 0.0,
+      "mean_ess": 79.6275968114535,
+      "steps_per_s": 4.441927542316879
+    }
+  },
+  "bezier s9": {
+    "f0.0": {
+      "lap_dist_m": 12.74293041229248,
+      "drms_drive": 0.03827322381195487,
+      "drms_steer": 0.05940259014106626,
+      "steer_reversals": 62,
+      "hero_oob_frac": 0.0,
+      "mean_ess": 373.7284547150135,
+      "steps_per_s": 4.298654499334559
+    },
+    "f0.1": {
+      "lap_dist_m": 17.952251434326172,
+      "drms_drive": 0.040940410059141355,
+      "drms_steer": 0.07240675947748956,
+      "steer_reversals": 66,
+      "hero_oob_frac": 0.0,
+      "mean_ess": 110.74037762681643,
+      "steps_per_s": 4.269798151459474
+    }
+  },
+  "checkpoint s5": {
+    "f0.0": {
+      "lap_dist_m": 23.208709716796875,
+      "drms_drive": 0.04270597098007204,
+      "drms_steer": 0.06376230490929875,
+      "steer_reversals": 82,
+      "hero_oob_frac": 0.0,
+      "mean_ess": 113.5307045976321,
+      "steps_per_s": 4.2245163014428915
+    },
+    "f0.1": {
+      "lap_dist_m": 23.16258430480957,
+      "drms_drive": 0.045233842900777074,
+      "drms_steer": 0.06318141430065043,
+      "steer_reversals": 77,
+      "hero_oob_frac": 0.0,
+      "mean_ess": 108.36719175974528,
+      "steps_per_s": 4.226590426895086
+    }
+  },
+  "repulsive s3": {
+    "f0.0": {
+      "lap_dist_m": 22.425071716308594,
+      "drms_drive": 0.03153841660055374,
+      "drms_steer": 0.047208871973012656,
+      "steer_reversals": 54,
+      "hero_oob_frac": 0.0,
+      "mean_ess": 201.07489794095358,
+      "steps_per_s": 4.589985071779583
+    },
+    "f0.1": {
+      "lap_dist_m": 22.60105323791504,
+      "drms_drive": 0.033198992385451175,
+      "drms_steer": 0.04702413063880054,
+      "steer_reversals": 50,
+      "hero_oob_frac": 0.0,
+      "mean_ess": 181.04227209091187,
+      "steps_per_s": 4.420961480159279
+    }
+  }
+}

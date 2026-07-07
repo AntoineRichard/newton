@@ -159,6 +159,39 @@ Represent the plan by `n_knots` coarse control knots interpolated to the `H` fin
 
 ---
 
+### Task 3b: Literature-informed sampler/weighting knobs (both REJECTED)
+
+Two near-free ideas from the jitter literature review
+(`docs/superpowers/notes/2026-07-07-mppi-jitter-literature-review.md`), layered
+on the Task-3 baseline arm (**esc brake mode + `_n_knots = 12`**). Both are
+private, default-off, and bit-identical at their defaults; both in device
+arrays (graph-safe, runtime-tunable).
+
+- [x] **Experiment A — RA-MPPI zero-mean sample fraction** (`_zero_mean_fraction`,
+  default 0.0). First `ceil(f·K)` non-hero samples draw pure noise `u = ε`; the
+  stored delta stays `s − nominal` so the update is unbiased (unit-tested).
+  Swept f ∈ {0.1, 0.2, 0.3} on hull s4 (3 paired reps); validated f = 0.1 on 4
+  tracks. **REJECTED**: no f improves smoothness on hull; the one lap gain
+  (bezier s9 +41 %) is an esc stall-rescue with +22 % steer jitter (the Task-2
+  rejection pattern). Knob stays private, default 0.0 (no-op).
+- [x] **Experiment B — Tsallis deformed-exponential weighting** (`_tsallis_q`,
+  default 1.0). `w ∝ exp_q(−cost/λ)`, q = 1 = exact softmax (bit-identical).
+  Direction finding: with the min-cost shift, **q > 1 = heavier tails / more
+  averaging (higher ESS); q < 1 = elite concentration (lower ESS)** — elite is
+  the opposite of a smoothing move. Swept q ∈ {1.2, 1.5, 2.0, 0.7, 0.5} on hull
+  s4 (3 paired reps); validated q = 1.2 on 4 tracks. On hull, q = 1.2 cuts
+  drive/steer ΔRMS −9 %/−18 % at equal lap (real win); q ≥ 1.5 over-damps
+  (−12–15 % lap); q < 1 roughens control. **REJECTED (as a default)**: q = 1.2
+  wins on hull/checkpoint/repulsive and rescues bezier s9, but reproducibly
+  induces a −50 % lap esc crawl on bezier s0 (ESS → ~470) — a robustness
+  regression Decision 2 disqualifies. Knob stays private, default 1.0; kept as
+  a documented finding (revisit once the esc low-speed stall is more robustly
+  fixed). See the notes file's Task 3b section for full tables.
+
+**Commit:** `Record Task 3b zero-mean and Tsallis findings as rejected`
+
+---
+
 ### Task 4: Outer diffusion-annealing loop (`N_diffuse`) — fair trial
 
 The expensive ingredient, given a **fair trial** (Decision 1): GPU budget is flexible for experiments, and the deployment path is a lighter rollout model (kinematic/dynamic bicycle model or a small learned dynamics net), so `N_diffuse > 1` is not ruled out by today's Newton-rollout cost. Wrap the sample→rollout→update cycle in an outer loop with per-iteration annealed `sigma`. Run the equal-compute ablation as evidence to report alongside an above-budget run — not as an auto-reject gate. Follow-up note: a bicycle-model rollout backend is plausible future work that would enable much larger annealing budgets.
@@ -200,6 +233,8 @@ The expensive ingredient, given a **fair trial** (Decision 1): GPU budget is fle
 | Baseline single-pass MPPI (esc brake, hull s4) | 196 608 | 20.32 ± 0.17 | — | drv 0.0667 / str 0.0816 | 98 | 0.00 | 4.3 | ref |
 | + horizon-annealed sigma (f=2.0, best) | = | 20.34 ± 0.17 | — | drv 0.0609 / str 0.0866 | 104 | 0.00 | 4.3 | REJECTED |
 | + spline knots (n=12, best) | = | 20.33 ± 0.26 | — | drv 0.0410 / str 0.0513 | 76 | 0.00 | 4.3 | KEPT |
+| + zero-mean frac (f=0.1, on knots12) | = | 20.62 ± 0.05 | — | drv 0.0424 / str 0.0528 | 76 | 0.00 | 4.3 | REJECTED |
+| + Tsallis (q=1.2, on knots12) | = | 20.51 ± 0.11 | — | drv 0.0373 / str 0.0456 | 69 | 0.00 | 4.3 | REJECTED (esc crawl on bezier s0) |
 | DIAL outer loop (D=2) | = | | | | | | | ? |
 | DIAL outer loop (D=4) | = | | | | | | | ? |
 
