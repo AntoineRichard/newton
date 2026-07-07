@@ -436,11 +436,43 @@ def _build_model(num_worlds):
     return model, np.sort(free_children).astype(np.int32)
 
 
-def _generate_track(num_envs, seed, generator, device):
-    """Generates one track shared by all envs; retries invalid seeds."""
+def _parse_track_params(items):
+    """Parse ``KEY=VALUE`` overrides into a ``TrackGenConfig`` kwargs dict.
+
+    Values are coerced to int, then float, then left as a string, so
+    generator-specific knobs (e.g. ``hull_displacement=0.35``) can be forwarded
+    verbatim from the command line or the benchmark harness.
+    """
+    params = {}
+    for item in items or ():
+        if isinstance(items, dict):
+            params[item] = items[item]
+            continue
+        key, _, raw = item.partition("=")
+        key = key.strip()
+        raw = raw.strip()
+        for cast in (int, float):
+            try:
+                params[key] = cast(raw)
+                break
+            except ValueError:
+                continue
+        else:
+            params[key] = raw
+    return params
+
+
+def _generate_track(num_envs, seed, generator, device, extra_params=None):
+    """Generates one track shared by all envs; retries invalid seeds.
+
+    ``extra_params`` forwards generator-specific ``TrackGenConfig`` knobs (e.g.
+    ``hull_displacement``, ``checkpoint_count``) so the benchmark protocol can
+    reproduce exact track identities beyond the seed.
+    """
     if generator not in TRACK_GENERATOR_SETTINGS:
         raise ValueError(f"unsupported --track-generator {generator!r}; choose from {sorted(TRACK_GENERATOR_SETTINGS)}")
     scale, n_max = TRACK_GENERATOR_SETTINGS[generator]
+    extra = dict(extra_params) if extra_params else {}
     for attempt in range(MAX_TRACK_ATTEMPTS):
         seeds = wp.array(np.full(num_envs, seed + attempt, dtype=np.int32), dtype=wp.int32, device=device)
         rng = PerEnvSeededRNG(seeds=seeds, num_envs=num_envs, device=str(device))
@@ -451,6 +483,7 @@ def _generate_track(num_envs, seed, generator, device):
             half_width=TRACK_HALF_WIDTH,
             N_max=n_max,
             device=str(device),
+            **extra,
         )
         track = TrackGenerator(config, rng).generate()
         if bool(track.valid.numpy()[0]):
@@ -492,8 +525,9 @@ class Example:
         # --- track generation and spawn placement ------------------------
         # spawn edits model.joint_q, so it must precede solver/state creation
         # (mjData qpos and State.joint_q are initialized from model.joint_q)
+        self.track_params = _parse_track_params(getattr(args, "track_param", None))
         self.track, self.track_seed = _generate_track(
-            self.num_worlds, args.track_seed, args.track_generator, self.model.device
+            self.num_worlds, args.track_seed, args.track_generator, self.model.device, self.track_params
         )
         self._spawn_on_track()
 
@@ -1318,6 +1352,12 @@ class Example:
             default="bezier",
             choices=sorted(TRACK_GENERATOR_SETTINGS),
             help="track_gen generator family",
+        )
+        parser.add_argument(
+            "--track-param",
+            action="append",
+            metavar="KEY=VALUE",
+            help="generator-specific TrackGenConfig override (repeatable), e.g. --track-param hull_displacement=0.35",
         )
         parser.set_defaults(num_frames=240)
         return parser
