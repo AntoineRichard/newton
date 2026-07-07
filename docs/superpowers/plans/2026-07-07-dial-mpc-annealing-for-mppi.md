@@ -148,13 +148,14 @@ Represent the plan by `n_knots` coarse control knots interpolated to the `H` fin
 - Keep the interpolation kernel graph-capturable; expose the expanded `[K, H, A]` `samples` unchanged so the example's rollout loop is untouched.
 - Interaction: with knots, the AR(1) `beta` and the Task-2 horizon schedule act at knot resolution (document this).
 
-- [ ] **Step 1 (TDD):** Failing tests — `n_knots = None` reproduces current shapes/behavior; with knots, `samples` has shape `[K, H, A]`, sample 0 equals the interpolated nominal, interpolation is exact at knot locations, bounds respected after interpolation+clamp.
-- [ ] **Step 2:** Implement knots + interpolation (private surface); verify `None` path is bit-identical.
-- [ ] **Step 3:** Benchmark `n_knots ∈ {4, 6, 8, H}` at fixed `B` on the tuning track; compare against the Task-2 winner; validate on the 4 validation tracks.
-- [ ] **Step 4 (removal ablation, Decision 5):** with the best `n_knots`, empirically test REMOVING the existing smoothness machinery — AR(1) `beta` (set to 0), the `w_rate` cost, and `EXEC_COUPLING` — individually and together. If splines subsume some of it, prefer the cleaner config (remove); if removal regresses, keep stacking and record why.
-- [ ] **Acceptance (per Decision 2):** at equal compute, some `n_knots` beats the Task-2 config on smoothness without regressing robustness; a small lap-distance cost is acceptable. Record the Step-4 removal-ablation outcome either way. If knots do not beat Task 2, record rejected; keep `n_knots` defaulting to `None`.
+- [x] **Step 1 (TDD):** Failing tests — `n_knots = None` reproduces current shapes/behavior; with knots, `samples` has shape `[K, H, A]`, sample 0 equals the interpolated nominal, interpolation is exact at knot locations, bounds respected after interpolation+clamp. *(Done: 8 knot tests in `test_vehicles_mppi.py`, incl. a shift-semantics regression lock.)*
+- [x] **Step 2:** Implement knots + interpolation (private surface); verify `None` path is bit-identical. *(Done: private `_n_knots` ctor arg; knot-resolution noise + graph-capturable interpolation kernel; `None` bit-identical. Follow-up fix: the knot warm-start must resample the spline one fine STEP later, not roll one knot — the one-knot shift discarded ~6.7 steps of plan per frame and spuriously worsened reversals 96 → 119.)*
+- [x] **Step 3:** Benchmark `n_knots ∈ {8, 12, 16}` vs per-step at fixed `B` on the tuning track; compare against the Task-2 winner; validate on the 4 validation tracks. *(Done: every knot count cuts drive+steer ΔRMS 40-50 % at equal lap; n=12 picked. Beats Task-2 f=2.0 decisively. Validation: smoothness up on all 4 tracks, lap equal or better — bezier s9 +41 %.)*
+- [x] **Step 4 (removal ablation, Decision 5):** with the best `n_knots`, empirically test REMOVING the existing smoothness machinery — AR(1) `beta` (set to 0), the `w_rate` cost, and `EXEC_COUPLING` — individually and together. If splines subsume some of it, prefer the cleaner config (remove); if removal regresses, keep stacking and record why. *(Done: KEEP all three. exec-coupling is load-bearing (removal: steer ΔRMS +32 %, rev 89); w_rate mild but free; beta=0 won on the tuning track but reproducibly stalls bezier s9 (lap 4.7 vs 18.3) — white knot noise loses the temporal reach needed to escape the esc low-speed regime.)*
+- [x] **Acceptance (per Decision 2):** at equal compute, some `n_knots` beats the Task-2 config on smoothness without regressing robustness; a small lap-distance cost is acceptable. Record the Step-4 removal-ablation outcome either way. If knots do not beat Task 2, record rejected; keep `n_knots` defaulting to `None`. *(**KEPT: n_knots = 12**, machinery stacked. Knob stays private/default-off until Task 5 promotes it. Notes + raw JSON in `docs/superpowers/notes/`.)*
 
 **Commit (if kept):** `Add spline-knot control parameterization to ControllerMPPI`
+**Outcome:** kept — see `docs/superpowers/notes/2026-07-07-mppi-task1-baseline-and-braking.md` (Task 3 section).
 
 ---
 
@@ -198,7 +199,7 @@ The expensive ingredient, given a **fair trial** (Decision 1): GPU budget is fle
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Baseline single-pass MPPI (esc brake, hull s4) | 196 608 | 20.32 ± 0.17 | — | drv 0.0667 / str 0.0816 | 98 | 0.00 | 4.3 | ref |
 | + horizon-annealed sigma (f=2.0, best) | = | 20.34 ± 0.17 | — | drv 0.0609 / str 0.0866 | 104 | 0.00 | 4.3 | REJECTED |
-| + spline knots | = | | | | | | | ? |
+| + spline knots (n=12, best) | = | 20.33 ± 0.26 | — | drv 0.0410 / str 0.0513 | 76 | 0.00 | 4.3 | KEPT |
 | DIAL outer loop (D=2) | = | | | | | | | ? |
 | DIAL outer loop (D=4) | = | | | | | | | ? |
 

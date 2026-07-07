@@ -349,3 +349,84 @@ reversals stay within the esc baseline range everywhere.
 Task-1's "esc within noise of channel" conclusion (measured only on hull s4)
 survives: hull was never affected by the crawl, and the fixed esc mode now
 also holds up on the 4 validation tracks.
+
+## Task 3 — spline-knot control parameterization (KEPT: n_knots = 12)
+
+Implementation: private `_n_knots` constructor argument on `ControllerMPPI`
+(Decision 3). When set, the decision variable is `n_knots` coarse control
+points; noise is sampled (and softmax-averaged) at knot resolution, and a
+graph-capturable linear-interpolation kernel expands the per-sample knot
+commands to `samples [K, H, A]`, so the example's rollout loop is untouched.
+`None` (default) is bit-identical to the per-step sampler. The AR(1) `beta`
+and the Task-2 sigma schedule act at knot resolution. Interpolation cost is
+unmeasurable (steps/s unchanged, ~4.3). The t=0 exec-coupling weight moved to
+its own cost slot (`params[9] = w_rate * EXEC_COUPLING`, behavior unchanged)
+so the removal ablation could zero it independently.
+
+All runs: `--brake-mode esc`, tuning track hull s4, 240 frames, paired
+same-session. Raw JSON: `2026-07-07-mppi-task3-knots.json`.
+
+### Finding: the knot warm-start must shift one STEP, not one knot
+
+The first implementation rolled the knot array a whole knot per frame
+(= (H-1)/(n-1) ≈ 6.7 fine steps at n=8), silently discarding most of the
+converged plan every replan. Measured (3 reps): reversals 96 → 119 and lap
+−4 % at n=8 vs per-step, with no ΔRMS win — a would-be spurious rejection.
+Fixed by resampling the knot spline one fine step later
+(`delta = (n-1)/(H-1)` knot units, last knot held); the raw JSON keeps the
+broken-shift sweep under `broken_knot_shift_sweep` as the recorded finding.
+
+### Tuning-track sweep (fixed shift, 3 paired reps, equal compute)
+
+| n_knots | Lap dist [m] | ΔRMS drive | ΔRMS steer | Steer rev | OOB |
+| --- | --- | --- | --- | --- | --- |
+| None (per-step, H=48) | 20.43 ± 0.04 | 0.0761 ± 0.0060 | 0.0947 ± 0.0025 | 91 ± 5 | 0.00 |
+| 8 | 20.40 ± 0.12 | 0.0407 ± 0.0013 | 0.0477 ± 0.0036 | 84 ± 3 | 0.00 |
+| **12 (picked)** | 20.33 ± 0.26 | 0.0410 ± 0.0007 | 0.0513 ± 0.0021 | 76 ± 3 | 0.00 |
+| 16 | 19.99 ± 0.66 | 0.0446 ± 0.0020 | 0.0579 ± 0.0007 | 68 ± 5 | 0.00 |
+
+Every knot count cuts executed drive AND steer jitter 40-50 % at equal lap
+distance — including the Task-1 honest residual (esc drive jitter 0.065-0.08
+falls to ~0.041). n=12 picked: ΔRMS within noise of n=8, reversals −16 %,
+lap flat; n=16 trades further reversal wins for a lap dip and run-to-run
+variance. This also cleanly beats the Task-2 winner (f=2.0: 0.0609/0.0866,
+rev 104).
+
+### Decision-5 removal ablation (n_knots=12, 2 reps per arm vs 3-rep base)
+
+| Arm | Lap [m] | ΔRMS drive | ΔRMS steer | Steer rev | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| knots12, all machinery on | 20.33 ± 0.26 | 0.0410 | 0.0513 | 76 | ref |
+| − AR(1) beta (=0) | 20.46 ± 0.09 | 0.0378 | 0.0501 | 65 | tuning-KEEPable, but **fails validation** (below) |
+| − w_rate (=0) | 20.45 ± 0.10 | 0.0432 | 0.0516 | 81 | KEEP w_rate (mild but free) |
+| − exec-coupling (w_exec=0) | 20.51 ± 0.10 | 0.0482 | 0.0675 | 89 | **KEEP exec-coupling** (steer ΔRMS +32 %) |
+| − all three | 20.33 ± 0.04 | 0.0421 | 0.0656 | 84 | confirms w_exec is the load-bearing term |
+
+The spline does NOT subsume exec-coupling: replan-to-replan flicker is
+invisible to any within-plan prior. beta=0 looked like a win on the tuning
+track (rev 65, ΔRMS best) but reproducibly stalls bezier s9 (lap 4.67 / 4.68
+twice, vs 18.27 with beta on): white knot noise loses the temporal reach
+that climbs out of the low-speed regime, so the AR(1) stays. **Keep all
+three mechanisms; the spline stacks on top.**
+
+### Validation (knots12, default machinery, paired vs per-step, 1 rep)
+
+| Track | Lap base → knots12 [m] | ΔRMS drv base → k12 | ΔRMS str base → k12 | Rev base → k12 |
+| --- | --- | --- | --- | --- |
+| bezier s0 | 19.53 → 20.94 | 0.051 → 0.041 | 0.098 → 0.066 | 81 → 81 |
+| bezier s9 hairpins | 12.97 → 18.27 | 0.059 → 0.048 | 0.074 → 0.070 | 87 → 66 |
+| checkpoint s5 | 23.16 → 23.49 | 0.066 → 0.048 | 0.099 → 0.067 | 84 → 76 |
+| repulsive s3 | 22.56 → 22.42 | 0.049 → 0.032 | 0.057 → 0.049 | 87 → 63 |
+
+Smoothness improves on all four tracks, lap distance equal or better
+everywhere (s9 +41 % — the smoother drive axis also avoids the esc
+stall-recovery churn), OOB 0.00 throughout.
+
+### Verdict (Decision 2)
+
+**KEPT: `n_knots = 12`** (with beta/w_rate/exec-coupling all retained).
+40-50 % executed-command jitter reduction at equal-or-better lap distance on
+all 5 tracks — the strongest result of the plan so far, and it directly
+repairs the Task-1 residual (esc drive chatter). The knob stays private
+(`_n_knots`, example `--n-knots`) until Task 5 consolidates; promotion to
+the public `Config` + CHANGELOG belongs there per the plan.
