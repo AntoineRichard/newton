@@ -322,7 +322,7 @@ def _accumulate_cost(
     t: int,
     horizon: int,
     total_len: float,
-    params: wp.array[float],  # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term, w_center, w_under]
+    params: wp.array[float],  # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term, w_center, w_under, w_exec]
     u_prev: wp.array[float],
     s_prev: wp.array[float],
     back_dist: wp.array[float],
@@ -386,10 +386,12 @@ def _accumulate_cost(
         # couple the plan's first command to the command the hero just
         # executed: without this, replans are free to flick the steering
         # every frame (the dominant straight-line wobble mode — the
-        # within-rollout rate penalty cannot see across replan boundaries)
+        # within-rollout rate penalty cannot see across replan boundaries).
+        # Held in its own weight (params[9], default w_rate * EXEC_COUPLING)
+        # so the Task-3 removal ablation can drop it independently of w_rate.
         dd = samples[e, 0, 0] - u_prev[0]
         dst = samples[e, 0, 1] - u_prev[1]
-        c += params[4] * EXEC_COUPLING * (dd * dd + dst * dst)
+        c += params[9] * (dd * dd + dst * dst)
     # graded wall proximity: a gradient before contact instead of a cliff at it
     c += params[5] * wp.max(0.0, PROX_MARGIN - clearance[e])
     # light clearance reward (AutoRally-style sloped track cost): breaks the
@@ -675,6 +677,10 @@ class Example:
         # brake on
         bounds_lo = (drive_lo, -1.0, -1.0)[:dim]
         bounds_hi = (1.0, 1.0, 1.0)[:dim]
+        # spline-knot control parameterization (Task 3, default-off per
+        # Decision 3): represent the plan by n_knots coarse control points
+        # interpolated up to the horizon. None reproduces the per-step sampler.
+        n_knots = getattr(args, "n_knots", None)
         self.planner = nv.ControllerMPPI(
             config=nv.ControllerMPPI.Config(
                 num_samples=self.num_worlds,
@@ -692,6 +698,7 @@ class Example:
                 bounds_hi=bounds_hi,
             ),
             device=self.model.device,
+            _n_knots=n_knots,
         )
         device = self.model.device
         E = self.num_worlds
@@ -701,14 +708,20 @@ class Example:
         self.u_prev = wp.zeros(2, dtype=wp.float32, device=device)
         self.start_oob = wp.zeros(E, dtype=wp.int32, device=device)
         self.back_dist = wp.zeros(E, dtype=wp.float32, device=device)
-        # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term, w_center, w_under]
+        # [w_progress, w_speed, w_steer, kill, w_rate, w_prox, w_term, w_center, w_under, w_exec]
         # w_under defaults to 0 outside esc mode (preserves the none/channel
-        # baselines); in esc mode it repairs the braking-trap standstill
+        # baselines); in esc mode it repairs the braking-trap standstill.
+        # w_exec (the t=0 exec-coupling weight) defaults to w_rate*EXEC_COUPLING
+        # so behavior is unchanged; the Task-3 removal ablation can zero it.
         w_under = getattr(args, "w_underspeed", None)
         if w_under is None:
             w_under = 0.5 if self._brake_mode == BRAKE_MODE_ESC else 0.0
+        w_rate = 2.0
+        w_exec = w_rate * EXEC_COUPLING
         self.cost_params = wp.array(
-            [30.0, 2.0, 0.05, 1000.0, 2.0, 10.0, 20.0, 2.0, float(w_under)], dtype=wp.float32, device=device
+            [30.0, 2.0, 0.05, 1000.0, w_rate, 10.0, 20.0, 2.0, float(w_under), w_exec],
+            dtype=wp.float32,
+            device=device,
         )
         self.ribbon = wp.zeros(horizon, dtype=wp.vec3, device=device)
         # hero lap odometer (display + tests): unwrapped centerline arc length
@@ -1457,6 +1470,13 @@ class Example:
             help="MPPI samples K (= simulated worlds; sample 0 is the hero)",
         )
         parser.add_argument("--horizon", type=int, default=48, help="MPPI planning horizon in control steps")
+        parser.add_argument(
+            "--n-knots",
+            type=int,
+            default=None,
+            help="experimental: represent the plan by N coarse control knots interpolated to the "
+            "horizon (default: None = per-step control)",
+        )
         parser.add_argument("--rollout-substeps", type=int, default=4, help="solver substeps per rollout control step")
         parser.add_argument("--track-seed", type=int, default=0, help="base seed for track generation")
         parser.add_argument(

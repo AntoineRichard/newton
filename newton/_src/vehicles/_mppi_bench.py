@@ -42,7 +42,16 @@ def _track_id(generator: str, seed: int, params: dict) -> str:
 
 
 def _build_example(
-    generator, seed, params, num_samples, horizon, rollout_substeps, device, brake_mode="none", w_underspeed=None
+    generator,
+    seed,
+    params,
+    num_samples,
+    horizon,
+    rollout_substeps,
+    device,
+    brake_mode="none",
+    w_underspeed=None,
+    n_knots=None,
 ):
     # Lazy import: the example lives in newton.examples and pulls in the viewer
     # stack; keep it out of module import time.
@@ -63,6 +72,7 @@ def _build_example(
         device=device,
         brake_mode=brake_mode,
         w_underspeed=w_underspeed,
+        n_knots=n_knots,
     )
     example = ex_mod.Example(viewer, args)
     return example, viewer
@@ -82,6 +92,10 @@ def bench_track(
     brake_mode="none",
     sigma_horizon_factor=1.0,
     w_underspeed=None,
+    n_knots=None,
+    beta=None,
+    w_rate=None,
+    w_exec=None,
 ) -> dict:
     """Run one track headless and return its metric dict.
 
@@ -99,10 +113,22 @@ def bench_track(
     """
     params = params or {}
     example, viewer = _build_example(
-        generator, seed, params, num_samples, horizon, rollout_substeps, device, brake_mode, w_underspeed
+        generator, seed, params, num_samples, horizon, rollout_substeps, device, brake_mode, w_underspeed, n_knots
     )
     if sigma_horizon_factor != 1.0:
         example.planner._set_sigma_horizon_factor(sigma_horizon_factor)
+    # Decision-5 removal-ablation knobs: override the existing smoothness
+    # machinery post-construction (AR(1) beta, the w_rate cost, the t=0
+    # exec-coupling weight w_exec) to test what the spline prior subsumes.
+    if beta is not None:
+        example.planner.set_beta(beta)
+    if w_rate is not None or w_exec is not None:
+        cp = example.cost_params.numpy()
+        if w_rate is not None:
+            cp[4] = float(w_rate)
+        if w_exec is not None:
+            cp[9] = float(w_exec)
+        example.cost_params.assign(cp)
 
     drive = np.empty(frames, dtype=np.float64)
     steer = np.empty(frames, dtype=np.float64)
@@ -216,6 +242,10 @@ def bench_track(
         "brake_mode": brake_mode,
         "sigma_horizon_factor": sigma_horizon_factor,
         "w_underspeed": float(example_w_under),
+        "n_knots": n_knots,
+        "beta": beta,
+        "w_rate": w_rate,
+        "w_exec": w_exec,
     }
 
 

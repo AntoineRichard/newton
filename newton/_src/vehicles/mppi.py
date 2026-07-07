@@ -55,6 +55,34 @@ def _advance_counter(counter: wp.array[wp.int32]):
     counter[0] = counter[0] + 1
 
 
+@wp.kernel
+def _interp_seq(
+    knots: wp.array2d[float],
+    j0: wp.array[wp.int32],
+    j1: wp.array[wp.int32],
+    frac: wp.array[float],
+    out: wp.array2d[float],
+):
+    # linear interpolation of the knot decision variable up to the fine
+    # horizon; a convex combination of clamped knots stays within bounds
+    t, a = wp.tid()
+    f = frac[t]
+    out[t, a] = knots[j0[t], a] * (1.0 - f) + knots[j1[t], a] * f
+
+
+@wp.kernel
+def _interp_samples(
+    knot_samples: wp.array3d[float],
+    j0: wp.array[wp.int32],
+    j1: wp.array[wp.int32],
+    frac: wp.array[float],
+    out: wp.array3d[float],
+):
+    k, t, a = wp.tid()
+    f = frac[t]
+    out[k, t, a] = knot_samples[k, j0[t], a] * (1.0 - f) + knot_samples[k, j1[t], a] * f
+
+
 # the reductions below are deliberately single-thread O(K) loops: K is small
 # (hundreds to a few thousand) and a deterministic loop keeps update() free of
 # atomics, so results are bit-stable across runs and CUDA graph replays
@@ -134,6 +162,14 @@ class ControllerMPPI:
     ``1 / sum(w_normalized^2)`` (shape [1]); healthy values are roughly 5-20%
     of ``num_samples`` — near 1 means the softmax collapsed onto a single
     rollout (temperature too low for the cost spread).
+
+    The optional private ``_n_knots`` constructor argument switches the
+    decision variable to ``_n_knots`` coarse control knots linearly
+    interpolated up to the horizon (DIAL-MPC-style spline parameterization),
+    a lower-dimensional and inherently smoother control. It is experimental
+    and default-off (``None`` reproduces the per-step sampler bit-for-bit);
+    :attr:`samples` and :attr:`nominal` keep their horizon-resolution shapes
+    regardless, so the rollout caller is unaffected.
     """
 
     @dataclass
@@ -159,7 +195,13 @@ class ControllerMPPI:
         seed: int = 0
         """Base RNG seed; resampling advances an internal device counter."""
 
-    def __init__(self, config: Config | None = None, device: wp.context.Device | str | None = None):
+    def __init__(
+        self,
+        config: Config | None = None,
+        device: wp.context.Device | str | None = None,
+        *,
+        _n_knots: int | None = None,
+    ):
         cfg = config if config is not None else ControllerMPPI.Config()
         if cfg.num_samples < 2:
             raise ValueError("num_samples must be >= 2 (sample 0 is the nominal)")
@@ -173,18 +215,48 @@ class ControllerMPPI:
             raise ValueError(f"beta must be a scalar or have length dim={cfg.dim}")
         if not all(0.0 <= b < 1.0 for b in betas):
             raise ValueError("beta must be in [0, 1)")
+        # spline-knot control parameterization (experimental, private per
+        # Decision 3): the decision variable becomes n_knots coarse control
+        # points linearly interpolated up to the fine horizon. None reproduces
+        # the per-step sampler bit-for-bit.
+        self._use_knots = _n_knots is not None
+        if self._use_knots:
+            if _n_knots < 2:
+                raise ValueError("_n_knots must be >= 2")
+            if _n_knots > cfg.horizon:
+                raise ValueError("_n_knots must be <= horizon")
+        self._n_dec = _n_knots if self._use_knots else cfg.horizon
         self.config = cfg
         self.device = wp.get_device(device)
         k, h, a = cfg.num_samples, cfg.horizon, cfg.dim
+        n = self._n_dec
         with wp.ScopedDevice(self.device):
             self.nominal = wp.zeros((h, a), dtype=wp.float32)
             self.samples = wp.zeros((k, h, a), dtype=wp.float32)
-            self.noise = wp.zeros((k, h, a), dtype=wp.float32)
+            if self._use_knots:
+                # decision variable and noise live at knot resolution; the
+                # per-sample knot commands are interpolated into `samples`
+                self._knots = wp.zeros((n, a), dtype=wp.float32)
+                self._knot_samples = wp.zeros((k, n, a), dtype=wp.float32)
+                self.noise = wp.zeros((k, n, a), dtype=wp.float32)
+                # fixed knot->horizon interpolation weights (t maps to a
+                # fractional knot index); precomputed once, graph-safe
+                p = np.arange(h, dtype=np.float64) * (n - 1) / (h - 1)
+                j0 = np.clip(np.floor(p).astype(np.int32), 0, n - 2)
+                self._interp_j0 = wp.array(j0, dtype=wp.int32)
+                self._interp_j1 = wp.array(j0 + 1, dtype=wp.int32)
+                self._interp_frac = wp.array((p - j0).astype(np.float32), dtype=wp.float32)
+            else:
+                # decision variable is the nominal itself; sampling writes
+                # straight into `samples` (no interpolation), bit-identical
+                self._knots = self.nominal
+                self.noise = wp.zeros((k, h, a), dtype=wp.float32)
             self.weights = wp.zeros(k, dtype=wp.float32)
             self.sigma = wp.array(cfg.sigma, dtype=wp.float32)
-            # per-horizon-step noise scale (experimental, private): defaults to
-            # all-ones, which reproduces the flat-sigma sampler bit-for-bit
-            self._sigma_schedule = wp.ones(h, dtype=wp.float32)
+            # per-decision-step noise scale (experimental, private): defaults
+            # to all-ones, which reproduces the flat-sigma sampler bit-for-bit.
+            # With knots this schedule acts at knot resolution.
+            self._sigma_schedule = wp.ones(n, dtype=wp.float32)
             self.bounds_lo = wp.array(cfg.bounds_lo, dtype=wp.float32)
             self.bounds_hi = wp.array(cfg.bounds_hi, dtype=wp.float32)
             self._temperature = wp.array([cfg.temperature], dtype=wp.float32)
@@ -223,18 +295,38 @@ class ControllerMPPI:
         """
         if value <= 0.0:
             raise ValueError("sigma horizon factor must be > 0")
-        h = self.config.horizon
-        schedule = float(value) ** (np.arange(h, dtype=np.float64) / (h - 1))
+        n = self._n_dec
+        schedule = float(value) ** (np.arange(n, dtype=np.float64) / (n - 1))
         self._sigma_schedule.assign(schedule.astype(np.float32))
 
+    def _sync_nominal(self) -> None:
+        """Interpolates the knot decision variable into the horizon nominal.
+
+        No-op when knots are disabled (the nominal is the decision variable).
+        """
+        if not self._use_knots:
+            return
+        wp.launch(
+            _interp_seq,
+            dim=(self.config.horizon, self.config.dim),
+            inputs=[self._knots, self._interp_j0, self._interp_j1, self._interp_frac, self.nominal],
+            device=self.device,
+        )
+
     def sample(self) -> None:
-        """Fills :attr:`samples` with the clamped nominal plus smoothed Gaussian noise."""
+        """Fills :attr:`samples` with the clamped nominal plus smoothed Gaussian noise.
+
+        With knots enabled, noise is sampled at knot resolution and the
+        per-sample knot commands are linearly interpolated up to the horizon,
+        so :attr:`samples` keeps shape ``[num_samples, horizon, dim]`` either way.
+        """
         cfg = self.config
+        knot_out = self._knot_samples if self._use_knots else self.samples
         wp.launch(
             _sample_sequences,
             dim=(cfg.num_samples, cfg.dim),
             inputs=[
-                self.nominal,
+                self._knots,
                 self.sigma,
                 self._sigma_schedule,
                 self.bounds_lo,
@@ -243,10 +335,17 @@ class ControllerMPPI:
                 cfg.seed,
                 self._counter,
             ],
-            outputs=[self.noise, self.samples],
+            outputs=[self.noise, knot_out],
             device=self.device,
         )
         wp.launch(_advance_counter, dim=1, inputs=[self._counter], device=self.device)
+        if self._use_knots:
+            wp.launch(
+                _interp_samples,
+                dim=(cfg.num_samples, cfg.horizon, cfg.dim),
+                inputs=[self._knot_samples, self._interp_j0, self._interp_j1, self._interp_frac, self.samples],
+                device=self.device,
+            )
 
     def update(self, costs: wp.array[float]) -> None:
         """Applies the MPPI softmax-weighted noise average to the nominal.
@@ -273,11 +372,13 @@ class ControllerMPPI:
         wp.launch(_sum_weights, dim=1, inputs=[self.weights, self._weight_sum, self.ess], device=self.device)
         wp.launch(
             _update_nominal,
-            dim=(cfg.horizon, cfg.dim),
-            inputs=[self.noise, self.weights, self._weight_sum, self.bounds_lo, self.bounds_hi, self.nominal],
+            dim=(self._n_dec, cfg.dim),
+            inputs=[self.noise, self.weights, self._weight_sum, self.bounds_lo, self.bounds_hi, self._knots],
             device=self.device,
         )
+        self._sync_nominal()
 
     def shift(self) -> None:
         """Rolls the nominal one step forward, repeating the final row."""
-        wp.launch(_shift_nominal, dim=self.config.dim, inputs=[self.nominal], device=self.device)
+        wp.launch(_shift_nominal, dim=self.config.dim, inputs=[self._knots], device=self.device)
+        self._sync_nominal()

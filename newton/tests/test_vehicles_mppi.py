@@ -125,6 +125,74 @@ class TestControllerMPPI(unittest.TestCase):
         self.assertGreaterEqual(float(samples.min()), -1.0 - 1e-6)
         np.testing.assert_allclose(samples[0], planner.nominal.numpy(), atol=1e-6)
 
+    def test_knots_none_reproduces_per_step_shapes(self):
+        planner = _make()  # _n_knots defaults to None
+        self.assertFalse(planner._use_knots)
+        self.assertEqual(planner.samples.shape, (64, 8, 2))
+        self.assertEqual(planner.noise.shape, (64, 8, 2))
+        # the decision variable is the nominal itself (no separate knot buffer)
+        self.assertIs(planner._knots, planner.nominal)
+
+    def _make_knots(self, n_knots, horizon=8, **overrides):
+        kwargs = {"num_samples": 64, "horizon": horizon, "dim": 2, "sigma": (0.3, 0.4), "seed": 11}
+        kwargs.update(overrides)
+        return nv.ControllerMPPI(config=nv.ControllerMPPI.Config(**kwargs), _n_knots=n_knots)
+
+    def test_knots_shapes(self):
+        planner = self._make_knots(4)
+        self.assertTrue(planner._use_knots)
+        # samples/nominal stay at horizon resolution for the caller's rollout;
+        # noise lives at knot resolution for the update
+        self.assertEqual(planner.samples.shape, (64, 8, 2))
+        self.assertEqual(planner.nominal.shape, (8, 2))
+        self.assertEqual(planner.noise.shape, (64, 4, 2))
+        self.assertEqual(planner._knots.shape, (4, 2))
+
+    def test_knots_config_validation(self):
+        with self.assertRaises(ValueError):
+            self._make_knots(1)  # < 2 knots
+        with self.assertRaises(ValueError):
+            self._make_knots(16, horizon=8)  # more knots than horizon
+
+    def test_knots_sample0_is_interpolated_nominal(self):
+        planner = self._make_knots(4)
+        knots = np.linspace(-0.5, 0.5, 4 * 2).astype(np.float32).reshape(4, 2)
+        planner._knots.assign(knots)
+        planner._sync_nominal()
+        planner.sample()
+        # sample 0 is the zero-noise plan == the interpolated nominal
+        np.testing.assert_allclose(planner.samples.numpy()[0], planner.nominal.numpy(), atol=1e-6)
+
+    def test_knots_interpolation_exact_at_knot_locations(self):
+        # horizon 7, 4 knots -> knots land exactly on t = 0, 2, 4, 6
+        planner = self._make_knots(4, horizon=7)
+        knots = np.array([[0.1, -0.2], [0.4, 0.5], [-0.3, 0.2], [0.0, -0.6]], dtype=np.float32)
+        planner._knots.assign(knots)
+        planner._sync_nominal()
+        nominal = planner.nominal.numpy()
+        for j, t in enumerate((0, 2, 4, 6)):
+            np.testing.assert_allclose(nominal[t], knots[j], atol=1e-6)
+        # midpoint of adjacent knots is their linear average
+        np.testing.assert_allclose(nominal[1], 0.5 * (knots[0] + knots[1]), atol=1e-6)
+
+    def test_knots_bounds_respected(self):
+        planner = self._make_knots(4, sigma=(5.0, 5.0))
+        planner.sample()
+        samples = planner.samples.numpy()
+        self.assertLessEqual(float(samples.max()), 1.0 + 1e-6)
+        self.assertGreaterEqual(float(samples.min()), -1.0 - 1e-6)
+
+    def test_knots_full_cycle_stays_finite_and_bounded(self):
+        planner = self._make_knots(4)
+        planner.sample()
+        costs = wp.array(np.linspace(0.0, 10.0, 64, dtype=np.float32), dtype=wp.float32, device=planner.device)
+        planner.update(costs)
+        planner.shift()
+        nominal = planner.nominal.numpy()
+        self.assertTrue(np.isfinite(nominal).all())
+        self.assertLessEqual(float(nominal.max()), 1.0 + 1e-6)
+        self.assertGreaterEqual(float(nominal.min()), -1.0 - 1e-6)
+
     def test_shift_rolls_and_repeats_last(self):
         planner = _make()
         nom = np.arange(8 * 2, dtype=np.float32).reshape(8, 2) * 0.01
