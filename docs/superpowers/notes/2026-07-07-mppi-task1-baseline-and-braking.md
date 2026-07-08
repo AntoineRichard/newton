@@ -519,3 +519,30 @@ kept in the code as a documented finding: the smoothing gain is real where the
 car is not in the esc low-speed regime, so it is worth revisiting once the esc
 stall is more robustly fixed (a stronger/broader anti-stall term). Elite
 weighting (q < 1) is rejected outright — it roughens control everywhere.
+
+## 2026-07-08 — Campaign wrap-up status and video-validation finding
+
+**Final validation video** (`mppi-hull-s4-final.mp4`, untracked): hull s4,
+`--brake-mode esc --n-knots 12`, 1300 sim frames headless capture.
+
+**Real finding: the 240-frame acceptance window hid a failure.** The car
+launches cleanly and brakes correctly into hairpin 1 (matching all acceptance
+data, which ends at frame 240 ≈ 4 s of sim), but at frame ~300 — just past the
+hairpin-1 exit, s ≈ 27 m — it goes briefly OOB, stalls, and never recovers
+(regresses to s ≈ 14 m; anti-stall drive floor insufficient once OOB).
+Reproducible (MPPI noise counter-seeded). Every keep/reject verdict in Tasks
+1–3b rests on 240-frame windows and should be re-checked at 1200+ frames when
+GPU time returns.
+
+**Status at wrap-up (GPU ceded):**
+- KEPT and validated (240-frame windows): esc brake mode + anti-stall w=0.5 +
+  deadband; spline knots n=12.
+- REJECTED with evidence: horizon-annealed sigma (Task 2), zero-mean fraction
+  (3b-A), Tsallis as default (3b-B; q=1.2 remains the most promising rejected
+  knob, blocked by the low-speed cost-flatness).
+- INCOMPLETE: Task 3c anti-stall hardening (diagnosis done, mechanism
+  implemented as WIP commit 5ca8924a5, acceptance sweeps not run); Task 4
+  outer diffusion loop (never started).
+- NEXT (in order): (1) extend the bench window to full-lap length and re-run
+  the kept-config validation — the video failure is now the blocking bug;
+  (2) finish Task 3c acceptance; (3) revisit q=1.2; (4) Task 4 fair trial.
