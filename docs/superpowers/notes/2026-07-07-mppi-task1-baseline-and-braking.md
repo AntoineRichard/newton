@@ -546,3 +546,26 @@ GPU time returns.
 - NEXT (in order): (1) extend the bench window to full-lap length and re-run
   the kept-config validation — the video failure is now the blocking bug;
   (2) finish Task 3c acceptance; (3) revisit q=1.2; (4) Task 4 fair trial.
+
+### 2026-07-08 — Old-config comparison video: the verdict inverts at full length
+
+Same track/seed/window (1300 frames), old config (`brake-mode none`, per-step):
+**104.1 m covered, monotonic, 0 OOB frames**, one near-stall (0.91 m/s)
+self-recovered. Accepted config (esc+knots12): 13.4 m net / 27 m peak, OOB at
+hairpin-1 exit, unrecovered. Over full runs the old config is unambiguously
+more robust on this track; the campaign's kept improvements optimize the first
+4 s and lose the run.
+
+Mechanism hypotheses (untested, GPU ceded):
+1. **esc mode removed reverse entirely** (negative half of the drive axis maps
+   to brake, never reverse). The old config could back out of a bad spot with
+   negative drive torque; the accepted config physically cannot reverse, so an
+   OOB nose-in position is terminal. Prime suspect — check the example's OOB
+   recovery cost mode's assumptions about achievable motion under esc.
+2. Self-limiting speed: unable to brake hard, the old config never carries
+   enough exit speed to clip OOB in the first place — robustness by weakness.
+3. Knots-12 smoothing may resist the sharp recovery maneuver even when one is
+   sampled.
+
+Videos: mppi-hull-s4-final.mp4 (accepted config) vs mppi-hull-s4-old.mp4
+(old config), untracked, identical pipeline.
