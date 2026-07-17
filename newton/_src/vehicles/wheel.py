@@ -21,7 +21,7 @@ import warp as wp
 
 from .impulse import solve_tire_impulse_relaxed
 from .metadata import VehicleModelData
-from .tire import tire_force
+from .tire import MF_PARAM_COUNT, tire_force
 
 DRIVE_SPEED = wp.constant(0)
 DRIVE_TORQUE = wp.constant(1)
@@ -61,6 +61,7 @@ class WheelDynamics:
         self.drive_input = z(wp.int32)
         self.c_long = z(wp.float32)
         self.c_lat = z(wp.float32)
+        self.mf_params = wp.zeros((n, MF_PARAM_COUNT), dtype=wp.float32, device=self.device)
         self.mu_override = z(wp.float32)
         self.inertia = z(wp.float32)
         self.damping = z(wp.float32)
@@ -145,6 +146,7 @@ def apply_wheel_dynamics(
             dyn.drive_input,
             dyn.c_long,
             dyn.c_lat,
+            dyn.mf_params,
             dyn.mu_override,
             dyn.inertia,
             dyn.damping,
@@ -197,6 +199,7 @@ def _wheel_dynamics_kernel(
     drive_input: wp.array[wp.int32],
     c_long: wp.array[wp.float32],
     c_lat: wp.array[wp.float32],
+    mf_params: wp.array2d[wp.float32],
     mu_override: wp.array[wp.float32],
     inertia: wp.array[wp.float32],
     damping: wp.array[wp.float32],
@@ -304,7 +307,7 @@ def _wheel_dynamics_kernel(
                 ut_lat = u_lat + u_ff_lat
                 kappa = -ut_long / ref
                 alpha = wp.atan2(ut_lat, ref)
-                f0 = tire_force(tire_model[w], kappa, alpha, fz, mu, c_long[w], c_lat[w], 0.0)
+                f0 = tire_force(tire_model[w], kappa, alpha, fz, mu, c_long[w], c_lat[w], 0.0, mf_params, w)
 
                 # secant impulse stiffness dt*C, capped by the linear-regime slope
                 k_lin_long = dt * c_long[w] * fz / ref
