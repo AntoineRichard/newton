@@ -63,7 +63,7 @@ transition from state sample `t` to state sample `t+1`.
 |----------------|--------------|----------------|--------------------------------------------------------------------------|
 | `time`         | `[T+1]`      | s              | Sample timestamps.                                                       |
 | `body_q`       | `[T+1, 7]`   | m (position)   | Chassis position + quaternion `(x, y, z, qx, qy, qz, qw)`, world frame.  |
-| `body_qd`      | `[T+1, 6]`   | rad/s, m/s     | Chassis spatial velocity: angular then linear, world frame, Newton spatial convention. |
+| `body_qd`      | `[T+1, 6]`   | m/s, rad/s     | Chassis spatial velocity: linear then angular, world frame, entries 0:3 linear [m/s], 3:6 angular [rad/s]. |
 | `wheel_omega`  | `[T+1, W]`   | rad/s          | Per-wheel angular velocity, `W` wheels.                                  |
 | `controls`     | `[T, A]`     | normalized     | Normalized control commands, `A` actions, columns named by `control_names`. |
 
@@ -78,7 +78,7 @@ since real-vehicle logs will not have it. When present, all arrays have
 | `joint_q`        | `[T+1, D]`    | m or rad | Full generalized joint coordinates.                |
 | `joint_qd`       | `[T+1, Dv]`   | m/s or rad/s | Full generalized joint velocities.             |
 | `body_q_full`    | `[T+1, B, 7]` | m (position) | Position + quaternion for all `B` bodies in the world. |
-| `body_qd_full`   | `[T+1, B, 6]` | rad/s, m/s | Spatial velocity for all `B` bodies in the world. |
+| `body_qd_full`   | `[T+1, B, 6]` | m/s, rad/s | Spatial velocity for all `B` bodies in the world: linear then angular, entries 0:3 linear [m/s], 3:6 angular [rad/s]. |
 | `trans_long`     | `[T+1, W]`    | m/s   | Per-wheel longitudinal slip/contact-patch translation velocity. |
 | `trans_lat`      | `[T+1, W]`    | m/s   | Per-wheel lateral slip/contact-patch translation velocity. |
 | `patch_fz`       | `[T+1, W]`    | N     | Per-wheel vertical (normal) contact-patch force.       |
