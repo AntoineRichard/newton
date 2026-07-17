@@ -13,6 +13,7 @@
 - Add `newton.vehicles`, a wheeled-vehicle simulation layer: a cohesive `WheeledVehicles` controller wraps a rigid solver (which owns collision and normal support) and owns analytical wheel spin plus a brush combined-slip tire model (canonical theoretical slip with friction-circle saturation and a self-aligning moment), with heterogeneous Ackermann/skid-steer/generic drive modes and `vehicle_husky` / `vehicle_rc_car` examples
 - Add an optional `kernel_block_dim` argument to `SensorTiledCamera.update()` for tuning the Warp ray-tracer's `render_megakernel` launch shape.
 - Add `ArticulationView.joint_template_labels`, `link_template_labels` (aliased as `body_template_labels`), and `shape_template_labels` exposing the raw template-articulation labels alongside the existing leaf-only `*_names`, so callers can disambiguate selected entries whose leaf names collide.
+- Add Pacejka (Magic Formula) tire model for wheeled vehicles: `TireModel.PACEJKA` with shape parameters in `PacejkaParams` (`WheeledConfig.pacejka`)
 - Add vehicle manifest loading with USD auto-detect via `newton.vehicles.load_vehicle_manifest()` and `apply_vehicle_manifest()`
 - Parse URDF `<material>` colors (inline `<color rgba>` and named material references) during import and apply them to `ModelBuilder.shape_color` for all shape types
 - Add robotics tutorial notebook covering ModelBuilder, solvers, CUDA graphs, IK, and pick-and-place

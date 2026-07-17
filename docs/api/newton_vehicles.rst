@@ -23,6 +23,7 @@ heterogeneous vehicles (Ackermann, skid-steer, generic) in a single model.
    ControllerMPPI
    DriveInput
    DriveMode
+   PacejkaParams
    TireModel
    VehicleAssetMetadata
    VehicleModelData

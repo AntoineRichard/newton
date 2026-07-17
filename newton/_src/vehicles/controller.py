@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from dataclasses import fields as dataclasses_fields
 from enum import IntEnum
 
 import numpy as np
@@ -42,6 +43,53 @@ class TireModel(IntEnum):
     """Elastic-bristle brush model with intrinsic combined-slip saturation (default)."""
     LINEAR = 1
     """Linear slip-to-force with a friction-circle clip."""
+    PACEJKA = 2
+    """Core Magic Formula with cosine combined-slip weighting (parameters in :class:`PacejkaParams`)."""
+
+
+@dataclass
+class PacejkaParams:
+    """Magic Formula shape parameters for :attr:`TireModel.PACEJKA` (dimensionless).
+
+    Field order is public API: it defines the column layout of the per-wheel
+    parameter table, so new parameters must be appended, never reordered. The
+    peak force is ``D = mu * Fz`` (``mu`` stays a separate config/contact value),
+    and the zero-slip slope per axis is ``B * C * D``. Defaults are placeholder
+    shapes roughly matching the brush model; calibrated values come from the
+    ``tools/tirecal`` pipeline.
+
+    Args:
+        bx: Longitudinal stiffness factor ``B_x``.
+        cx: Longitudinal shape factor ``C_x`` (>1 gives peak-then-falloff).
+        ex: Longitudinal curvature factor ``E_x`` (must be <= 1).
+        by: Lateral stiffness factor ``B_y``.
+        cy: Lateral shape factor ``C_y``.
+        ey: Lateral curvature factor ``E_y`` (must be <= 1).
+        rbx1: Combined-slip weight of lateral slip on ``F_x`` (magnitude).
+        rbx2: Combined-slip weight shaping vs longitudinal slip.
+        rby1: Combined-slip weight of longitudinal slip on ``F_y`` (magnitude).
+        rby2: Combined-slip weight shaping vs lateral slip.
+    """
+
+    bx: float = 12.5
+    cx: float = 1.6
+    ex: float = 0.4
+    by: float = 14.0
+    cy: float = 1.35
+    ey: float = 0.3
+    rbx1: float = 12.0
+    rbx2: float = 10.0
+    rby1: float = 10.0
+    rby2: float = 8.0
+
+    @classmethod
+    def names(cls) -> tuple[str, ...]:
+        """Field names in table-column order."""
+        return tuple(f.name for f in dataclasses_fields(cls))
+
+    def as_array(self) -> np.ndarray:
+        """Parameter vector in table-column order, dtype float32, shape [10]."""
+        return np.array([getattr(self, n) for n in self.names()], dtype=np.float32)
 
 
 class DriveInput(IntEnum):
@@ -93,6 +141,7 @@ class WheeledConfig:
         apply_reaction_torque: Whether to apply the motor axle reaction torque to the wheel
             body. Off by default; it only affects pitch/weight-transfer, not the primary
             traction, and is left opt-in pending broader validation.
+        pacejka: Magic Formula parameters used by wheels with tire_model PACEJKA.
     """
 
     tire_model: int = int(TireModel.BRUSH)
@@ -113,6 +162,7 @@ class WheeledConfig:
     static_mu_scale: float = 1.2
     relaxation_length_ratio: float = 0.0
     apply_reaction_torque: bool = False
+    pacejka: PacejkaParams = field(default_factory=PacejkaParams)
 
 
 class WheeledVehicles:
@@ -143,6 +193,7 @@ class WheeledVehicles:
     TireModel = TireModel
     DriveInput = DriveInput
     Config = WheeledConfig
+    PacejkaParams = PacejkaParams
 
     def __init__(self, model: Model, *, config: WheeledConfig | None = None):
         self.model = model
@@ -191,6 +242,7 @@ class WheeledVehicles:
         fill(d.relaxation_ratio, c.relaxation_length_ratio)
         # pneumatic trail auto-scales with wheel radius
         d.pneumatic_trail.assign((self.data.radius.numpy() * c.pneumatic_trail_ratio).astype(np.float32))
+        d.mf_params.assign(np.tile(c.pacejka.as_array(), (max(self.wheel_count, 1), 1)))
 
     @staticmethod
     def register_attributes(builder: ModelBuilder) -> None:

@@ -7,7 +7,7 @@ Public symbols are re-exported from :mod:`newton.vehicles`; examples and docs
 must import from there, never from ``newton._src``.
 """
 
-from .controller import DriveInput, DriveMode, TireModel, WheeledConfig, WheeledVehicles
+from .controller import DriveInput, DriveMode, PacejkaParams, TireModel, WheeledConfig, WheeledVehicles
 from .joints import configure_wheel_axle_joints
 from .metadata import (
     VEHICLE_NAMESPACE,
@@ -28,6 +28,7 @@ __all__ = [
     "ControllerMPPI",
     "DriveInput",
     "DriveMode",
+    "PacejkaParams",
     "TireModel",
     "VehicleAssetMetadata",
     "VehicleModelData",

@@ -1,12 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import math
 import unittest
 
 import numpy as np
 import warp as wp
 
+from newton._src.vehicles import tire as _tire
 from newton._src.vehicles.tire import (
     TIRE_BRUSH,
     TIRE_LINEAR,
@@ -14,6 +16,7 @@ from newton._src.vehicles.tire import (
     _eval_stiffness_kernel,
     _eval_tire_kernel,
 )
+from newton.vehicles import PacejkaParams, TireModel
 
 
 def _eval(model_id, kappa, alpha, fz, mu, c_long, c_lat, trail=0.0, mf=None, device="cpu"):
@@ -378,6 +381,34 @@ class TestTireSlipStiffness(unittest.TestCase):
         f = _eval(TIRE_PACEJKA, [eps], [0.0], [1000.0], [0.8], [20.0], [20.0], mf=_MF_THETA)[0]
         k = self._stiffness(TIRE_PACEJKA, fz=1000.0, mu=0.8, mf=_MF_THETA)
         self.assertAlmostEqual(float(f[0]) / eps, float(k[0]), delta=0.02 * float(k[0]))
+
+
+class TestPacejkaParamsLayout(unittest.TestCase):
+    def test_enum_value(self):
+        self.assertEqual(int(TireModel.PACEJKA), 2)
+
+    def test_field_order_matches_mf_constants(self):
+        names = tuple(f.name for f in dataclasses.fields(PacejkaParams))
+        self.assertEqual(names, ("bx", "cx", "ex", "by", "cy", "ey", "rbx1", "rbx2", "rby1", "rby2"))
+        self.assertEqual(names, PacejkaParams.names())
+        self.assertEqual(len(names), _tire.MF_PARAM_COUNT)
+        order = (
+            _tire.MF_BX,
+            _tire.MF_CX,
+            _tire.MF_EX,
+            _tire.MF_BY,
+            _tire.MF_CY,
+            _tire.MF_EY,
+            _tire.MF_RBX1,
+            _tire.MF_RBX2,
+            _tire.MF_RBY1,
+            _tire.MF_RBY2,
+        )
+        self.assertEqual(order, tuple(range(_tire.MF_PARAM_COUNT)))
+
+    def test_as_array_roundtrip(self):
+        p = PacejkaParams(bx=1.0, cx=2.0, ex=3.0, by=4.0, cy=5.0, ey=6.0, rbx1=7.0, rbx2=8.0, rby1=9.0, rby2=10.0)
+        np.testing.assert_array_equal(p.as_array(), np.arange(1.0, 11.0, dtype=np.float32))
 
 
 if __name__ == "__main__":
