@@ -24,8 +24,8 @@ later serves real2sim calibration against real-vehicle logs.
   not full-lap open-loop, not per-step teacher forcing.
 - **Container:** HDF5 (h5py as an optional dependency of the tooling only).
 - **Layout:** standalone `tools/tirecal/` package. The reusable core
-  (`format.py`, `ga.py`) never imports `newton`; only the sim-facing modules
-  (`generate.py`, `seed_fit.py`, `newton_eval.py`) do.
+  (`format.py`, `ga.py`, `seed_fit.py`) never imports `newton`; only the
+  sim-facing modules (`generate.py`, `newton_eval.py`) do.
 - **Optimizer:** pluggable ask/tell strategy interface with two v1
   implementations — GA and a plain-numpy CMA-ES — both seeded by a
   least-squares curve fit; the default strategy is chosen empirically in the
@@ -177,8 +177,8 @@ tools/tirecal/
   tirecal/
     format.py          standalone: numpy + h5py only
     ga.py              standalone: numpy only — ask/tell strategies (GA, CMA-ES)
-    seed_fit.py        least-squares MF-to-brush curve fit (uses newton's
-                       _eval_tire_kernel; newton-importing, used once at init)
+    seed_fit.py        standalone: numpy only — MF-to-brush curve fit (own
+                       numpy brush reference, minimized with the CMA-ES strategy)
     newton_eval.py     batched evaluator (newton-importing); the only newton
                        dependency of the optimization loop itself
     generate.py        CLI: record laps (newton-importing)
@@ -236,7 +236,9 @@ Black-box fitness: `(P, n_params)` matrix in, `(P,)` fitness out.
 ### Seeding (`seed_fit.py`)
 
 Least-squares fit of the MF pure-slip curves to the brush curves over a
-(kappa, alpha, Fz) grid evaluated with the existing `_eval_tire_kernel`.
+(kappa, alpha) grid (both laws scale linearly with Fz, so a single nominal
+load suffices), using its own numpy brush reference — fully standalone,
+minimized with the package's CMA-ES strategy on the curve objective.
 The result initializes the GA population center so the search budget is spent
 on what curve matching cannot see: combined-slip transients through the
 implicit impulse solver.
