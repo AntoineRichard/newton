@@ -112,3 +112,81 @@ class StrategyGA:
             1.0 - (2.0 * (1.0 - u)) ** (1.0 / (self.eta_m + 1.0)),
         )
         return np.where(mask, x + delta * span, x)
+
+
+class StrategyCMAES:
+    """CMA-ES (rank-mu update, Hansen's default constants), self-contained.
+
+    Operates internally in the unit box (coordinates normalized by the bounds),
+    which makes one isotropic ``sigma0`` meaningful across parameters with very
+    different ranges. Bounds are enforced by projection; the update uses the
+    projected candidates.
+    """
+
+    def __init__(self, bounds_lo, bounds_hi, x0, sigma0: float = 0.25, population: int | None = None, seed: int = 0):
+        self.lo = np.asarray(bounds_lo, dtype=np.float64)
+        self.hi = np.asarray(bounds_hi, dtype=np.float64)
+        if self.lo.shape != self.hi.shape or np.any(self.hi <= self.lo):
+            raise ValueError("invalid bounds")
+        self.span = self.hi - self.lo
+        n = self.lo.size
+        self.n = n
+        self.rng = np.random.default_rng(seed)
+        self.lam = int(population) if population else 4 + int(3.0 * np.log(n))
+        self.mu = self.lam // 2
+        w = np.log(self.mu + 0.5) - np.log(np.arange(1, self.mu + 1))
+        self.w = w / w.sum()
+        self.mueff = 1.0 / np.sum(self.w**2)
+        self.cc = (4.0 + self.mueff / n) / (n + 4.0 + 2.0 * self.mueff / n)
+        self.cs = (self.mueff + 2.0) / (n + self.mueff + 5.0)
+        self.c1 = 2.0 / ((n + 1.3) ** 2 + self.mueff)
+        self.cmu = min(1.0 - self.c1, 2.0 * (self.mueff - 2.0 + 1.0 / self.mueff) / ((n + 2.0) ** 2 + self.mueff))
+        self.damps = 1.0 + 2.0 * max(0.0, np.sqrt((self.mueff - 1.0) / (n + 1.0)) - 1.0) + self.cs
+        self.chin = np.sqrt(n) * (1.0 - 1.0 / (4.0 * n) + 1.0 / (21.0 * n * n))
+        self.m = np.clip((np.asarray(x0, dtype=np.float64) - self.lo) / self.span, 0.0, 1.0)
+        self.sigma = float(sigma0)
+        self.C = np.eye(n)
+        self.ps = np.zeros(n)
+        self.pc = np.zeros(n)
+        self._pending_y = None
+        self._pending_x = None
+        self.best_x = None
+        self.best_f = np.inf
+
+    def ask(self) -> np.ndarray:
+        vals, vecs = np.linalg.eigh(self.C)
+        vals = np.maximum(vals, 1.0e-20)
+        self._sqrtC = vecs @ np.diag(np.sqrt(vals)) @ vecs.T
+        self._invsqrtC = vecs @ np.diag(1.0 / np.sqrt(vals)) @ vecs.T
+        z = self.rng.standard_normal((self.lam, self.n))
+        y = z @ self._sqrtC.T
+        x = np.clip(self.m + self.sigma * y, 0.0, 1.0)
+        self._pending_y = (x - self.m) / self.sigma  # projected steps
+        self._pending_x = x
+        return self.lo + x * self.span
+
+    def tell(self, fitness) -> None:
+        fitness = np.asarray(fitness, dtype=np.float64)
+        if fitness.shape != (self.lam,):
+            raise ValueError(f"expected fitness shape ({self.lam},), got {fitness.shape}")
+        order = np.argsort(fitness)
+        i_best = int(order[0])
+        if fitness[i_best] < self.best_f:
+            self.best_f = float(fitness[i_best])
+            self.best_x = self.lo + self._pending_x[i_best] * self.span
+        y_sel = self._pending_y[order[: self.mu]]
+        y_bar = self.w @ y_sel
+        self.m = np.clip(self.m + self.sigma * y_bar, 0.0, 1.0)
+        self.ps = (1.0 - self.cs) * self.ps + np.sqrt(self.cs * (2.0 - self.cs) * self.mueff) * (self._invsqrtC @ y_bar)
+        hsig = float(
+            np.linalg.norm(self.ps) / np.sqrt(1.0 - (1.0 - self.cs) ** 2) / self.chin < 1.4 + 2.0 / (self.n + 1.0)
+        )
+        self.pc = (1.0 - self.cc) * self.pc + hsig * np.sqrt(self.cc * (2.0 - self.cc) * self.mueff) * y_bar
+        rank_mu = (y_sel * self.w[:, None]).T @ y_sel
+        self.C = (
+            (1.0 - self.c1 - self.cmu) * self.C
+            + self.c1 * (np.outer(self.pc, self.pc) + (1.0 - hsig) * self.cc * (2.0 - self.cc) * self.C)
+            + self.cmu * rank_mu
+        )
+        self.sigma *= np.exp((self.cs / self.damps) * (np.linalg.norm(self.ps) / self.chin - 1.0))
+        self.sigma = float(np.clip(self.sigma, 1.0e-12, 1.0))
