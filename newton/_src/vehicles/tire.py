@@ -149,6 +149,42 @@ def tire_force(
     return wp.vec3(fx, fy, mz)
 
 
+@wp.func
+def tire_slip_stiffness(
+    model_id: int,
+    fz: float,
+    mu: float,
+    c_long: float,
+    c_lat: float,
+    mf: wp.array2d[wp.float32],
+    w: int,
+) -> wp.vec2:
+    """Zero-slip force-per-unit-slip slopes ``(k_long, k_lat)`` [N/rad].
+
+    The wheel impulse solve caps its secant stiffness at these linear-regime
+    slopes. Brush and linear models slope as ``c * Fz``; the Magic Formula
+    slopes as ``B * C * D`` with ``D = mu * Fz``.
+    """
+    if model_id == TIRE_PACEJKA:
+        d = wp.max(mu, 0.0) * wp.max(fz, 0.0)
+        return wp.vec2(mf[w, MF_BX] * mf[w, MF_CX] * d, mf[w, MF_BY] * mf[w, MF_CY] * d)
+    return wp.vec2(c_long * fz, c_lat * fz)
+
+
+@wp.kernel
+def _eval_stiffness_kernel(
+    model_id: int,
+    fz: float,
+    mu: float,
+    c_long: float,
+    c_lat: float,
+    mf_params: wp.array2d[wp.float32],
+    out: wp.array[wp.vec2],
+):
+    i = wp.tid()
+    out[i] = tire_slip_stiffness(model_id, fz, mu, c_long, c_lat, mf_params, i)
+
+
 @wp.kernel
 def _eval_tire_kernel(
     model_id: wp.array[wp.int32],

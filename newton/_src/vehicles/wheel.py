@@ -21,7 +21,7 @@ import warp as wp
 
 from .impulse import solve_tire_impulse_relaxed
 from .metadata import VehicleModelData
-from .tire import MF_PARAM_COUNT, tire_force
+from .tire import MF_PARAM_COUNT, tire_force, tire_slip_stiffness
 
 DRIVE_SPEED = wp.constant(0)
 DRIVE_TORQUE = wp.constant(1)
@@ -309,9 +309,10 @@ def _wheel_dynamics_kernel(
                 alpha = wp.atan2(ut_lat, ref)
                 f0 = tire_force(tire_model[w], kappa, alpha, fz, mu, c_long[w], c_lat[w], 0.0, mf_params, w)
 
-                # secant impulse stiffness dt*C, capped by the linear-regime slope
-                k_lin_long = dt * c_long[w] * fz / ref
-                k_lin_lat = dt * c_lat[w] * fz / ref
+                # secant impulse stiffness dt*C, capped by the model's linear-regime slope
+                ks = tire_slip_stiffness(tire_model[w], fz, mu, c_long[w], c_lat[w], mf_params, w)
+                k_lin_long = dt * ks[0] / ref
+                k_lin_lat = dt * ks[1] / ref
                 k_long = wp.min(dt * wp.abs(f0[0]) / wp.max(wp.abs(ut_long), 1.0e-6), k_lin_long)
                 k_lat = wp.min(dt * wp.abs(f0[1]) / wp.max(wp.abs(ut_lat), 1.0e-6), k_lin_lat)
 

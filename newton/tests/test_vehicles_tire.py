@@ -7,7 +7,13 @@ import unittest
 import numpy as np
 import warp as wp
 
-from newton._src.vehicles.tire import TIRE_BRUSH, TIRE_LINEAR, TIRE_PACEJKA, _eval_tire_kernel
+from newton._src.vehicles.tire import (
+    TIRE_BRUSH,
+    TIRE_LINEAR,
+    TIRE_PACEJKA,
+    _eval_stiffness_kernel,
+    _eval_tire_kernel,
+)
 
 
 def _eval(model_id, kappa, alpha, fz, mu, c_long, c_lat, trail=0.0, mf=None, device="cpu"):
@@ -338,6 +344,40 @@ class TestPacejkaGoldenCurves(unittest.TestCase):
         self.assertGreater(i_peak, 0)
         self.assertLess(i_peak, n - 1)
         self.assertLess(float(fx[-1]), float(fx[i_peak]))
+
+
+class TestTireSlipStiffness(unittest.TestCase):
+    def _stiffness(self, model_id, fz, mu, c_long=20.0, c_lat=30.0, mf=None, device="cpu"):
+        mf_arr = (
+            wp.zeros((1, 10), dtype=wp.float32, device=device)
+            if mf is None
+            else wp.array(np.asarray(mf, dtype=np.float32).reshape(1, 10), dtype=wp.float32, device=device)
+        )
+        out = wp.zeros(1, dtype=wp.vec2, device=device)
+        wp.launch(
+            _eval_stiffness_kernel,
+            dim=1,
+            inputs=[int(model_id), float(fz), float(mu), float(c_long), float(c_lat), mf_arr, out],
+            device=device,
+        )
+        return out.numpy()[0]
+
+    def test_brush_and_linear_slopes_are_legacy(self):
+        for model in (TIRE_BRUSH, TIRE_LINEAR):
+            k = self._stiffness(model, fz=1500.0, mu=0.9)
+            self.assertEqual(float(k[0]), 20.0 * 1500.0)
+            self.assertEqual(float(k[1]), 30.0 * 1500.0)
+
+    def test_pacejka_slope_is_bcd(self):
+        k = self._stiffness(TIRE_PACEJKA, fz=1000.0, mu=0.8, mf=_MF_THETA)
+        self.assertAlmostEqual(float(k[0]), 12.5 * 1.6 * 0.8 * 1000.0, delta=1.0)
+        self.assertAlmostEqual(float(k[1]), 14.0 * 1.35 * 0.8 * 1000.0, delta=1.0)
+
+    def test_pacejka_slope_matches_finite_difference(self):
+        eps = 1.0e-4
+        f = _eval(TIRE_PACEJKA, [eps], [0.0], [1000.0], [0.8], [20.0], [20.0], mf=_MF_THETA)[0]
+        k = self._stiffness(TIRE_PACEJKA, fz=1000.0, mu=0.8, mf=_MF_THETA)
+        self.assertAlmostEqual(float(f[0]) / eps, float(k[0]), delta=0.02 * float(k[0]))
 
 
 if __name__ == "__main__":
