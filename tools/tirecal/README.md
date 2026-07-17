@@ -17,6 +17,17 @@ uv sync --extra tirecal --extra sim
 `sim` extra is required for the Newton-facing generation and calibration
 modules added by later tasks.
 
+### External requirement: `track_gen`
+
+The recorder (`tirecal.generate`) — and the later closed-loop validation —
+drive the MPPI track example, which imports the external `track_gen` package.
+It is **not** part of the `tirecal` or `sim` extras: a 2D-centerline version
+exposing the `CollisionChecker(method=...)` / `PropSampler(mode=...)` API must
+be on `PYTHONPATH`. Newer `track_gen` builds with a `vec3f` (3D gate-course)
+data model are incompatible with the example's `vec2f` track buffers. When
+`track_gen` is absent or incompatible, `test_generate` skips rather than
+fails.
+
 ## Usage
 
 `tirecal` is a standalone package under `tools/tirecal`, not part of the

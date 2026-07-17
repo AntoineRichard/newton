@@ -8,14 +8,18 @@ from pathlib import Path
 import numpy as np
 
 try:
-    import newton  # noqa: F401
+    import newton
+
+    # The recorder drives the MPPI track example, which imports the external
+    # track_gen package; skip (not error) when it is absent or incompatible.
+    import newton.examples.vehicles.example_vehicle_mppi_track  # noqa: F401
 
     _HAVE_SIM = True
 except Exception:
     _HAVE_SIM = False
 
 
-@unittest.skipUnless(_HAVE_SIM, "newton with sim extra required")
+@unittest.skipUnless(_HAVE_SIM, "newton with sim extra + track_gen required")
 class TestGenerateSmoke(unittest.TestCase):
     def test_record_short_run(self):
         from tirecal import format as tcformat  # noqa: PLC0415
