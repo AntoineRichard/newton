@@ -26,8 +26,10 @@ later serves real2sim calibration against real-vehicle logs.
 - **Layout:** standalone `tools/tirecal/` package. The reusable core
   (`format.py`, `ga.py`) never imports `newton`; only the sim-facing modules
   (`generate.py`, `seed_fit.py`, `newton_eval.py`) do.
-- **Optimizer:** pluggable ask/tell strategy interface; GA is the first
-  implementation, seeded by a least-squares curve fit.
+- **Optimizer:** pluggable ask/tell strategy interface with two v1
+  implementations — GA and a plain-numpy CMA-ES — both seeded by a
+  least-squares curve fit; the default strategy is chosen empirically in the
+  synthetic-recovery validation step.
 - **Acceptance:** held-out segment error is the working metric; a closed-loop
   MPPI lap on the tuned parameters is a one-time final validation gate only.
 
@@ -174,7 +176,7 @@ tools/tirecal/
   SCHEMA.md            format spec (fields, units, frames)
   tirecal/
     format.py          standalone: numpy + h5py only
-    ga.py              standalone: numpy only — optimizer strategies
+    ga.py              standalone: numpy only — ask/tell strategies (GA, CMA-ES)
     seed_fit.py        least-squares MF-to-brush curve fit (uses newton's
                        _eval_tire_kernel; newton-importing, used once at init)
     newton_eval.py     batched evaluator (newton-importing); the only newton
@@ -197,9 +199,19 @@ Ask/tell strategy protocol:
 - bounds per parameter, provided by the caller (name-keyed, converted to the
   flat vector layout).
 
-GA v1: tournament selection, SBX crossover, polynomial mutation, elitism.
-CMA-ES or other strategies can be added later without touching the evaluator.
-The optimizer knows nothing about tires or Newton — it is tested on standard
+Two v1 strategies behind this protocol, both pure numpy:
+
+- **GA:** tournament selection, SBX crossover, polynomial mutation, elitism.
+- **CMA-ES:** own implementation (~150 lines, no `pycma` dependency), rank-mu
+  covariance update, initialized from the curve-fit seed as the distribution
+  mean. Well suited to the ~10-dimensional continuous search; its covariance
+  update is the principled version of the large-population pseudo-gradient
+  idea.
+
+`tune.py` selects via `--strategy {ga,cmaes}`. The synthetic-recovery
+validation step runs both head-to-head and fixes the default. Further
+strategies can be added later without touching the evaluator. The optimizer
+module knows nothing about tires or Newton — it is tested on standard
 benchmark functions.
 
 ### Batched evaluator (`newton_eval.py`)
@@ -231,11 +243,13 @@ implicit impulse solver.
 
 ### Validation ladder
 
-1. **Unit:** format round-trip; GA solves Rastrigin/sphere within budget.
+1. **Unit:** format round-trip; GA and CMA-ES each solve Rastrigin/sphere
+   within budget.
 2. **Self-test:** evaluate the brush model against its own recording —
    fitness ≈ 0. Proves reset/replay fidelity independent of any tire change.
 3. **Synthetic recovery:** record laps with known Pacejka parameters θ*;
-   the GA must recover θ* (within tolerance). Proves end-to-end signal.
+   run GA and CMA-ES head-to-head — each must recover θ* (within tolerance).
+   Proves end-to-end signal and fixes the default strategy.
 4. **Real run:** fit to brush recordings; accept when held-out-lap segment
    error is below the initial thresholds: mean 2-D position error < 0.2 m and
    mean heading error < 5 deg over 2 s windows (thresholds are config and may
@@ -253,7 +267,8 @@ Two parallel workstreams executed by subagents:
   generate CLI, evaluator, tune CLI, tests).
 
 Model assignment by task complexity: Sonnet for mechanical/well-specified
-tasks (format module, GA on benchmarks, docs plumbing), Opus for the tire
+tasks (format module, GA and CMA-ES strategies on benchmarks, docs
+plumbing), Opus for the tire
 model math and recorder integration, Opus or Fable for the evaluator
 reset/replay correctness (the hardest piece). Fable reviews all work.
 
