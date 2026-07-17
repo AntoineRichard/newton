@@ -48,6 +48,11 @@ onnx = [
     "onnx>=1.16.0",
 ]
 
+# Tire-calibration tooling (tools/tirecal): trajectory recording and fitting
+tirecal = [
+    "h5py>=3.8.0",
+]
+
 # Asset import and mesh processing dependencies
 importers = [
     # HTTP client for downloading meshes from URIs
