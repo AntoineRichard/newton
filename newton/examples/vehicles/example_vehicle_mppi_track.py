@@ -154,12 +154,19 @@ def _gather_car_pose(
     pos: wp.array[wp.vec2f],
     yaw: wp.array[float],
     speed: wp.array[float],
+    pos3: wp.array[wp.vec3f],
+    quat: wp.array[wp.quatf],
 ):
     e = wp.tid()
     tf = body_q[chassis[e]]
     p = wp.transform_get_translation(tf)
+    r = wp.transform_get_rotation(tf)
     pos[e] = wp.vec2f(p[0], p[1])
-    yaw[e] = _quat_yaw(wp.transform_get_rotation(tf))
+    yaw[e] = _quat_yaw(r)
+    # full 3D pose for the collision checker (query projects to xy internally,
+    # OOB semantics stay planar; yaw is taken about +z from the quaternion)
+    pos3[e] = wp.vec3f(p[0], p[1], p[2])
+    quat[e] = wp.quatf(r[0], r[1], r[2], r[3])
     qd = body_qd[chassis[e]]
     # linear velocity is the first three entries (world frame)
     speed[e] = wp.sqrt(qd[0] * qd[0] + qd[1] * qd[1])
@@ -671,6 +678,10 @@ class Example:
         # --- centerline arc-length progress, speed profile, collision ----
 
         self.car_pos = wp.zeros(self.num_worlds, dtype=wp.vec2f, device=self.model.device)
+        # full 3D pose buffers for the collision checker (vec3f data model):
+        # position = body_q translation, orientation = body_q rotation quat
+        self.car_pos3 = wp.zeros(self.num_worlds, dtype=wp.vec3f, device=self.model.device)
+        self.car_quat = wp.zeros(self.num_worlds, dtype=wp.quatf, device=self.model.device)
         self.car_yaw = wp.zeros(self.num_worlds, dtype=wp.float32, device=self.model.device)
         self.car_speed = wp.zeros(self.num_worlds, dtype=wp.float32, device=self.model.device)
         self.car_s = wp.zeros(self.num_worlds, dtype=wp.float32, device=self.model.device)
@@ -680,7 +691,9 @@ class Example:
             dtype=wp.vec2f,
             device=self.model.device,
         )
-        center = self._env0_polyline(self.track.center)
+        # planar centerline: slice xy from the Nx3 host polyline (planning,
+        # cost, projection and the speed profile all stay 2D)
+        center = self._env0_polyline(self.track.center)[:, :2]
         seg_len = np.linalg.norm(np.roll(center, -1, axis=0) - center, axis=1)
         self.track_len = float(seg_len.sum())
         cum_s = np.concatenate([[0.0], np.cumsum(seg_len[:-1])]).astype(np.float32)
@@ -690,7 +703,7 @@ class Example:
         self._v_profile = wp.array(v_profile, dtype=wp.float32, device=self.model.device)
         self._center_count = len(center)
         self.checker = CollisionChecker(self.track, max_boxes=1, method="segments")
-        self.checker.bind_inputs(position=self.car_pos, yaw=self.car_yaw, half_extents=self.car_half_extents)
+        self.checker.bind_inputs(position=self.car_pos3, orientation=self.car_quat, half_extents=self.car_half_extents)
 
         # --- MPPI planner and plan-cycle buffers -------------------------
         horizon = 8 if self._test_mode else args.horizon
@@ -881,12 +894,16 @@ class Example:
 
     # --- track helpers ---------------------------------------------------
 
-    def _env0_polyline(self, flat_vec2):
+    def _env0_polyline(self, flat_vec3):
+        # env-0 slice of a Track device buffer as an Nx3 host array (vec3f data
+        # model; classic tracks carry z=0). Callers slice xy where they stay 2D.
         count = int(self.track.count.numpy()[0])
-        return flat_vec2.numpy()[:count]
+        return flat_vec3.numpy()[:count]
 
     def _spawn_on_track(self):
-        center = self._env0_polyline(self.track.center)
+        # xy and yaw from the first two centerline points; the authored spawn
+        # height (joint_q[qs + 2]) is preserved below
+        center = self._env0_polyline(self.track.center)[:, :2]
         p0, p1 = center[0], center[1]
         yaw = math.atan2(p1[1] - p0[1], p1[0] - p0[0])
         q = wp.quat_from_axis_angle(wp.vec3(0.0, 0.0, 1.0), yaw)
@@ -903,11 +920,17 @@ class Example:
 
     def _init_track_render(self):
         device = self.model.device
+        # Nx3 host boundary polylines (vec3f data model). The boundary lines
+        # ride the actual track z; the minimap and bounding box stay planar.
         inner = self._env0_polyline(self.track.inner)
         outer = self._env0_polyline(self.track.outer)
 
-        def _loop_lines(poly, z):
-            pts = np.column_stack([poly, np.full(len(poly), z, dtype=np.float32)])
+        def _loop_lines(poly, z_offset):
+            # lift the loop by a small offset above the authored track z, so
+            # the boundary lines render just above the surface (classic tracks
+            # are z=0, so visuals are unchanged until tracks gain elevation)
+            pts = poly.astype(np.float32).copy()
+            pts[:, 2] += z_offset
             starts = pts
             ends = np.roll(pts, -1, axis=0)
             return (
@@ -919,9 +942,11 @@ class Example:
 
         # minimap world->map transform: fit the padded track bounding box into
         # the map square preserving aspect ratio (track is static, so once)
-        self._map_inner = inner
-        self._map_outer = outer
-        pts = np.vstack([inner, outer])
+        inner_xy = inner[:, :2]
+        outer_xy = outer[:, :2]
+        self._map_inner = inner_xy
+        self._map_outer = outer_xy
+        pts = np.vstack([inner_xy, outer_xy])
         lo, hi = pts.min(axis=0), pts.max(axis=0)
         extent = (hi - lo) * (1.0 + 2.0 * MINIMAP_PAD)
         self._map_center = 0.5 * (lo + hi)
@@ -1027,6 +1052,8 @@ class Example:
                 self.car_pos,
                 self.car_yaw,
                 self.car_speed,
+                self.car_pos3,
+                self.car_quat,
             ],
             device=dev,
         )

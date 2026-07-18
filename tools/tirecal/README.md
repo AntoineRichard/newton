@@ -21,12 +21,13 @@ modules added by later tasks.
 
 The recorder (`tirecal.generate`) — and the later closed-loop validation —
 drive the MPPI track example, which imports the external `track_gen` package.
-It is **not** part of the `tirecal` or `sim` extras: a 2D-centerline version
-exposing the `CollisionChecker(method=...)` / `PropSampler(mode=...)` API must
-be on `PYTHONPATH`. Newer `track_gen` builds with a `vec3f` (3D gate-course)
-data model are incompatible with the example's `vec2f` track buffers. When
-`track_gen` is absent or incompatible, `test_generate` skips rather than
-fails.
+It is **not** part of the `tirecal` or `sim` extras: a build exposing the
+unified `vec3f` (3D-era) track data model — `Track.center/inner/outer` as
+`vec3f` device buffers and the `CollisionChecker(method=...)` /
+`PropSampler(mode=...)` API — must be on `PYTHONPATH`. Pre-3D (`vec2f`
+centerline) builds are no longer supported: the example binds the checker with
+`vec3f` positions and `quatf` orientations. When `track_gen` is absent or
+incompatible, `test_generate` skips rather than fails.
 
 ## Usage
 
