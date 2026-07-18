@@ -20,11 +20,13 @@ from . import seed_fit
 
 CONTROL_NAMES = ("drive", "steer", "brake")
 
-# Default Pacejka Magic-Formula coefficients (per unit normal load), in
-# ``seed_fit.PARAM_NAMES`` order (bx, cx, ex, by, cy, ey, rbx1, rbx2, rby1,
-# rby2). This is the synthetic-recovery ground truth the ``pacejka`` recording
-# mode stamps into every wheel's ``mf_params`` row. Task 3's public
-# ``newton.vehicles.PacejkaParams`` defaults MUST match these values.
+# Synthetic-recovery ground-truth Pacejka coefficients (per unit normal load),
+# in ``seed_fit.PARAM_NAMES`` order (bx, cx, ex, by, cy, ey, rbx1, rbx2, rby1,
+# rby2), stamped into every wheel's ``mf_params`` row by the ``pacejka``
+# recording mode. These are the ORIGINAL placeholder ``PacejkaParams`` defaults,
+# kept frozen so synthetic sessions stay reproducible; the public defaults have
+# since moved to the tirecal-calibrated values (see the 2026-07-17 calibration
+# findings doc) and intentionally no longer match this array.
 PACEJKA_DEFAULT_THETA = np.array([12.5, 1.6, 0.4, 14.0, 1.35, 0.3, 12.0, 10.0, 10.0, 8.0], dtype=np.float64)
 
 

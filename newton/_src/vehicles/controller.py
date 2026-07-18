@@ -54,9 +54,11 @@ class PacejkaParams:
     Field order is public API: it defines the column layout of the per-wheel
     parameter table, so new parameters must be appended, never reordered. The
     peak force is ``D = mu * Fz`` (``mu`` stays a separate config/contact value),
-    and the zero-slip slope per axis is ``B * C * D``. Defaults are placeholder
-    shapes roughly matching the brush model; calibrated values come from the
-    ``tools/tirecal`` pipeline.
+    and the zero-slip slope per axis is ``B * C * D``. Defaults are the
+    ``tools/tirecal`` CMA-ES calibration against the brush model on the wheeled
+    example stack (36 multi-generator MPPI laps; holdout mean position error
+    0.067 m over 2 s windows; see
+    ``docs/superpowers/specs/2026-07-17-pacejka-calibration-findings.md``).
 
     Args:
         bx: Longitudinal stiffness factor ``B_x``.
@@ -71,16 +73,16 @@ class PacejkaParams:
         rby2: Combined-slip weight shaping vs lateral slip.
     """
 
-    bx: float = 12.5
-    cx: float = 1.6
-    ex: float = 0.4
-    by: float = 14.0
-    cy: float = 1.35
-    ey: float = 0.3
-    rbx1: float = 12.0
-    rbx2: float = 10.0
-    rby1: float = 10.0
-    rby2: float = 8.0
+    bx: float = 8.2353
+    cx: float = 1.1003
+    ex: float = -0.5240
+    by: float = 15.7178
+    cy: float = 1.1460
+    ey: float = -0.5135
+    rbx1: float = 17.1016
+    rbx2: float = 7.6876
+    rby1: float = 8.6715
+    rby2: float = 19.2418
 
     @classmethod
     def names(cls) -> tuple[str, ...]:
