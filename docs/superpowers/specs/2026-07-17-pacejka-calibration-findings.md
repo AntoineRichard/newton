@@ -25,7 +25,8 @@ position fraction, so the holdout (last 4 laps) is the final completed lap of ea
 bezier s13, checkpoint s4, hull s7, repulsive s6. Merged session: `tirecal-data/train36.h5`,
 639 segments (2 s windows, 1 s stride). A separate synthetic session
 (`pacejka-synth8.h5`, 8 bezier laps, seeds 50-57, recorded with the pacejka ground-truth
-theta) supports the recovery test; both merges are reproduced by `tirecal-data/merge.py`.
+theta) supports the recovery test; both merges are reproduced by `python -m tirecal.merge`
+(see `tools/tirecal/tirecal/merge.py`).
 
 ## Ladder step 2: replay self-test (noise floor)
 
@@ -134,9 +135,70 @@ change (`newton.tests -k test_vehicles`, tirecal suite).
 # record (per family), merge, fit, gate — see .superpowers/sdd/task-11-report.md for the
 # exact per-chunk invocations and timings
 python -m tirecal.generate --out tirecal-data/<fam>.h5 --laps N --track-seed0 S --track-generator <fam>
-python tirecal-data/merge.py            # -> train36.h5
-python tirecal-data/merge.py synth      # -> pacejka-synth8.h5
+python -m tirecal.merge                 # -> train36.h5
+python -m tirecal.merge synth           # -> pacejka-synth8.h5
 python -m tirecal.tune --session tirecal-data/train36.h5 --strategy cmaes \
   --generations 80 --population 128 --holdout-laps 4 --out tirecal-data/brush-fit.json
 python -m tirecal.closedloop --report tirecal-data/brush-fit.json --track-seed 102 --frames 1800
+```
+
+## Appendix: holdout heading-error script
+
+The step-4 heading check (mean |error| 1.44 deg) was a one-off analysis, not package
+API. It replays the fitted candidate on the 4 holdout laps by driving the evaluator's own
+buffers one control step at a time (mirroring `ReplayEvaluator._replay_window`), reading the
+chassis yaw on the host each step and comparing against the recorded reference yaw. `max_worlds`
+is set to the holdout segment count so world `w` maps to segment `w` for candidate 0;
+`newton_eval.py` is unmodified.
+
+```python
+import copy
+import json
+
+import numpy as np
+import warp as wp
+
+from tirecal import format as tcformat
+from tirecal import newton_eval as ne
+from tirecal.seed_fit import PARAM_NAMES
+
+session = tcformat.read_session("tirecal-data/train36.h5")
+hold = copy.copy(session)
+hold.laps = session.laps[-4:]
+r = json.load(open("tirecal-data/brush-fit.json"))
+theta = np.array([[r["best_params"][k] for k in PARAM_NAMES]])
+
+# one world per holdout segment (world w == segment w for candidate 0)
+ev = ne.ReplayEvaluator(hold, ne.EvalConfig())
+S = ev.num_segments
+ev = ne.ReplayEvaluator(hold, ne.EvalConfig(max_worlds=S))
+assert ev.num_worlds == S and ev.candidates_per_chunk == 1
+
+ev._write_params(theta)
+dev = ev.model.device
+cmd = ev.vehicles.commands
+chassis = ev.chassis.numpy()
+ref_yaw = ev._ref_yaw.numpy().reshape(S, ev.window_steps)
+
+ev._scatter_resets()
+abs_err = np.zeros((S, ev.window_steps))
+for t in range(ev.window_steps):
+    wp.launch(
+        ne._apply_recorded_commands,
+        dim=S,
+        inputs=[ev._ctrl, ev._seg_of_world, t, cmd.drive, cmd.steer, cmd.brake],
+        device=dev,
+    )
+    for _ in range(ev.sim_substeps):
+        ev._substep(ev.sim_dt)
+    q = ev.state_0.body_q.numpy()[chassis]  # [S, 7] x y z qx qy qz qw
+    yaw = np.arctan2(
+        2.0 * (q[:, 6] * q[:, 5] + q[:, 3] * q[:, 4]),
+        1.0 - 2.0 * (q[:, 4] ** 2 + q[:, 5] ** 2),
+    )
+    d = yaw - ref_yaw[:, t]
+    abs_err[:, t] = np.abs(np.arctan2(np.sin(d), np.cos(d)))
+
+per_seg = abs_err.mean(axis=1)
+print(f"mean |heading err|: {np.degrees(per_seg.mean()):.2f} deg  (bar < 5 deg)")
 ```

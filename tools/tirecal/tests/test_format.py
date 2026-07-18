@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
+import pathlib
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -80,8 +83,19 @@ class TestFormatRoundTrip(unittest.TestCase):
                 tcformat.read_session(path)
 
     def test_format_module_is_standalone(self):
-        import sys  # noqa: PLC0415
-
-        self.assertNotIn("newton", sys.modules.get("tirecal.format", tcformat).__dict__.get("__all_imports__", ()))
-        # the real guard: importing tirecal.format must not pull in newton
-        self.assertTrue(all(not m.startswith("newton") for m in sys.modules if "tirecal" in m))
+        # In-process checks can't work: sibling tests legitimately import newton.
+        # A clean interpreter proves importing tirecal.format pulls in no newton module.
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import tirecal.format, sys; "
+                "bad = [m for m in sys.modules if m == 'newton' or m.startswith('newton.')]; "
+                "assert not bad, f'tirecal.format imported newton modules: {bad}'",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=str(pathlib.Path(__file__).resolve().parents[1]),
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)

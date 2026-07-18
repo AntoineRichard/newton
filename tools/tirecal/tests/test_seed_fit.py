@@ -37,6 +37,13 @@ class TestSeedFit(unittest.TestCase):
             es.tell(objective(es.ask()))
         self.assertLess(es.best_f, 1.0e-4)
 
+    def test_param_names_match_newton_layout(self):
+        try:
+            from newton.vehicles import PacejkaParams  # noqa: PLC0415
+        except Exception as exc:  # pragma: no cover - env without newton
+            self.skipTest(f"newton unavailable: {exc}")
+        self.assertEqual(seed_fit.PARAM_NAMES, PacejkaParams.names())
+
     def test_fit_to_brush_matches_curves(self):
         theta, err = seed_fit.fit_to_brush(mu=2.0, c_long=20.0, c_lat=40.0, seed=0)
         self.assertEqual(theta.shape, (10,))
