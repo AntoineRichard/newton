@@ -116,7 +116,12 @@ def main(argv=None) -> None:
     if a.self_test:
         cfg.tire_model = session.vehicle["tire_model"]
         ev = ReplayEvaluator(session, cfg)
-        err = ev.mean_position_error(np.zeros(10))
+        if cfg.tire_model == "pacejka":
+            # replay the recorded generator coefficients (brush mode ignores the row)
+            theta = np.array([session.vehicle["tire_params"][k] for k in seed_fit.PARAM_NAMES])
+        else:
+            theta = np.zeros(10)
+        err = ev.mean_position_error(theta)
         print(f"self-test: {ev.num_segments} segments, mean position error {err * 100.0:.2f} cm")
         return
     report = run_calibration(session, a.strategy, a.generations, a.population, cfg, a.holdout_laps, a.seed)
