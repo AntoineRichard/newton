@@ -282,3 +282,37 @@ reset/replay correctness (the hardest piece). Fable reviews all work.
 - Real2sim calibration itself — this project only guarantees the format and
   evaluator interfaces don't preclude it.
 - MF aligning-moment formula — existing collapsing-trail Mz is retained.
+
+## Addendum (2026-07-18): Bayesian option — ABC-SMC strategy (Tier 1)
+
+Approved extension. Add a third strategy behind the existing ask/tell
+protocol: `StrategyABCSMC` — approximate Bayesian computation with
+sequential Monte Carlo (Toni et al. 2009; adaptive quantile threshold;
+Gaussian perturbation kernel scaled to the survivors' weighted covariance,
+Filippi et al. 2013). Uniform prior over the parameter bounds; the
+`ReplayEvaluator` fitness is the ABC distance, unchanged.
+
+What it adds over the point estimators: a posterior over the MF parameters
+(uncertainty for posterior-conditioned domain randomization) and an
+identifiability map (wide/correlated marginals over the weakly-identified
+combined-slip r-parameters, formalizing the synthetic-recovery finding).
+
+Scope:
+- `StrategyABCSMC(bounds_lo, bounds_hi, population, seed, q, kernel_scale)`
+  in `ga.py`, numpy-only, same ask/tell/best protocol (lower distance
+  better); exposes `posterior_samples(n)`, `epsilon`, `epsilons`,
+  `acceptance_rates`. Ignores the curve-fit seed (uniform prior; the seed
+  is still recorded in the report for reference).
+- `tune.py --strategy abc`: report gains a `posterior` key (named mean/std,
+  correlation matrix with `param_order`, epsilon schedule, acceptance
+  rates, 256 resampled particles); `best_params` remains the min-distance
+  particle so reports stay comparable across strategies.
+- Validation: posterior run on the recorded brush session; findings
+  addendum reporting marginals (expected: force-curve shape parameters
+  tight, r-parameters wide) and the posterior-mean holdout error vs the
+  CMA-ES point fit.
+
+Deferred (Tier 2, real2sim era): amortized neural posterior estimation via
+the `sbi` package as a heavy optional extra. Prerequisite noted now so the
+interface doesn't preclude it: the evaluator may later expose per-segment
+error/summary vectors in addition to the scalar distance (additive API).
