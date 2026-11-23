@@ -21,9 +21,6 @@ from typing import TYPE_CHECKING
 from ._src.actuators import (
     Actuator,
     ActuatorParsed,
-    BatteryBase,
-    BatteryConstantResistance,
-    BatteryParsed,
     ClampingBase,
     ClampingCurrentDuty,
     ClampingDCMotor,
@@ -42,9 +39,13 @@ from ._src.actuators import (
     InputProcessorEncoder,
     JointSpaceResponse,
     MotorDC,
+    PowerSupplyBase,
+    PowerSupplyBattery,
+    PowerSupplyDCSource,
+    PowerSupplyParsed,
     SchemaNames,
     parse_actuator_prim,
-    parse_battery_prim,
+    parse_power_supply_prim,
     register_actuator_component,
 )
 from ._src.exceptions import NewtonDeprecationWarning
@@ -52,9 +53,6 @@ from ._src.exceptions import NewtonDeprecationWarning
 __all__ = [
     "Actuator",
     "ActuatorParsed",
-    "BatteryBase",
-    "BatteryConstantResistance",
-    "BatteryParsed",
     "ClampingBase",
     "ClampingCurrentDuty",
     "ClampingDCMotor",
@@ -73,9 +71,13 @@ __all__ = [
     "InputProcessorEncoder",
     "JointSpaceResponse",
     "MotorDC",
+    "PowerSupplyBase",
+    "PowerSupplyBattery",
+    "PowerSupplyDCSource",
+    "PowerSupplyParsed",
     "SchemaNames",
     "parse_actuator_prim",
-    "parse_battery_prim",
+    "parse_power_supply_prim",
     "register_actuator_component",
 ]
 

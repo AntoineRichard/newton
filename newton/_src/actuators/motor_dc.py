@@ -11,15 +11,15 @@ import warp as wp
 @wp.kernel
 def _motor_dc_supply_voltage_kernel(
     vin: wp.array[float],
-    supply_from_battery: wp.array[float],
-    battery_voltage: wp.array[float],
+    use_power_supply: wp.array[float],
+    power_supply_voltage: wp.array[float],
     actuator_indices: wp.array[wp.uint32],
     supply_voltage: wp.array[float],
 ):
     i = wp.tid()
     voltage = vin[i]
-    if supply_from_battery[i] != 0.0 and battery_voltage:
-        voltage = battery_voltage[actuator_indices[i]]
+    if use_power_supply[i] != 0.0 and power_supply_voltage:
+        voltage = power_supply_voltage[actuator_indices[i]]
     supply_voltage[i] = voltage
 
 
@@ -64,7 +64,7 @@ class MotorDC:
 
     Standalone calls accept average terminal voltage. In an actuator, the
     actuator bounds signed duty to [-1, 1] and multiplies it by the actual
-    fixed or battery supply voltage. The motor reports source current d * I,
+    fixed or power-supply voltage. The motor reports source current d * I,
     where d = u / V for positive V, and zero at zero supply voltage.
     Effort clamps cannot be combined with this motor.
 
@@ -89,10 +89,10 @@ class MotorDC:
 
         Raises:
             ValueError: ``kt`` or ``resistance`` is missing or not positive,
-                or ``vin`` is without ``supply_from_battery``.
+                or ``vin`` is without ``use_power_supply``.
         """
-        supply_from_battery = bool(args.get("supply_from_battery", False))
-        required = {"kt", "resistance"} if supply_from_battery else {"kt", "resistance", "vin"}
+        use_power_supply = bool(args.get("use_power_supply", False))
+        required = {"kt", "resistance"} if use_power_supply else {"kt", "resistance", "vin"}
         missing = required - set(args)
         if missing:
             raise ValueError(f"MotorDC is missing parameter(s): {', '.join(sorted(missing))}")
@@ -100,7 +100,7 @@ class MotorDC:
             "kt": args["kt"],
             "resistance": args["resistance"],
             "vin": args.get("vin", 0.0),
-            "supply_from_battery": float(supply_from_battery),
+            "use_power_supply": float(use_power_supply),
         }
         for name in required:
             if resolved[name] <= 0.0:
@@ -113,17 +113,17 @@ class MotorDC:
         resistance: wp.array[float],
         vin: wp.array[float],
         *,
-        supply_from_battery: wp.array[float] | None = None,
+        use_power_supply: wp.array[float] | None = None,
     ):
         """Initialize the DC motor.
 
         Args:
             kt: Torque constant [N/A or N·m/A]. Shape ``(N,)``.
             resistance: Motor resistance [Ω]. Shape ``(N,)``.
-            vin: Supply voltage [V] without a battery; unused with
-                ``supply_from_battery``. Shape ``(N,)``.
-            supply_from_battery: Per actuator, nonzero to read the supply
-                voltage from the battery instead of *vin*. Shape ``(N,)``.
+            vin: Supply voltage [V] without a power supply; unused with
+                ``use_power_supply``. Shape ``(N,)``.
+            use_power_supply: Per actuator, nonzero to read the supply
+                voltage from the power supply instead of *vin*. Shape ``(N,)``.
                 ``None`` uses *vin* everywhere.
 
         Raises:
@@ -135,17 +135,17 @@ class MotorDC:
         self.resistance = resistance
         """Motor resistance [Ω], shape (N,)."""
         self.vin = vin
-        """Supply voltage [V] without a battery, shape (N,)."""
-        self.supply_from_battery = (
-            supply_from_battery if supply_from_battery is not None else wp.zeros(n, dtype=float, device=kt.device)
+        """Supply voltage [V] without a power supply, shape (N,)."""
+        self.use_power_supply = (
+            use_power_supply if use_power_supply is not None else wp.zeros(n, dtype=float, device=kt.device)
         )
-        """Per actuator, nonzero when the supply voltage is read from the battery, shape (N,)."""
-        for name in ("resistance", "vin", "supply_from_battery"):
+        """Per actuator, nonzero when the supply voltage is read from the power supply, shape (N,)."""
+        for name in ("resistance", "vin", "use_power_supply"):
             shape = getattr(self, name).shape
             if shape != n:
                 raise ValueError(f"{name} shape {shape} must match kt shape {n}")
-        self.uses_battery = bool(self.supply_from_battery.numpy().any())
-        """Whether an actuator slot draws from a battery."""
+        self.uses_power_supply = bool(self.use_power_supply.numpy().any())
+        """Whether an actuator slot draws from a power supply."""
 
     def finalize(self, device: wp.Device, num_actuators: int, requires_grad: bool = False) -> None:
         """Called by :class:`~newton.actuators.Actuator` after construction to set up device-specific resources.
@@ -162,33 +162,33 @@ class MotorDC:
 
     def compute_supply_voltage(
         self,
-        battery_voltage: wp.array[float] | None,
+        power_supply_voltage: wp.array[float] | None,
         actuator_indices: wp.array[wp.uint32] | None,
         supply_voltage: wp.array[float],
         device: wp.Device | None = None,
     ) -> None:
-        """Write ``vin``, or the battery voltage with ``supply_from_battery``, to *supply_voltage*.
+        """Write ``vin``, or the power supply voltage with ``use_power_supply``, to *supply_voltage*.
 
         Args:
-            battery_voltage: Supply voltage of each actuator [V], one entry
+            power_supply_voltage: Supply voltage of each actuator [V], one entry
                 per actuator of the model (``actuator_supply_voltage``),
-                written by :meth:`BatteryBase.step <newton.actuators.BatteryBase.step>`,
-                or ``None`` without a battery.
-            actuator_indices: Index of each slot into *battery_voltage*, or
-                ``None`` without a battery.
+                written by :meth:`PowerSupplyBase.step <newton.actuators.PowerSupplyBase.step>`,
+                or ``None`` without a power supply.
+            actuator_indices: Index of each slot into *power_supply_voltage*, or
+                ``None`` without a power supply.
             supply_voltage: Supply voltage of each slot [V]. Shape ``(N,)``.
             device: Warp device for kernel launches.
 
         Raises:
-            ValueError: An actuator has :attr:`supply_from_battery` set and
-                *actuator_indices* or *battery_voltage* is ``None``.
+            ValueError: An actuator has :attr:`use_power_supply` set and
+                *actuator_indices* or *power_supply_voltage* is ``None``.
         """
-        if self.uses_battery and (actuator_indices is None or battery_voltage is None):
-            raise ValueError("MotorDC with supply_from_battery requires actuator_indices and the battery voltage.")
+        if self.uses_power_supply and (actuator_indices is None or power_supply_voltage is None):
+            raise ValueError("MotorDC with use_power_supply requires actuator_indices and the power supply voltage.")
         wp.launch(
             kernel=_motor_dc_supply_voltage_kernel,
             dim=len(supply_voltage),
-            inputs=[self.vin, self.supply_from_battery, battery_voltage, actuator_indices],
+            inputs=[self.vin, self.use_power_supply, power_supply_voltage, actuator_indices],
             outputs=[supply_voltage],
             device=device,
         )
@@ -216,11 +216,11 @@ class MotorDC:
             supply_voltage: Supply voltage of each slot [V], written by
                 :meth:`compute_supply_voltage`. Shape ``(N,)``.
             actuator_indices: Index of each slot into *supply_current*, or
-                ``None`` without a battery.
-            supply_current: Current each actuator draws from its battery [A],
+                ``None`` without a power supply.
+            supply_current: Current each actuator draws from its power supply [A],
                 one entry per actuator of the model (``actuator_supply_current``),
                 written here and read by
-                :meth:`BatteryBase.step <newton.actuators.BatteryBase.step>`,
+                :meth:`PowerSupplyBase.step <newton.actuators.PowerSupplyBase.step>`,
                 or ``None`` to skip.
             device: Warp device for kernel launches.
         """

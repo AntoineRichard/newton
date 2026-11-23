@@ -28,9 +28,6 @@ construction.
 
    Actuator
    ActuatorParsed
-   BatteryBase
-   BatteryConstantResistance
-   BatteryParsed
    ClampingBase
    ClampingCurrentDuty
    ClampingDCMotor
@@ -49,6 +46,10 @@ construction.
    InputProcessorEncoder
    JointSpaceResponse
    MotorDC
+   PowerSupplyBase
+   PowerSupplyBattery
+   PowerSupplyDCSource
+   PowerSupplyParsed
    SchemaNames
 
 .. rubric:: Functions
@@ -58,7 +59,7 @@ construction.
    :signatures: long
 
    parse_actuator_prim
-   parse_battery_prim
+   parse_power_supply_prim
    register_actuator_component
 
 .. rubric:: Deprecated

@@ -40,7 +40,7 @@ _COLLISION_EDGE_DEPRECATION_MSG = (
 
 if TYPE_CHECKING:
     from ..actuators.actuator import Actuator
-    from ..actuators.batteries import BatteryBase
+    from ..actuators.power_supplies import PowerSupplyBase
     from ..geometry.optix import OptixShapes
     from ..utils.heightfield import HeightfieldData
 
@@ -1930,8 +1930,8 @@ class Model:
         """List of actuator instances for this model."""
         self.actuator_count: int = 0
         """Total number of actuators added with :meth:`ModelBuilder.add_actuator() <newton.ModelBuilder.add_actuator>`."""
-        self.batteries: list[BatteryBase] = []
-        """List of battery instances for this model."""
+        self.power_supplies: list[PowerSupplyBase] = []
+        """List of power supply instances for this model."""
 
     @property
     def shape_contact_pairs(self) -> wp.array[wp.vec2i] | None:
