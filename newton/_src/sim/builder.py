@@ -118,11 +118,11 @@ from .tendon import TendonGuide, TendonGuideFlags, TendonGuideType
 if TYPE_CHECKING:
     from pxr import Usd
 
-    from ..actuators.batteries.base import BatteryBase
     from ..actuators.clamping.base import ClampingBase
     from ..actuators.drives.base import DriveBase
     from ..actuators.input_processors.base import InputProcessorBase
     from ..actuators.motor_dc import MotorDC
+    from ..actuators.power_supplies.base import PowerSupplyBase
     from ..geometry.types import TetMesh
 
     UsdStage = Usd.Stage
@@ -964,13 +964,13 @@ class ModelBuilder:
         )
 
     @dataclass
-    class BatteryEntry:
-        """Stores accumulated specs for the batteries of one battery class."""
+    class PowerSupplyEntry:
+        """Stores accumulated specs for the power supplies of one power supply class."""
 
-        battery_class: type  # BatteryBase subclass (e.g. BatteryConstantResistance)
-        args: list[dict[str, Any]] = field(default_factory=list)  # Per-battery array params
-        actuators: list[list[int]] = field(default_factory=list)  # Per-battery actuators
-        world: list[int] = field(default_factory=list)  # Per-battery world
+        power_supply_class: type  # PowerSupplyBase subclass (e.g. PowerSupplyDCSource)
+        args: list[dict[str, Any]] = field(default_factory=list)  # Per-supply array params
+        actuators: list[list[int]] = field(default_factory=list)  # Per-supply actuators
+        world: list[int] = field(default_factory=list)  # Per-supply world
 
     @dataclass(init=False)
     class ActuatorEntry:
@@ -2778,8 +2778,8 @@ class ModelBuilder:
         # Key is (drive_class, delay is not None, clamping_key, drive_shared_key) to group compatible actuators
         self.actuator_entries: dict[tuple, ModelBuilder.ActuatorEntry] = {}
         """Actuator entry groups accumulated from :meth:`add_actuator`, keyed by drive class and shared params."""
-        self.battery_entries: dict[type, ModelBuilder.BatteryEntry] = {}
-        """Battery entry groups accumulated from :meth:`add_battery`, keyed by battery class."""
+        self.power_supply_entries: dict[type, ModelBuilder.PowerSupplyEntry] = {}
+        """Power supply entry groups accumulated from :meth:`add_power_supply`, keyed by power supply class."""
 
         # Equality constraints are canonical MuJoCo custom attributes and must be available
         # independently of SolverMuJoCo. Lazy import avoids a module-level solver dependency.
@@ -3625,7 +3625,7 @@ class ModelBuilder:
 
         Returns:
             The index of the actuator in per-actuator arrays, e.g. for
-            :meth:`add_battery`.
+            :meth:`add_power_supply`.
 
         Raises:
             ValueError: *index* belongs to another world than the current
@@ -3793,35 +3793,37 @@ class ModelBuilder:
             entry.motor_args.append(motor_array_params)
         return actuator
 
-    def add_battery(self, battery_class: type[BatteryBase], actuators: Sequence[int], **kwargs: Any) -> None:
-        """Add a battery shared by several actuators of the current world.
+    def add_power_supply(
+        self, power_supply_class: type[PowerSupplyBase], actuators: Sequence[int], **kwargs: Any
+    ) -> None:
+        """Add a power supply shared by several actuators of the current world.
 
-        Multiple calls with the same *battery_class* are accumulated into one
-        :class:`~newton.actuators.BatteryBase` instance during
-        :meth:`finalize <ModelBuilder.finalize>`.  Per-battery parameters,
+        Multiple calls with the same *power_supply_class* are accumulated into one
+        :class:`~newton.actuators.PowerSupplyBase` instance during
+        :meth:`finalize <ModelBuilder.finalize>`.  Per-supply parameters,
         such as the nominal voltage, may differ within the same group.
 
         Args:
-            battery_class: Battery class (e.g. :class:`~newton.actuators.BatteryConstantResistance`).
+            power_supply_class: Power supply class (e.g. :class:`~newton.actuators.PowerSupplyDCSource`).
             actuators: Actuator indices returned by :meth:`add_actuator`. At
                 least one is required, and each must belong to the current
-                world and have a motor that draws from a battery (e.g.
-                :class:`~newton.actuators.MotorDC` with ``supply_from_battery=True``).
-            **kwargs: Per-battery parameters (e.g. ``nominal_voltage``, ``resistance``).
+                world and have a motor that draws from a power supply (e.g.
+                :class:`~newton.actuators.MotorDC` with ``use_power_supply=True``).
+            **kwargs: Per-supply parameters (e.g. ``nominal_voltage``, ``resistance``).
 
         Raises:
             ValueError: *actuators* is empty or lists an actuator twice, an
                 actuator does not exist, belongs to another world, does not
-                draw from a battery or already has a battery, or a battery
+                draw from a power supply or already has a power supply, or a power supply
                 parameter is invalid.
         """
-        args = battery_class.resolve_arguments(kwargs)
+        args = power_supply_class.resolve_arguments(kwargs)
         actuators = [int(actuator) for actuator in actuators]
         if not actuators:
-            raise ValueError("add_battery: at least one actuator is required")
+            raise ValueError("add_power_supply: at least one actuator is required")
         if len(set(actuators)) != len(actuators):
-            raise ValueError("add_battery: an actuator is listed more than once")
-        with_battery = self._actuators_with_battery()
+            raise ValueError("add_power_supply: an actuator is listed more than once")
+        with_power_supply = self._actuators_with_power_supply()
         rows = {
             row: (dof, entry.motor_args[i] if entry.motor_args else {})
             for entry in self.actuator_entries.values()
@@ -3829,29 +3831,31 @@ class ModelBuilder:
         }
         for actuator in actuators:
             if not 0 <= actuator < self.actuator_count:
-                raise ValueError(f"add_battery: actuator {actuator} does not exist")
+                raise ValueError(f"add_power_supply: actuator {actuator} does not exist")
             dof, motor_args = rows.get(actuator, (None, {}))
             if dof is not None:
                 world = self.joint_world[bisect_right(self.joint_qd_start, dof) - 1]
                 if world != self.current_world:
-                    raise ValueError(f"add_battery: actuator {actuator} belongs to world {world}")
-            if not motor_args.get("supply_from_battery"):
+                    raise ValueError(f"add_power_supply: actuator {actuator} belongs to world {world}")
+            if not motor_args.get("use_power_supply"):
                 raise ValueError(
-                    f"add_battery: actuator {actuator} does not draw from a battery; "
-                    "add it with a motor with supply_from_battery=True"
+                    f"add_power_supply: actuator {actuator} does not draw from a power supply; "
+                    "add it with a motor with use_power_supply=True"
                 )
-            if actuator in with_battery:
-                raise ValueError(f"add_battery: actuator {actuator} already draws from a battery")
-        entry = self.battery_entries.setdefault(battery_class, ModelBuilder.BatteryEntry(battery_class=battery_class))
+            if actuator in with_power_supply:
+                raise ValueError(f"add_power_supply: actuator {actuator} already draws from a power supply")
+        entry = self.power_supply_entries.setdefault(
+            power_supply_class, ModelBuilder.PowerSupplyEntry(power_supply_class=power_supply_class)
+        )
         entry.args.append(args)
         entry.actuators.append(actuators)
         entry.world.append(self.current_world)
 
-    def _actuators_with_battery(self) -> set[int]:
-        """Return the actuators that draw from a battery added with :meth:`add_battery`."""
+    def _actuators_with_power_supply(self) -> set[int]:
+        """Return the actuators that draw from a power supply added with :meth:`add_power_supply`."""
         return {
             actuator
-            for entry in self.battery_entries.values()
+            for entry in self.power_supply_entries.values()
             for actuators in entry.actuators
             for actuator in actuators
         }
@@ -4657,16 +4661,16 @@ class ModelBuilder:
 
         custom_attributes = self._prepare_builder_custom_attributes(builder)
         has_actuators = bool(builder.actuator_entries)
-        has_batteries = bool(builder.battery_entries)
-        # Transformers can observe actuators and batteries merged by earlier copies.
-        needs_ordered_merge = (has_actuators or has_batteries) and any(
+        has_power_supplies = bool(builder.power_supply_entries)
+        # Transformers can observe actuators and power supplies merged by earlier copies.
+        needs_ordered_merge = (has_actuators or has_power_supplies) and any(
             attr.values and attr.reference_value_transformer is not None for attr in custom_attributes.values()
         )
         if copy_count > 1 and not needs_ordered_merge:
             self._merge_builder_custom_attributes_copies(
                 builder, counts, starts, worlds, label_prefixes, custom_attributes
             )
-            if has_actuators or has_batteries:
+            if has_actuators or has_power_supplies:
                 actuator_starts = starts("actuator").tolist()
                 joint_dof_starts_list = joint_dof_starts.tolist()
                 joint_coord_starts_list = joint_coord_starts.tolist()
@@ -4679,8 +4683,8 @@ class ModelBuilder:
                             joint_coord_starts_list[copy_index],
                             act_offset,
                         )
-                    if has_batteries:
-                        self._merge_builder_batteries(builder, act_offset, world)
+                    if has_power_supplies:
+                        self._merge_builder_power_supplies(builder, act_offset, world)
         else:
             kinds = tuple(counts)
             offset_rows = np.stack([starts(kind) for kind in kinds], axis=1).tolist()
@@ -4696,8 +4700,8 @@ class ModelBuilder:
                         int(joint_coord_starts[copy_index]),
                         entity_offsets["actuator"],
                     )
-                if has_batteries:
-                    self._merge_builder_batteries(builder, entity_offsets["actuator"], world)
+                if has_power_supplies:
+                    self._merge_builder_power_supplies(builder, entity_offsets["actuator"], world)
         self.actuator_count += copy_count * counts["actuator"]
 
     def _model_value_key(self, attribute: CustomAttribute) -> int:
@@ -6591,10 +6595,10 @@ class ModelBuilder:
         for key, finalizer in builder._custom_attribute_model_finalizers.items():
             self._add_custom_attribute_model_finalizer(key, finalizer)
 
-    def _merge_builder_batteries(self, builder: ModelBuilder, actuator_offset: int, world: int) -> None:
-        for battery_class, sub_entry in builder.battery_entries.items():
-            entry = self.battery_entries.setdefault(
-                battery_class, ModelBuilder.BatteryEntry(battery_class=battery_class)
+    def _merge_builder_power_supplies(self, builder: ModelBuilder, actuator_offset: int, world: int) -> None:
+        for power_supply_class, sub_entry in builder.power_supply_entries.items():
+            entry = self.power_supply_entries.setdefault(
+                power_supply_class, ModelBuilder.PowerSupplyEntry(power_supply_class=power_supply_class)
             )
             entry.args.extend(sub_entry.args)
             entry.actuators.extend([idx + actuator_offset for idx in actuators] for actuators in sub_entry.actuators)
@@ -17384,7 +17388,7 @@ class ModelBuilder:
             from ..actuators.clamping.clamping_current_duty import ClampingCurrentDuty  # noqa: PLC0415
 
             m.actuators = []
-            with_battery = self._actuators_with_battery()
+            with_power_supply = self._actuators_with_power_supply()
             for entry in self.actuator_entries.values():
                 indices = self._build_index_array(entry.indices, device)
 
@@ -17422,12 +17426,12 @@ class ModelBuilder:
                     missing = [
                         row
                         for row, args in zip(entry.actuator_indices, entry.motor_args, strict=False)
-                        if args.get("supply_from_battery") and row not in with_battery
+                        if args.get("use_power_supply") and row not in with_power_supply
                     ]
                     if missing:
                         warnings.warn(
-                            f"{entry.motor_class.__name__} draws from a battery, but actuator(s) {missing} "
-                            "have no battery; their supply voltage stays 0 V",
+                            f"{entry.motor_class.__name__} draws from a power supply, but actuator(s) {missing} "
+                            "have no power supply; their supply voltage stays 0 V",
                             NewtonWarning,
                             stacklevel=2,
                         )
@@ -17462,11 +17466,11 @@ class ModelBuilder:
                 actuator.register_custom_attributes(self)
                 m.actuators.append(actuator)
 
-            m.batteries = []
-            for entry in self.battery_entries.values():
+            m.power_supplies = []
+            for entry in self.power_supply_entries.values():
                 actuator_counts = [len(actuators) for actuators in entry.actuators]
-                m.batteries.append(
-                    entry.battery_class(
+                m.power_supplies.append(
+                    entry.power_supply_class(
                         **self._stack_args_to_arrays(entry.args, device=device, requires_grad=requires_grad),
                         actuator_start=wp.array(
                             np.concatenate(([0], np.cumsum(actuator_counts))), dtype=wp.int32, device=device
@@ -17554,8 +17558,8 @@ class ModelBuilder:
             self._finalize_custom_frequency_metadata(m, device)
             self._variant_shape_rows.finalize(self, m, validate_inertia=validate_inertia)
 
-            for battery in m.batteries:
-                battery.reset(m)
+            for supply in m.power_supplies:
+                supply.reset(m)
 
             m.bvh_build_shapes(
                 m,

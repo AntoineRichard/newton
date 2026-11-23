@@ -2865,10 +2865,10 @@ def parse_usd(
     # Parse Newton actuator prims from the USD stage.
     from ..actuators.input_processors.base import InputProcessorBase  # noqa: PLC0415
     from ..actuators.motor_dc import MotorDC  # noqa: PLC0415
-    from ..actuators.usd_parser import BatteryParsed, _parse_actuator_prim, parse_battery_prim  # noqa: PLC0415
+    from ..actuators.usd_parser import PowerSupplyParsed, _parse_actuator_prim, parse_power_supply_prim  # noqa: PLC0415
 
-    batteries: dict[str, BatteryParsed] = {}
-    battery_actuators: dict[str, list[int]] = {}
+    power_supplies: dict[str, PowerSupplyParsed] = {}
+    supply_actuators: dict[str, list[int]] = {}
     actuator_count = 0
     add_actuator_params = set(inspect.signature(builder.add_actuator).parameters) - {"kwargs"}
     path_to_dof = {
@@ -2885,9 +2885,9 @@ def parse_usd(
         prim_path = str(prim.GetPath())
         if any(re.match(pattern, prim_path) for pattern in ignore_paths):
             continue
-        battery = parse_battery_prim(prim)
-        if battery is not None:
-            batteries[prim_path] = battery
+        power_supply = parse_power_supply_prim(prim)
+        if power_supply is not None:
+            power_supplies[prim_path] = power_supply
             continue
         parsed = _parse_actuator_prim(prim, allow_unsafe_torch_checkpoints)
         if parsed is None:
@@ -2935,14 +2935,14 @@ def parse_usd(
                 clamping_specs.append((comp_class, comp_kwargs))
 
         drive_kwargs = {name: value for name, value in parsed.drive_kwargs.items() if name not in add_actuator_params}
-        battery_path = parsed.battery_path
-        if battery_path is not None:
+        power_supply_path = parsed.power_supply_path
+        if power_supply_path is not None:
             if motor_spec is None:
                 raise ValueError(
-                    f"Actuator prim {prim.GetPath()} draws from battery '{battery_path}' but has no motor; "
+                    f"Actuator prim {prim.GetPath()} draws from power supply '{power_supply_path}' but has no motor; "
                     "apply a motor schema such as NewtonDCMotorAPI"
                 )
-            motor_spec[1]["supply_from_battery"] = True
+            motor_spec[1]["use_power_supply"] = True
         if motor_spec is not None:
             motor_class, motor_kwargs = motor_spec
             resolved_motor = motor_class.resolve_arguments(motor_kwargs)
@@ -2956,22 +2956,26 @@ def parse_usd(
             motor=motor_spec,
             **drive_kwargs,
         )
-        if battery_path is not None:
-            battery_actuators.setdefault(battery_path, []).append(actuator)
+        if power_supply_path is not None:
+            supply_actuators.setdefault(power_supply_path, []).append(actuator)
         actuator_count += 1
     if verbose and actuator_count > 0:
         logger.info("Added %s actuator(s) from USD", actuator_count)
-    for battery_path in battery_actuators.keys() - batteries.keys():
-        # A battery may sit outside root_path, e.g. shared by several robots.
-        battery = None
-        if not any(re.match(pattern, battery_path) for pattern in ignore_paths):
-            battery = parse_battery_prim(stage.GetPrimAtPath(battery_path))
-        if battery is None:
-            raise ValueError(f"Actuators reference '{battery_path}' in 'newton:battery', which is not a battery prim")
-        batteries[battery_path] = battery
-    for path, battery in batteries.items():
-        if path in battery_actuators:
-            builder.add_battery(battery.battery_class, battery_actuators[path], **battery.battery_kwargs)
+    for power_supply_path in supply_actuators.keys() - power_supplies.keys():
+        # A power supply may sit outside root_path, e.g. shared by several robots.
+        power_supply = None
+        if not any(re.match(pattern, power_supply_path) for pattern in ignore_paths):
+            power_supply = parse_power_supply_prim(stage.GetPrimAtPath(power_supply_path))
+        if power_supply is None:
+            raise ValueError(
+                f"Actuators reference '{power_supply_path}' in 'newton:battery', which is not a power supply prim"
+            )
+        power_supplies[power_supply_path] = power_supply
+    for path, power_supply in power_supplies.items():
+        if path in supply_actuators:
+            builder.add_power_supply(
+                power_supply.power_supply_class, supply_actuators[path], **power_supply.power_supply_kwargs
+            )
 
     result = {
         "fps": stage.GetFramesPerSecond(),

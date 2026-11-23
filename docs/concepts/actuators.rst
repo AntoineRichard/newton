@@ -33,8 +33,8 @@ Newton supports two actuation paths:
   with :meth:`~newton.ModelBuilder.add_actuator` or imported from USD
   ``NewtonActuator`` prims. The caller must call ``actuator.step()`` before
   ``solver.step()``. Finalization creates ``model.actuators`` but the solver
-  does not step them automatically. Batteries in ``model.batteries`` also
-  require an explicit ``battery.step(control)`` after the actuators.
+  does not step them automatically. Power supplies in ``model.power_supplies``
+  also require an explicit ``supply.step(control, dt=dt)`` after the actuators.
 
 The rest of this page describes external Newton actuators.
 
@@ -64,7 +64,7 @@ An actuator is composed of four building blocks, applied in this order:
    │   ├── ClampingDCMotor         (velocity-dependent saturation; EFFORT only)
    │   └── ClampingPositionBased   (position-dependent lookup table; EFFORT only)
    └── Motor       (optional: converts motor voltage into joint effort)
-       └── MotorDC                 (DC motor, optionally on a battery)
+       └── MotorDC                 (DC motor, optionally on a power supply)
 
 **Input processor**
    Transforms the inputs to the drive: the simulation state (positions,
@@ -96,11 +96,11 @@ An actuator is composed of four building blocks, applied in this order:
 **Motor**
    Provides the supply voltage, and turns the motor voltage into the effort a
    motor produces at the joint velocity, e.g. with back-EMF.  A motor may draw
-   from a battery (see :ref:`actuator-battery`).  At most one motor per
+   from a power supply (see :ref:`actuator-power-supply`).  At most one motor per
    actuator.
 
    Before the motor runs, the actuator bounds duty to ``[-1, 1]`` even without
-   a clamp, then multiplies it by the actual fixed or battery supply voltage.
+   a clamp, then multiplies it by the actual fixed or power-supply voltage.
 
 The per-step pipeline is:
 
@@ -169,7 +169,7 @@ Step the external actuators separately from the physics solver, once per
 simulation substep. Actuators accumulate effort, so clear ``control.joint_f``
 before the actuator loop (and add any other applied joint effort afterwards).
 This loop also applies when :meth:`~newton.ModelBuilder.add_usd` populated
-``model.actuators`` and ``model.batteries``:
+``model.actuators`` and ``model.power_supplies``:
 
 .. testcode:: actuator-usage
 
@@ -178,6 +178,8 @@ This loop also applies when :meth:`~newton.ModelBuilder.add_usd` populated
    control = model.control()
    act_states = [actuator.state() for actuator in model.actuators]
    next_act_states = [actuator.state() for actuator in model.actuators]
+   supply_states = [supply.state() for supply in model.power_supplies]
+   next_supply_states = [supply.state() for supply in model.power_supplies]
    control.joint_target_q.fill_(0.5)
    dt = 0.001
 
@@ -187,8 +189,9 @@ This loop also applies when :meth:`~newton.ModelBuilder.add_usd` populated
        for actuator, act_state, next_act_state in zip(model.actuators, act_states, next_act_states):
            actuator.step(state_0, control, act_state, next_act_state, dt=dt)
        act_states, next_act_states = next_act_states, act_states
-       for battery in model.batteries:
-           battery.step(control)
+       for supply, supply_state, next_supply_state in zip(model.power_supplies, supply_states, next_supply_states):
+           supply.step(control, supply_state, next_supply_state, dt=dt)
+       supply_states, next_supply_states = next_supply_states, supply_states
        # Apply the computed effort and advance physics.
        solver.step(state_0, state_1, control, None, dt)
        state_0, state_1 = state_1, state_0
@@ -777,12 +780,15 @@ pass.  Neural-network drives support one step per tape.
    states = [model.state() for _ in range(num_steps + 1)]
    controls = [model.control() for _ in range(num_steps + 1)]
    act_states = [[actuator.state() for actuator in model.actuators] for _ in range(num_steps + 1)]
+   supply_states = [[supply.state() for supply in model.power_supplies] for _ in range(num_steps + 1)]
    with wp.Tape() as tape:
        for k in range(num_steps):
            for i, actuator in enumerate(model.actuators):
                actuator.step(states[k], controls[k], act_states[k][i], act_states[k + 1][i], dt=dt)
-           for battery in model.batteries:
-               battery.step(controls[k], controls[k + 1])
+           for i, supply in enumerate(model.power_supplies):
+               supply.step(
+                   controls[k], supply_states[k][i], supply_states[k + 1][i], dt=dt, next_control=controls[k + 1]
+               )
            solver.step(states[k], states[k + 1], controls[k], None, dt)
 
 Each step then allocates fresh intermediate buffers, so capturing such steps in
@@ -841,7 +847,7 @@ its drive's output space.
 ``ClampingCurrentDuty.voltage_source`` selects ``VoltageSource.INPUT`` (the
 supplied voltage, by default) or ``NOMINAL`` (requiring ``nominal_voltage``).
 The nominal estimate is independent of actual motor voltage, including when
-using a battery. See :class:`ClampingCurrentDuty` for the limiting equations
+using a power supply. See :class:`ClampingCurrentDuty` for the limiting equations
 and voltage threshold.
 
 Motors
@@ -850,7 +856,7 @@ Motors
 * :class:`MotorDC` — DC motor driven by the average terminal voltage
   ``duty * V``, as in `BAM (Better Actuator Models)
   <https://github.com/Rhoban/bam>`__: models the back-EMF, optionally on a
-  battery.  It models the back-EMF itself, so it cannot be combined with
+  power supply.  It models the back-EMF itself, so it cannot be combined with
   :class:`ClampingDCMotor`.
 
 A voltage-controlled servo identified with BAM maps onto these components:
@@ -872,54 +878,84 @@ model.  Model Coulomb friction with the joint's
 and quadratic friction are not supported yet (see
 `newton#5220 <https://github.com/newton-physics/newton/issues/5220>`__).
 
-.. _actuator-battery:
+.. _actuator-power-supply:
 
-Battery
--------
+Power Supplies
+--------------
 
-A battery powers the motors of one or more actuators.  Battery models subclass
-:class:`BatteryBase`.  See the individual battery class documentation for the
-model equations.
+A power supply powers the motors of one or more actuators.  Power supply
+models subclass :class:`PowerSupplyBase`:
 
-A battery reads one array and writes one array on ``control``, each with one
-entry per actuator of the model
+* :class:`PowerSupplyDCSource` — a linear DC source: an ideal voltage source
+  behind a series resistance, with a capacitor across its output, e.g. a bench
+  supply or a tether.  Without capacitance it is the constant-resistance
+  supply of BAM.  The bus voltage is its only state, and it lives on
+  ``control``, so the source is stateless.
+* :class:`PowerSupplyBattery` — a lithium-ion battery pack with an open-circuit
+  voltage that follows the discharge curve of an NMC cell, an ohmic resistance
+  and a polarization branch.  It tracks its state of charge, is recharged by
+  regenerating motors up to a charge-current limit, and disconnects below a
+  cutoff voltage until reset.
+
+See the class documentation for the model equations.
+
+A power supply reads one array and writes one array on ``control``, each with
+one entry per actuator of the model
 (:attr:`Model.AttributeFrequency.ACTUATOR <newton.Model.AttributeFrequency.ACTUATOR>`):
 
 * input ``control.actuator_supply_current``: the current each motor draws
-  from its battery, written by the motor in :meth:`Actuator.step`;
+  from its supply, written by the motor in :meth:`Actuator.step`.  It is
+  negative while the motor regenerates;
 * output ``control.actuator_supply_voltage``: the supply voltage of each
   motor, read by the motor in the next :meth:`Actuator.step`.  With one
-  ``Control`` per step, :meth:`BatteryBase.step` writes it to the next one.
+  ``Control`` per step, :meth:`PowerSupplyBase.step` writes it to
+  *next_control*.
 
-To set up and run batteries:
+To set up and run power supplies:
 
 * :meth:`~newton.ModelBuilder.add_actuator` returns the index of the actuator
-  in per-actuator arrays.  :meth:`~newton.ModelBuilder.add_battery` takes a
-  battery class, these indices and the battery parameters, and adds a battery
-  for those actuators in the current world.
-  :meth:`~newton.ModelBuilder.replicate` copies the batteries into every
-  world.  :meth:`~newton.ModelBuilder.finalize` creates one object per battery
-  class in ``model.batteries``, holding all batteries of that class.  Its
-  parameter arrays have one entry per battery, and :attr:`BatteryBase.world`
-  maps each battery to its world, e.g. to randomize the parameters per world.
-  :attr:`BatteryBase.actuators` and :attr:`BatteryBase.actuator_start` give
-  the actuators of each battery.
-* :meth:`BatteryBase.step` updates the supply voltage from the current.  Call
-  it once per step after the actuators.  The motors read the supply voltage in
-  the next :meth:`Actuator.step`, so a change of a battery parameter, e.g. a
-  randomized ``nominal_voltage`` after :meth:`BatteryBase.reset`, reaches the
-  motors one step later, after the next :meth:`BatteryBase.step`.
-* :meth:`BatteryBase.reset` resets all batteries or the batteries in the worlds
-  of a mask.  Call it after resetting worlds.  As in :meth:`SolverBase.reset() <newton.solvers.SolverBase.reset>`,
-  the mask has ``world_count + 1`` entries, and the last one selects batteries
-  outside any world.
+  in per-actuator arrays.  :meth:`~newton.ModelBuilder.add_power_supply` takes a
+  power supply class, these indices and the supply parameters, and adds a
+  supply for those actuators in the current world.
+  :meth:`~newton.ModelBuilder.replicate` copies the supplies into every
+  world.  :meth:`~newton.ModelBuilder.finalize` creates one object per supply
+  class in ``model.power_supplies``, holding all supplies of that class.  Its
+  parameter arrays have one entry per supply, and :attr:`PowerSupplyBase.world`
+  maps each supply to its world, e.g. to randomize the parameters per world.
+  :attr:`PowerSupplyBase.actuators` and :attr:`PowerSupplyBase.actuator_start`
+  give the actuators of each supply.
+* A stateful supply (:meth:`PowerSupplyBase.is_stateful`), such as
+  :class:`PowerSupplyBattery`, keeps its state in two
+  :class:`PowerSupplyBase.State` objects from :meth:`PowerSupplyBase.state`,
+  swapped after each step like the state of a :ref:`stateful actuator
+  <stateful-actuators>`.  :meth:`PowerSupplyBase.state` returns ``None`` for a
+  stateless supply, and :meth:`PowerSupplyBase.step` accepts ``None`` then.
+* :meth:`PowerSupplyBase.step` advances the supplies by ``dt`` and updates the
+  supply voltage from the current.  Call it once per step after the
+  actuators.  The motors read the supply voltage in the next
+  :meth:`Actuator.step`, so a change of a supply parameter, e.g. a randomized
+  ``nominal_voltage`` after :meth:`PowerSupplyBase.reset`, reaches the motors
+  one step later, after the next :meth:`PowerSupplyBase.step`.
+* :meth:`PowerSupplyBase.reset` resets all supplies or the supplies in the
+  worlds of a mask, including the state passed to it, e.g. recharging a
+  battery.  Call it after resetting worlds.  As in :meth:`SolverBase.reset()
+  <newton.solvers.SolverBase.reset>`, the mask has ``world_count + 1``
+  entries, and the last one selects supplies outside any world.
 
-Below, the hip and knee share one battery and the ankle draws from another:
+Below, the hip and knee share a six-cell battery and the ankle draws from a
+DC source:
 
-.. testcode:: actuator-battery
+.. testcode:: actuator-power-supply
 
    import newton
-   from newton.actuators import DriveOutputSpace, BatteryConstantResistance, ClampingCurrentDuty, DrivePD, MotorDC
+   from newton.actuators import (
+       ClampingCurrentDuty,
+       DriveOutputSpace,
+       DrivePD,
+       MotorDC,
+       PowerSupplyBattery,
+       PowerSupplyDCSource,
+   )
 
    builder = newton.ModelBuilder()
    actuators = []
@@ -934,27 +970,47 @@ Below, the hip and knee share one battery and the ankle draws from another:
            index=builder.joint_qd_start[joint],
            kp=0.5,
            clamping=[(ClampingCurrentDuty, {"max_current": 2.0})],
-           motor=(MotorDC, {"kt": 0.5, "resistance": 2.0, "vin": 12.0, "supply_from_battery": True}),
+           motor=(MotorDC, {"kt": 0.5, "resistance": 2.0, "use_power_supply": True}),
        )
        actuators.append(actuator)
-   builder.add_battery(BatteryConstantResistance, actuators[:2], nominal_voltage=12.0, resistance=0.2, min_voltage=9.0)
-   builder.add_battery(BatteryConstantResistance, actuators[2:], nominal_voltage=12.0, resistance=0.2, min_voltage=9.0)
+   builder.add_power_supply(
+       PowerSupplyBattery,
+       actuators[:2],
+       series_cells=6,
+       capacity=5.0,
+       resistance=0.05,
+       polarization_resistance=0.03,
+       polarization_capacitance=1000.0,
+       max_charge_current=10.0,
+   )
+   builder.add_power_supply(PowerSupplyDCSource, actuators[2:], nominal_voltage=24.0, resistance=0.2, capacitance=1e-3)
    model = builder.finalize()
 
    solver = newton.solvers.SolverFeatherstone(model)
    state_0, state_1 = model.state(), model.state()
    control = model.control()
    control.joint_target_q.fill_(1.0)
+   supply_states = [supply.state() for supply in model.power_supplies]
+   next_supply_states = [supply.state() for supply in model.power_supplies]
    dt = 0.01
 
    for _ in range(10):
        control.joint_f.zero_()
        for actuator in model.actuators:
            actuator.step(state_0, control, dt=dt)
-       for battery in model.batteries:
-           battery.step(control)
+       for supply, supply_state, next_supply_state in zip(model.power_supplies, supply_states, next_supply_states):
+           supply.step(control, supply_state, next_supply_state, dt=dt)
+       supply_states, next_supply_states = next_supply_states, supply_states
        solver.step(state_0, state_1, control, None, dt)
        state_0, state_1 = state_1, state_0
+
+   battery = next(s for s in model.power_supplies if isinstance(s, PowerSupplyBattery))
+   battery_state = supply_states[model.power_supplies.index(battery)]
+   print(f"state of charge below full: {battery_state.state_of_charge.numpy()[0] < 1.0}")
+
+.. testoutput:: actuator-power-supply
+
+   state of charge below full: True
 
 
 USD
@@ -964,7 +1020,7 @@ USD
 the `newton-usd-schemas <https://github.com/newton-physics/newton-usd-schemas>`__
 package. These become external actuators in ``model.actuators`` after
 finalization and require explicit stepping before the physics solver, as
-shown in `Usage`_. Imported batteries must also be stepped after
+shown in `Usage`_. Imported power supplies must also be stepped after
 the actuators. Standard USD joint drives instead run inside ``solver.step()``;
 see :ref:`the stepping guidance above <actuator-stepping>`.
 
@@ -990,14 +1046,14 @@ Each applied API schema becomes one component:
      - :class:`InputProcessorDelay`, :class:`InputProcessorEncoder`
    * - A ``NewtonConstantResistanceBattery`` prim, targeted by the actuator's
        ``newton:battery`` relationship
-     - :class:`BatteryConstantResistance`, added with
-       :meth:`~newton.ModelBuilder.add_battery`
+     - :class:`PowerSupplyDCSource`, added with
+       :meth:`~newton.ModelBuilder.add_power_supply`
 
 A clamping schema's ``newton:inputSpace`` must be the space its class bounds
 (``"effort"``, or ``"duty"`` for ``NewtonCurrentDutyClampingAPI``), and the
 import raises ``ValueError`` otherwise.
 
-:func:`parse_actuator_prim` and :func:`parse_battery_prim` return the parsed
+:func:`parse_actuator_prim` and :func:`parse_power_supply_prim` return the parsed
 classes and arguments without building a model.  Register further schemas
 with :func:`register_actuator_component`.
 

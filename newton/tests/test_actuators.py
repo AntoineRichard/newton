@@ -30,7 +30,6 @@ from newton._src.utils.import_usd import parse_usd
 from newton.actuators import (
     Actuator,
     ActuatorParsed,
-    BatteryConstantResistance,
     ClampingBase,
     ClampingCurrentDuty,
     ClampingDCMotor,
@@ -48,8 +47,11 @@ from newton.actuators import (
     InputProcessorEncoder,
     JointSpaceResponse,
     MotorDC,
+    PowerSupplyBase,
+    PowerSupplyBattery,
+    PowerSupplyDCSource,
     parse_actuator_prim,
-    parse_battery_prim,
+    parse_power_supply_prim,
 )
 from newton.selection import ArticulationView
 from newton.tests.unittest_utils import MUJOCO_MODULES, get_test_devices, has_module, requires
@@ -2726,7 +2728,7 @@ class TestDriveNeuralLSTMTorchFormats(_TorchCheckpointTestMixin, unittest.TestCa
 
 
 class TestMotorDC(unittest.TestCase):
-    """DC motor, alone and with batteries."""
+    """DC motor, alone and with power supplies."""
 
     def test_duty_path_contract(self):
         """Bound duty at the actuator and preserve torque, current and gradients."""
@@ -2743,9 +2745,9 @@ class TestMotorDC(unittest.TestCase):
                         kp=1.0,
                         output_space=DriveOutputSpace.DUTY,
                         clamping=clamps,
-                        motor=(MotorDC, {"kt": 0.5, "resistance": 2.0, "supply_from_battery": True}),
+                        motor=(MotorDC, {"kt": 0.5, "resistance": 2.0, "use_power_supply": True}),
                     )
-                    builder.add_battery(BatteryConstantResistance, [slot], nominal_voltage=12.0, resistance=0.0)
+                    builder.add_power_supply(PowerSupplyDCSource, [slot], nominal_voltage=12.0, resistance=0.0)
                     model = builder.finalize(device=device, requires_grad=True)
                     state, control = model.state(), model.control()
                     actuator = model.actuators[0]
@@ -2768,17 +2770,17 @@ class TestMotorDC(unittest.TestCase):
                         np.testing.assert_allclose(actuator.drive.kp.grad.numpy(), [0.75 if requested == 0.25 else 0.0])
                         tape.zero()
 
-    def test_battery_feedback_gradient_over_three_steps(self):
-        """Differentiate three actuator steps on one tape through the battery voltage.
+    def test_dc_source_feedback_gradient_over_three_steps(self):
+        """Differentiate three actuator steps on one tape through the DC source voltage.
 
         The motor has ``kt = 1`` and 1 Ω and the joint does not move, so with
         duty ``d = 0.5 * kp`` and supply ``V`` the effort is ``d V`` and the
-        supply current ``d^2 V``. A 10 V battery with resistance ``R = 1`` gives
+        supply current ``d^2 V``. A 10 V source with resistance ``R = 1`` gives
         the voltages 10, ``V_2 = 10 - 10 R d^2`` and ``V_3 = 10 - R d^2 V_2``.
         The third effort ``d V_3 = 10 d - 10 d^3 + 10 d^5`` is 4.0625; its
         derivative at ``kp = 1`` is 2.8125, and with respect to ``R`` it is
         ``-d^3 V_2 + R d^5 * 10 = -0.625``. As in ``example_diffsim_drone``,
-        each step gets its own ``Control``, and the battery writes the next
+        each step gets its own ``Control``, and the source writes the next
         voltage into the next one.
         """
         for device in get_test_devices():
@@ -2791,9 +2793,9 @@ class TestMotorDC(unittest.TestCase):
                     index=0,
                     kp=1.0,
                     output_space=DriveOutputSpace.DUTY,
-                    motor=(MotorDC, {"kt": 1.0, "resistance": 1.0, "supply_from_battery": True}),
+                    motor=(MotorDC, {"kt": 1.0, "resistance": 1.0, "use_power_supply": True}),
                 )
-                builder.add_battery(BatteryConstantResistance, [slot], nominal_voltage=10.0, resistance=1.0)
+                builder.add_power_supply(PowerSupplyDCSource, [slot], nominal_voltage=10.0, resistance=1.0)
                 model = builder.finalize(device=device, requires_grad=True)
                 actuator, state = model.actuators[0], model.state()
                 controls = tuple(model.control() for _ in range(4))
@@ -2802,23 +2804,23 @@ class TestMotorDC(unittest.TestCase):
                 with wp.Tape() as tape:
                     for k in range(3):
                         actuator.step(state, controls[k], dt=0.01)
-                        model.batteries[0].step(controls[k], controls[k + 1])
+                        model.power_supplies[0].step(controls[k], dt=0.01, next_control=controls[k + 1])
                 tape.backward(grads={controls[2].joint_f: wp.ones_like(controls[2].joint_f)})
                 np.testing.assert_allclose(controls[2].joint_f.numpy(), [4.0625], rtol=1e-6)
                 np.testing.assert_allclose(actuator.drive.kp.grad.numpy(), [2.8125], rtol=1e-6)
-                np.testing.assert_allclose(model.batteries[0].resistance.grad.numpy(), [-0.625], rtol=1e-6)
+                np.testing.assert_allclose(model.power_supplies[0].resistance.grad.numpy(), [-0.625], rtol=1e-6)
 
-    def test_battery_resistance_gradient_with_fixed_nominal_voltage(self):
+    def test_dc_source_resistance_gradient_with_fixed_nominal_voltage(self):
         """A differentiable resistance alone keeps each step's current for the backward pass.
 
-        A 10 V battery with ``R = 1`` sees 2 A, then 4 A, so the voltages are
+        A 10 V source with ``R = 1`` sees 2 A, then 4 A, so the voltages are
         ``10 - 2 R`` and ``10 - 4 R``, and their sum has derivative -6 with respect to ``R``.
         """
         device = wp.get_device()
-        battery = BatteryConstantResistance(
+        supply = PowerSupplyDCSource(
             nominal_voltage=wp.full(1, 10.0, dtype=float, device=device),
             resistance=wp.full(1, 1.0, dtype=float, device=device, requires_grad=True),
-            min_voltage=wp.zeros(1, dtype=float, device=device),
+            capacitance=wp.zeros(1, dtype=float, device=device),
             actuator_start=wp.array([0, 1], dtype=wp.int32, device=device),
             actuators=wp.array([0], dtype=wp.int32, device=device),
         )
@@ -2831,22 +2833,22 @@ class TestMotorDC(unittest.TestCase):
         ]
         with wp.Tape() as tape:
             for k in range(2):
-                battery.step(controls[k], controls[k + 1])
+                supply.step(controls[k], dt=0.01, next_control=controls[k + 1])
         voltages = [c["actuator_supply_voltage"] for c in controls[1:]]
         tape.backward(grads={v: wp.ones(1, dtype=float, device=device) for v in voltages})
         np.testing.assert_allclose([v.numpy()[0] for v in voltages], [8.0, 6.0])
-        np.testing.assert_allclose(battery.resistance.grad.numpy(), [-6.0], rtol=1e-6)
+        np.testing.assert_allclose(supply.resistance.grad.numpy(), [-6.0], rtol=1e-6)
 
     def test_compute(self):
         """Construct the motor directly and call compute() from a voltage command.
 
         Slots 0 to 2 are supplied with ``vin``, and slot 3 reads its supply
-        from the battery voltage and writes the current it draws. Slot 2
+        from the power-supply voltage and writes the current it draws. Slot 2
         regenerates: its back-EMF exceeds the command.
         """
         kt, resistance, vin = 0.5, 2.0, 10.0
         commanded = [5.0, -3.0, 0.5, 2.0]
-        supply_from_battery = [0.0, 0.0, 0.0, 1.0]
+        use_power_supply = [0.0, 0.0, 0.0, 1.0]
         qd = [0.5, -1.0, 4.0, 0.3]
         n = len(commanded)
 
@@ -2859,9 +2861,9 @@ class TestMotorDC(unittest.TestCase):
             kt=_f([kt] * n),
             resistance=_f([resistance] * n),
             vin=_f([vin] * n),
-            supply_from_battery=_f(supply_from_battery),
+            use_power_supply=_f(use_power_supply),
         )
-        self.assertTrue(motor.uses_battery)
+        self.assertTrue(motor.uses_power_supply)
         supply_voltage = wp.zeros(n, dtype=wp.float32)
         supply_current = wp.zeros(n, dtype=wp.float32)
         forces = wp.zeros(n, dtype=wp.float32)
@@ -2869,30 +2871,29 @@ class TestMotorDC(unittest.TestCase):
         motor.compute_supply_voltage(_f([8.0, 0.0, 0.0, 0.0]), actuator_indices, supply_voltage)
         motor.compute(_f(commanded), forces, _f(qd), indices, supply_voltage, actuator_indices, supply_current)
 
-        supply = np.where(supply_from_battery, 8.0, vin)
+        supply = np.where(use_power_supply, 8.0, vin)
         np.testing.assert_allclose(supply_voltage.numpy(), supply)
         current = (np.array(commanded) - kt * np.array(qd)) / resistance
         np.testing.assert_allclose(forces.numpy(), kt * current, rtol=1e-5)
         self.assertLess(forces.numpy()[2], 0.0)
         np.testing.assert_allclose(supply_current.numpy(), (np.array(commanded) / supply * current)[::-1], rtol=1e-5)
 
-    def test_battery_supply(self):
-        """Each servo reads the voltage its battery dropped to under the previous step's current.
+    def test_dc_source_supply(self):
+        """Each servo reads the voltage its DC source dropped to under the previous step's current.
 
         Per world, the knee servo, which has an encoder, and an
-        ankle servo share battery 0, and a second ankle servo draws from
-        battery 1. The knee is its own actuator group and the ankle servos
-        share one, so a battery spans groups and two servos of one group act
+        ankle servo share source 0, and a second ankle servo draws from
+        source 1. The knee is its own actuator group and the ankle servos
+        share one, so a source spans groups and two servos of one group act
         on one DOF. Each servo computes the duty cycle ``kp * error`` of a
-        BAM servo, and draws ``duty * current`` from its battery. In
+        BAM servo, and draws ``duty * current`` from its source. In
         world 0 the ankle regenerates: it offsets the knee's current on
-        battery 0 and leaves battery 1 at its nominal voltage. In world 1
-        battery 0 reaches its minimum voltage. ``replicate`` gives each world
-        its own batteries, and a masked reset restores the nominal voltage of
-        world 0 only.
+        source 0. The sources have no capacitance, so the voltage is
+        ``E - R I``. ``replicate`` gives each world its own sources, and a
+        masked reset restores the nominal voltage of world 0 only.
         """
         kp, kt, resistance, vin, max_duty, target, dt = 0.5, 0.6, 2.0, 6.0, 0.9, 1.0, 0.01
-        nominal_voltage, min_voltage, battery_resistance = np.array([6.0, 4.0]), np.array([5.4, 3.0]), 1.0
+        nominal_voltage, source_resistance = np.array([6.0, 4.0]), 1.0
         template = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
         links = [template.add_link(mass=1.0, inertia=_POINT_MASS_INERTIA) for _ in range(3)]
         joints = [
@@ -2913,7 +2914,7 @@ class TestMotorDC(unittest.TestCase):
             "kp": kp,
             "output_space": DriveOutputSpace.DUTY,
             "clamping": [(ClampingCurrentDuty, {"max_duty": max_duty})],
-            "motor": (MotorDC, {"kt": kt, "resistance": resistance, "vin": vin, "supply_from_battery": True}),
+            "motor": (MotorDC, {"kt": kt, "resistance": resistance, "vin": vin, "use_power_supply": True}),
         }
         knee_servo = template.add_actuator(
             DrivePD,
@@ -2922,24 +2923,18 @@ class TestMotorDC(unittest.TestCase):
             **servo,
         )
         ankle_servos = [template.add_actuator(DrivePD, index=ankle, **servo) for _ in range(2)]
-        for servos, nominal, minimum in zip(
-            ([knee_servo, ankle_servos[0]], [ankle_servos[1]]), nominal_voltage, min_voltage, strict=True
-        ):
-            template.add_battery(
-                BatteryConstantResistance,
-                servos,
-                nominal_voltage=nominal,
-                resistance=battery_resistance,
-                min_voltage=minimum,
+        for servos, nominal in zip(([knee_servo, ankle_servos[0]], [ankle_servos[1]]), nominal_voltage, strict=True):
+            template.add_power_supply(
+                PowerSupplyDCSource, servos, nominal_voltage=nominal, resistance=source_resistance
             )
         builder = newton.ModelBuilder()
         builder.replicate(template, 2)
         model = builder.finalize()
         self.assertEqual(len(model.actuators), 2)
-        battery = np.array([0, 0, 1, 2, 2, 3])
-        (batteries,) = model.batteries
-        np.testing.assert_array_equal(batteries.actuator_start.numpy(), [0, 2, 3, 5, 6])
-        np.testing.assert_array_equal(batteries.actuators.numpy(), np.arange(6))
+        source = np.array([0, 0, 1, 2, 2, 3])
+        (sources,) = model.power_supplies
+        np.testing.assert_array_equal(sources.actuator_start.numpy(), [0, 2, 3, 5, 6])
+        np.testing.assert_array_equal(sources.actuators.numpy(), np.arange(6))
 
         q = np.array([0.3, 0.015, -0.1, -0.2, -0.017, 0.4], dtype=np.float32)
         qd = np.array([0.0, 0.0, 6.0, 0.0, 0.0, 0.0], dtype=np.float32)
@@ -2953,7 +2948,7 @@ class TestMotorDC(unittest.TestCase):
         measured = q[dof]
         measured[knees] += q[dof[knees] + 1]
         duty = np.clip(kp * (target - measured), -max_duty, max_duty)
-        nominal, minimum = np.tile(nominal_voltage, 2), np.tile(min_voltage, 2)
+        nominal = np.tile(nominal_voltage, 2)
 
         drawn = np.zeros(4)
         for step in range(2):
@@ -2961,24 +2956,267 @@ class TestMotorDC(unittest.TestCase):
             for actuator in model.actuators:
                 actuator.step(state, control, dt=dt)
 
-            voltage = np.maximum(nominal - battery_resistance * np.maximum(drawn, 0.0), minimum)[battery]
+            voltage = (nominal - source_resistance * drawn)[source]
             np.testing.assert_allclose(control.actuator_supply_voltage.numpy(), voltage, rtol=1e-5)
             current = (voltage * duty - kt * qd[dof]) / resistance
             np.testing.assert_allclose(control.actuator_supply_current.numpy(), duty * current, rtol=1e-4)
             applied = np.zeros(model.joint_dof_count)
             np.add.at(applied, dof, kt * current)
             np.testing.assert_allclose(control.joint_f.numpy(), applied, rtol=1e-4)
-            batteries.step(control)
-            drawn = np.bincount(battery, duty * current, minlength=4)
+            sources.step(control, dt=dt)
+            drawn = np.bincount(source, duty * current, minlength=4)
             if step == 0:
                 self.assertTrue(0.0 < drawn[0] < duty[0] * current[0] and drawn[1] < 0.0)
-        self.assertAlmostEqual(control.actuator_supply_voltage.numpy()[3], min_voltage[0], places=5)
 
-        batteries.reset(control, world_mask=wp.array([True, False, False], dtype=wp.bool))
-        dropped = np.maximum(nominal - battery_resistance * np.maximum(drawn, 0.0), minimum)
+        sources.reset(control, world_mask=wp.array([True, False, False], dtype=wp.bool))
+        dropped = nominal - source_resistance * drawn
         np.testing.assert_allclose(
-            control.actuator_supply_voltage.numpy(), np.where(np.arange(4) < 2, nominal, dropped)[battery], rtol=1e-5
+            control.actuator_supply_voltage.numpy(), np.where(np.arange(4) < 2, nominal, dropped)[source], rtol=1e-5
         )
+
+
+def _supply_control(current: float | Sequence[float], device=None, requires_grad: bool = False) -> dict[str, wp.array]:
+    """Return a ``sim_control`` mapping for one actuator per entry of *current*."""
+    current = np.atleast_1d(np.asarray(current, dtype=np.float32))
+    return {
+        "actuator_supply_current": wp.array(current, dtype=float, device=device),
+        "actuator_supply_voltage": wp.zeros(len(current), dtype=float, device=device, requires_grad=requires_grad),
+    }
+
+
+def _one_per_actuator(supply_class: type, count: int = 1, device=None, requires_grad: bool = False, **kwargs: Any):
+    """Construct *count* supplies of *supply_class*, each powering one actuator, from resolved arguments."""
+    args = supply_class.resolve_arguments(kwargs)
+    return supply_class(
+        **{
+            name: wp.full(count, value, dtype=float, device=device, requires_grad=requires_grad)
+            for name, value in args.items()
+        },
+        actuator_start=wp.array(np.arange(count + 1), dtype=wp.int32, device=device),
+        actuators=wp.array(np.arange(count), dtype=wp.int32, device=device),
+    )
+
+
+def _cell_ocv(state_of_charge: float | np.ndarray) -> np.ndarray:
+    cell_voltage = np.array(PowerSupplyBattery.OCV_CELL_VOLTAGE)
+    return np.interp(state_of_charge, np.linspace(0.0, 1.0, len(cell_voltage)), cell_voltage)
+
+
+class TestPowerSupply(unittest.TestCase):
+    """DC sources and batteries driven directly by the current of their actuators."""
+
+    def test_dc_source_capacitor_relaxes_exponentially(self):
+        """The bus voltage relaxes toward ``E - R I`` with time constant ``R C``, above ``E`` under regeneration.
+
+        A 10 V source with ``R = 1`` and ``C = 0.5`` has ``R C = 0.5``. Starting
+        charged to 10 V, a 2 A load gives ``V_k = 8 + 2 exp(-k dt / 0.5)``,
+        and a 2 A regenerative current then pulls it toward 12 V. Without a
+        capacitor, the voltage is ``E - R I`` at once.
+        """
+        for device in get_test_devices():
+            with self.subTest(device=device), wp.ScopedDevice(device):
+                dt = 0.1
+                supply = _one_per_actuator(PowerSupplyDCSource, nominal_voltage=10.0, resistance=1.0, capacitance=0.5)
+                self.assertFalse(supply.is_stateful())
+                self.assertIsNone(supply.state())
+                control = _supply_control(2.0)
+                supply.reset(control)
+                np.testing.assert_allclose(control["actuator_supply_voltage"].numpy(), [10.0])
+                for k in range(1, 4):
+                    supply.step(control, dt=dt)
+                    expected = 8.0 + 2.0 * math.exp(-k * dt / 0.5)
+                    np.testing.assert_allclose(control["actuator_supply_voltage"].numpy(), [expected], rtol=1e-6)
+                control["actuator_supply_current"].fill_(-2.0)
+                for _ in range(200):
+                    supply.step(control, dt=dt)
+                np.testing.assert_allclose(control["actuator_supply_voltage"].numpy(), [12.0], rtol=1e-5)
+
+                resistive = _one_per_actuator(PowerSupplyDCSource, nominal_voltage=10.0, resistance=1.0)
+                control = _supply_control(2.0)
+                resistive.step(control, dt=dt)
+                np.testing.assert_allclose(control["actuator_supply_voltage"].numpy(), [8.0])
+                with self.assertRaisesRegex(ValueError, "requires dt"):
+                    resistive.step(control)
+
+    def test_battery_discharge_follows_ocv_curve(self):
+        """A discharging pack loses charge at ``I / Q`` and sags by ``R0 I`` and the polarization voltage.
+
+        Six cells of 1 A·h discharge at 3.6 A, which takes 0.001 of the
+        charge per second. The terminal voltage is ``6 U_oc(s) - R0 I - V1``,
+        where ``V1`` relaxes toward ``R1 I`` with time constant ``R1 C1 = 20 s``.
+        """
+        for device in get_test_devices():
+            with self.subTest(device=device), wp.ScopedDevice(device):
+                r0, r1, c1, current, dt = 0.05, 0.02, 1000.0, 3.6, 1.0
+                battery = _one_per_actuator(
+                    PowerSupplyBattery,
+                    series_cells=6,
+                    capacity=1.0,
+                    resistance=r0,
+                    polarization_resistance=r1,
+                    polarization_capacitance=c1,
+                    initial_state_of_charge=0.8,
+                )
+                self.assertTrue(battery.is_stateful())
+                np.testing.assert_allclose(battery.min_voltage.numpy(), [18.0])
+                state_0, state_1 = battery.state(), battery.state()
+                np.testing.assert_allclose(state_0.state_of_charge.numpy(), [0.8])
+                control = _supply_control(current)
+                battery.reset(control)
+                np.testing.assert_allclose(control["actuator_supply_voltage"].numpy(), 6.0 * _cell_ocv(0.8), rtol=1e-6)
+
+                polarization = 0.0
+                decay = math.exp(-dt / (r1 * c1))
+                for k in range(1, 6):
+                    battery.step(control, state_0, state_1, dt=dt)
+                    state_0, state_1 = state_1, state_0
+                    state_of_charge = 0.8 - k * current * dt / 3600.0
+                    polarization = polarization * decay + r1 * current * (1.0 - decay)
+                    np.testing.assert_allclose(state_0.state_of_charge.numpy(), [state_of_charge], rtol=1e-6)
+                    np.testing.assert_allclose(state_0.polarization_voltage.numpy(), [polarization], rtol=1e-5)
+                    expected = 6.0 * _cell_ocv(state_of_charge) - r0 * current - polarization
+                    np.testing.assert_allclose(control["actuator_supply_voltage"].numpy(), [expected], rtol=1e-6)
+                with self.assertRaisesRegex(ValueError, "requires current_state and next_state"):
+                    battery.step(control, dt=dt)
+
+    def test_battery_regeneration_charges_up_to_limit_and_full(self):
+        """Regenerative current charges the pack, limited to ``max_charge_current`` and to a full pack.
+
+        Pack 0, half charged, accepts 4 A of the 10 A the motors regenerate,
+        so its charge rises and its voltage exceeds the open-circuit voltage
+        by ``4 R0``. Pack 1 accepts all of it. Pack 2 is full and accepts
+        nothing, so it stays at the full open-circuit voltage.
+        """
+        for device in get_test_devices():
+            with self.subTest(device=device), wp.ScopedDevice(device):
+                r0, dt = 0.1, 2.0
+                packs = []
+                for initial, limit in ((0.5, 4.0), (0.5, math.inf), (1.0, math.inf)):
+                    packs.append(
+                        _one_per_actuator(
+                            PowerSupplyBattery,
+                            series_cells=4,
+                            capacity=2.0,
+                            resistance=r0,
+                            initial_state_of_charge=initial,
+                            max_charge_current=limit,
+                        )
+                    )
+                for pack, initial, accepted in zip(packs, (0.5, 0.5, 1.0), (4.0, 10.0, 0.0), strict=True):
+                    control = _supply_control(-10.0)
+                    state_0, state_1 = pack.state(), pack.state()
+                    pack.step(control, state_0, state_1, dt=dt)
+                    state_of_charge = min(initial + accepted * dt / (3600.0 * 2.0), 1.0)
+                    np.testing.assert_allclose(state_1.state_of_charge.numpy(), [state_of_charge], rtol=1e-6)
+                    expected = 4.0 * _cell_ocv(state_of_charge) + r0 * accepted
+                    np.testing.assert_allclose(control["actuator_supply_voltage"].numpy(), [expected], rtol=1e-6)
+
+    def test_battery_cutoff_latches_until_reset(self):
+        """The pack disconnects below ``min_voltage`` or when empty, and stays off until reset.
+
+        Pack 0 has 5 % charge, 3.35 V per cell, and sags below its 18 V
+        cutoff under 10 A through 0.5 Ω. Pack 1 has no cutoff voltage but
+        empties within the step. Both then supply 0 V without load, until a
+        reset of world 1 restores pack 1 only.
+        """
+        for device in get_test_devices():
+            with self.subTest(device=device), wp.ScopedDevice(device):
+                args = PowerSupplyBattery.resolve_arguments
+                values = [
+                    args({"series_cells": 6, "capacity": 1.0, "resistance": 0.5, "initial_state_of_charge": 0.05}),
+                    args({"series_cells": 6, "capacity": 1e-3, "min_voltage": 0.0, "initial_state_of_charge": 0.001}),
+                ]
+                battery = PowerSupplyBattery(
+                    **{name: wp.array([v[name] for v in values], dtype=float) for name in values[0]},
+                    actuator_start=wp.array([0, 1, 2], dtype=wp.int32),
+                    actuators=wp.array([0, 1], dtype=wp.int32),
+                    world=wp.array([0, 1], dtype=wp.int32),
+                    world_count=2,
+                )
+                state_0, state_1 = battery.state(), battery.state()
+                control = _supply_control([10.0, 10.0])
+                battery.step(control, state_0, state_1, dt=1.0)
+                np.testing.assert_array_equal(state_1.cutoff.numpy(), [1, 1])
+                np.testing.assert_allclose(state_1.state_of_charge.numpy()[1], 0.0)
+                np.testing.assert_allclose(control["actuator_supply_voltage"].numpy(), [0.0, 0.0])
+
+                control["actuator_supply_current"].zero_()
+                battery.step(control, state_1, state_0, dt=1.0)
+                np.testing.assert_array_equal(state_0.cutoff.numpy(), [1, 1])
+                np.testing.assert_allclose(control["actuator_supply_voltage"].numpy(), [0.0, 0.0])
+
+                battery.reset(control, state_0, world_mask=wp.array([False, True, False], dtype=wp.bool))
+                np.testing.assert_array_equal(state_0.cutoff.numpy(), [1, 0])
+                np.testing.assert_allclose(state_0.state_of_charge.numpy()[1], 0.001, rtol=1e-6)
+                np.testing.assert_allclose(
+                    control["actuator_supply_voltage"].numpy(), [0.0, 6.0 * _cell_ocv(0.001)], rtol=1e-6
+                )
+                state_1.assign(state_0)
+                np.testing.assert_array_equal(state_1.cutoff.numpy(), [1, 0])
+                with self.assertRaisesRegex(TypeError, "Cannot assign"):
+                    state_1.assign(PowerSupplyBase.State())
+
+    def test_battery_resistance_gradient_over_two_steps(self):
+        """With one state and ``Control`` per step, the terminal voltages differentiate through ``R0``.
+
+        Under 2 A, then 4 A, the voltages fall by ``2 R0`` and ``4 R0``, so their
+        sum has derivative -6 with respect to ``R0``.
+        """
+        device = wp.get_device()
+        battery = _one_per_actuator(
+            PowerSupplyBattery, device=device, requires_grad=True, series_cells=6, capacity=5.0, resistance=0.05
+        )
+        states = [battery.state() for _ in range(3)]
+        controls = [_supply_control(current, device, requires_grad=True) for current in (2.0, 4.0, 0.0)]
+        with wp.Tape() as tape:
+            for k in range(2):
+                battery.step(controls[k], states[k], states[k + 1], dt=0.01, next_control=controls[k + 1])
+        voltages = [c["actuator_supply_voltage"] for c in controls[1:]]
+        tape.backward(grads={v: wp.ones(1, dtype=float, device=device) for v in voltages})
+        np.testing.assert_allclose(battery.resistance.grad.numpy(), [-6.0], rtol=1e-5)
+
+    def test_battery_in_model_powers_servo(self):
+        """A pack added with ``add_power_supply`` powers a servo, loses charge, and resets per world.
+
+        Two worlds each have one DUTY servo on a 6-cell pack. Stepping the
+        servo and the pack lowers the charge of both packs and their voltage
+        below the full open-circuit voltage; resetting world 0 restores its
+        pack only.
+        """
+        template = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+        joint = template.add_joint_revolute(-1, template.add_link(mass=1.0, inertia=_POINT_MASS_INERTIA))
+        template.add_articulation([joint])
+        servo = template.add_actuator(
+            DrivePD,
+            index=template.joint_qd_start[joint],
+            kp=1.0,
+            output_space=DriveOutputSpace.DUTY,
+            motor=(MotorDC, {"kt": 0.5, "resistance": 0.5, "use_power_supply": True}),
+        )
+        template.add_power_supply(
+            PowerSupplyBattery, [servo], series_cells=6, capacity=0.01, resistance=0.1, initial_state_of_charge=0.9
+        )
+        builder = newton.ModelBuilder()
+        builder.replicate(template, 2)
+        model = builder.finalize()
+        (battery,) = model.power_supplies
+        self.assertIsInstance(battery, PowerSupplyBattery)
+        state, control = model.state(), model.control()
+        full = 6.0 * _cell_ocv(0.9)
+        np.testing.assert_allclose(control.actuator_supply_voltage.numpy(), [full, full], rtol=1e-6)
+        control.joint_target_q.fill_(0.5)
+        supply_0, supply_1 = battery.state(), battery.state()
+        for _ in range(3):
+            control.joint_f.zero_()
+            model.actuators[0].step(state, control, dt=0.01)
+            battery.step(control, supply_0, supply_1, dt=0.01)
+            supply_0, supply_1 = supply_1, supply_0
+        self.assertTrue(np.all(supply_0.state_of_charge.numpy() < 0.9))
+        self.assertTrue(np.all(control.actuator_supply_voltage.numpy() < full))
+        battery.reset(control, supply_0, world_mask=wp.array([True, False, False], dtype=wp.bool))
+        np.testing.assert_allclose(supply_0.state_of_charge.numpy()[0], 0.9, rtol=1e-6)
+        self.assertLess(supply_0.state_of_charge.numpy()[1], 0.9)
+        np.testing.assert_allclose(control.actuator_supply_voltage.numpy()[0], full, rtol=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -3273,7 +3511,7 @@ class TestClampingCurrentDuty(unittest.TestCase):
                         kt=array([0.5] * 5),
                         resistance=array([2.0] * 5),
                         vin=supply,
-                        supply_from_battery=wp.ones(5, dtype=float),
+                        use_power_supply=wp.ones(5, dtype=float),
                     )
                     clamp = ClampingCurrentDuty(
                         max_current=array([1.0] * 5),
@@ -5399,14 +5637,14 @@ class TestActuatorBuilder(unittest.TestCase):
             Actuator(
                 indices,
                 drive=DrivePD(array(1.0), array(0.0)),
-                motor=MotorDC(array(0.5), array(2.0), array(12.0), supply_from_battery=array(0.0)),
+                motor=MotorDC(array(0.5), array(2.0), array(12.0), use_power_supply=array(0.0)),
             )
         with self.assertRaisesRegex(ValueError, "EFFORT clamps"):
             Actuator(
                 indices,
                 drive=DrivePD(array(1.0), array(0.0), output_space=DriveOutputSpace.DUTY),
                 clamping=[ClampingMaxEffort(array(1.0))],
-                motor=MotorDC(array(0.5), array(2.0), array(12.0), supply_from_battery=array(0.0)),
+                motor=MotorDC(array(0.5), array(2.0), array(12.0), use_power_supply=array(0.0)),
             )
 
     @requires("pxr.Usd")
@@ -5618,8 +5856,8 @@ class TestActuatorBuilder(unittest.TestCase):
         self.assertEqual(_delay_state_of(act_state).buffer_pos.shape, (3, n))
         np.testing.assert_array_equal(_delay_state_of(act_state).num_pushes.numpy(), [0] * n)
 
-    def test_battery_validation(self):
-        """add_battery rejects invalid input, and finalize warns about motors without their battery."""
+    def test_power_supply_validation(self):
+        """add_power_supply rejects invalid input, and finalize warns about motors without their power supply."""
         template = newton.ModelBuilder()
         link = template.add_link()
         joint = template.add_joint_revolute(parent=-1, child=link, axis=newton.Axis.Z)
@@ -5628,35 +5866,45 @@ class TestActuatorBuilder(unittest.TestCase):
             output_space=DriveOutputSpace.DUTY,
             index=template.joint_qd_start[joint],
             kp=1.0,
-            motor=(MotorDC, {"kt": 1.0, "resistance": 1.0, "vin": 12.0, "supply_from_battery": True}),
+            motor=(MotorDC, {"kt": 1.0, "resistance": 1.0, "vin": 12.0, "use_power_supply": True}),
         )
         builder = newton.ModelBuilder()
         builder.add_world(template)
         builder.begin_world()
         builder.add_builder(template)
         builder.add_actuator(DrivePD, index=builder.joint_qd_start[-1], kp=1.0)
-        builder.add_battery(BatteryConstantResistance, [1], nominal_voltage=12.0, resistance=0.5, min_voltage=9.0)
+        builder.add_power_supply(PowerSupplyDCSource, [1], nominal_voltage=12.0, resistance=0.5)
 
+        valid = {"nominal_voltage": 12.0, "resistance": 0.5, "capacitance": 1e-3}
+        battery = {"series_cells": 6, "capacity": 2.0}
         cases = {
-            "at least one": ([], 12.0, 0.5, 9.0),
-            "min_voltage": ([1], 12.0, 0.5, 13.0),
-            "resistance": ([1], 12.0, -0.5, 9.0),
-            "already draws": ([1], 12.0, 0.5, 9.0),
-            "does not draw from a battery": ([2], 12.0, 0.5, 9.0),
-            "does not exist": ([3], 12.0, 0.5, 9.0),
-            "belongs to world 0": ([0], 12.0, 0.5, 9.0),
+            "at least one": (PowerSupplyDCSource, [], valid),
+            "requires 'nominal_voltage'": (PowerSupplyDCSource, [2], {"resistance": 0.5}),
+            "resistance must be non-negative": (PowerSupplyDCSource, [2], {**valid, "resistance": -0.5}),
+            "capacitance must be non-negative": (PowerSupplyDCSource, [2], {**valid, "capacitance": -1.0}),
+            r"unknown argument\(s\) \['min_voltage'\]": (PowerSupplyDCSource, [2], {**valid, "min_voltage": 9.0}),
+            "requires 'capacity'": (PowerSupplyBattery, [2], {"series_cells": 6}),
+            "series_cells must be positive": (PowerSupplyBattery, [2], {**battery, "series_cells": 0}),
+            "max_charge_current must be non-negative": (
+                PowerSupplyBattery,
+                [2],
+                {**battery, "max_charge_current": -1.0},
+            ),
+            "initial_state_of_charge must be at most 1": (
+                PowerSupplyBattery,
+                [2],
+                {**battery, "initial_state_of_charge": 1.5},
+            ),
+            "already draws": (PowerSupplyDCSource, [1], valid),
+            "does not draw from a power supply": (PowerSupplyDCSource, [2], valid),
+            "does not exist": (PowerSupplyDCSource, [3], valid),
+            "belongs to world 0": (PowerSupplyDCSource, [0], valid),
         }
-        for message, (actuators, nominal_voltage, resistance, min_voltage) in cases.items():
+        for message, (supply_class, actuators, kwargs) in cases.items():
             with self.subTest(message), self.assertRaisesRegex(ValueError, message):
-                builder.add_battery(
-                    BatteryConstantResistance,
-                    actuators,
-                    nominal_voltage=nominal_voltage,
-                    resistance=resistance,
-                    min_voltage=min_voltage,
-                )
+                builder.add_power_supply(supply_class, actuators, **kwargs)
         builder.end_world()
-        with self.assertWarnsRegex(NewtonWarning, r"actuator\(s\) \[0\] have no battery"):
+        with self.assertWarnsRegex(NewtonWarning, r"actuator\(s\) \[0\] have no power supply"):
             builder.finalize()
 
     def test_attribute_frequencies(self):
@@ -5679,9 +5927,9 @@ class TestActuatorBuilder(unittest.TestCase):
             output_space=DriveOutputSpace.DUTY,
             index=template.joint_qd_start[joints[1]],
             kp=1.0,
-            motor=(MotorDC, {"kt": 1.0, "resistance": 1.0, "vin": 12.0, "supply_from_battery": True}),
+            motor=(MotorDC, {"kt": 1.0, "resistance": 1.0, "vin": 12.0, "use_power_supply": True}),
         )
-        template.add_battery(BatteryConstantResistance, [servo], nominal_voltage=12.0, resistance=0.5, min_voltage=9.0)
+        template.add_power_supply(PowerSupplyDCSource, [servo], nominal_voltage=12.0, resistance=0.5)
         builder = newton.ModelBuilder()
         builder.replicate(template, 3)
         model = builder.finalize()
@@ -5689,11 +5937,11 @@ class TestActuatorBuilder(unittest.TestCase):
         actuator = newton.Model.AttributeFrequency.ACTUATOR
 
         self.assertEqual(model.actuator_count, 6)
-        (batteries,) = model.batteries
-        self.assertEqual(batteries.num_batteries, 3)
-        np.testing.assert_array_equal(batteries.actuator_start.numpy(), [0, 1, 2, 3])
-        np.testing.assert_array_equal(batteries.actuators.numpy(), [1, 3, 5])
-        np.testing.assert_array_equal(batteries.world.numpy(), [0, 1, 2])
+        (supplies,) = model.power_supplies
+        self.assertEqual(supplies.num_power_supplies, 3)
+        np.testing.assert_array_equal(supplies.actuator_start.numpy(), [0, 1, 2, 3])
+        np.testing.assert_array_equal(supplies.actuators.numpy(), [1, 3, 5])
+        np.testing.assert_array_equal(supplies.world.numpy(), [0, 1, 2])
         for name, frequency in {
             "actuator_supply_current": actuator,
             "actuator_supply_voltage": actuator,
@@ -5715,7 +5963,7 @@ class TestActuatorBuilder(unittest.TestCase):
 
     @requires("pxr.Usd")
     def test_motor_from_usd(self):
-        """Servos with a DC motor, a delay, backlash and a battery, loaded from USD and replicated.
+        """Servos with a DC motor, a delay, backlash and a power supply, loaded from USD and replicated.
 
         The asset has three servos with PD control for a duty cycle
         of ``0.5 * error``, current and duty limits, a DC motor and a 2-step
@@ -5723,17 +5971,18 @@ class TestActuatorBuilder(unittest.TestCase):
           knee_actuator: backlash hinge in series, draws from Battery
           ankle_actuator: draws from Battery
           toe_actuator: fixed supply vin = 5 V, max duty 0.5
-        The motor, processor and battery tokens may have no registered USD
+        The motor, processor and power-supply tokens may have no registered USD
         schema, so they must be found next to the registered schemas. The
         knee is its own actuator group because of its encoder and
-        reads ``q_knee + q_backlash``. Battery has no ``newton:minVoltage``,
-        and SpareBattery has no actuators, so it is not imported.
+        reads ``q_knee + q_backlash``. The ``NewtonConstantResistanceBattery``
+        prims become :class:`PowerSupplyDCSource`, and SpareBattery has no
+        actuators, so it is not imported.
         """
         usd_path = os.path.join(os.path.dirname(__file__), "assets", "actuator_bam_test.usda")
         stage = Usd.Stage.Open(usd_path)
-        battery = parse_battery_prim(stage.GetPrimAtPath("/World/Robot/Battery"))
-        self.assertIs(battery.battery_class, BatteryConstantResistance)
-        self.assertEqual(battery.battery_kwargs, {"nominal_voltage": 6.0, "resistance": 0.5})
+        parsed = parse_power_supply_prim(stage.GetPrimAtPath("/World/Robot/Battery"))
+        self.assertIs(parsed.power_supply_class, PowerSupplyDCSource)
+        self.assertEqual(parsed.power_supply_kwargs, {"nominal_voltage": 6.0, "resistance": 0.5})
         template = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
         parse_usd(template, stage)
         builder = newton.ModelBuilder()
@@ -5750,10 +5999,10 @@ class TestActuatorBuilder(unittest.TestCase):
         np.testing.assert_allclose(ankle_and_toe.motor.kt.numpy(), [0.6] * 4)
         np.testing.assert_allclose(ankle_and_toe.motor.resistance.numpy(), [2.0] * 4)
         self.assertEqual(len(model.actuators), 2)
-        (batteries,) = model.batteries
-        np.testing.assert_array_equal(batteries.actuator_start.numpy(), [0, 2, 4])
-        np.testing.assert_array_equal(batteries.actuators.numpy(), [0, 1, 3, 4])
-        np.testing.assert_array_equal(batteries.world.numpy(), [0, 1])
+        (supplies,) = model.power_supplies
+        np.testing.assert_array_equal(supplies.actuator_start.numpy(), [0, 2, 4])
+        np.testing.assert_array_equal(supplies.actuators.numpy(), [0, 1, 3, 4])
+        np.testing.assert_array_equal(supplies.world.numpy(), [0, 1])
 
         knee, backlash, ankle, toe = (
             template.joint_q_start[template.joint_label.index(f"/World/Robot/{name}")]
@@ -5786,9 +6035,9 @@ class TestActuatorBuilder(unittest.TestCase):
             expected = 0.6 * supply * duty / 2.0
             np.testing.assert_allclose(control.joint_f.numpy()[dof], expected, rtol=1e-5, err_msg=f"step {step}")
 
-            batteries.step(control)
+            supplies.step(control, dt=0.01)
             drawn = (duty * supply * duty / 2.0).reshape(2, 3)[:, :2].sum(axis=1)
-            supply = np.ravel([[6.0 - 0.5 * max(i, 0.0)] * 2 + [5.0] for i in drawn])
+            supply = np.ravel([[6.0 - 0.5 * i] * 2 + [5.0] for i in drawn])
 
     @requires("pxr.Usd")
     def test_usd_unknown_actuator_schema_warns(self):

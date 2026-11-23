@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .actuator import Actuator
-from .batteries import BatteryBase, BatteryConstantResistance
 from .clamping import (
     ClampingBase,
     ClampingCurrentDuty,
@@ -25,23 +24,21 @@ from .input_processors import (
 )
 from .joint_space_response import JointSpaceResponse
 from .motor_dc import MotorDC
+from .power_supplies import PowerSupplyBase, PowerSupplyBattery, PowerSupplyDCSource
 from .space import DriveOutputSpace
 from .usd_parser import (
     ActuatorParsed,
-    BatteryParsed,
     ComponentKind,
+    PowerSupplyParsed,
     SchemaNames,
     parse_actuator_prim,
-    parse_battery_prim,
+    parse_power_supply_prim,
     register_actuator_component,
 )
 
 __all__ = [
     "Actuator",
     "ActuatorParsed",
-    "BatteryBase",
-    "BatteryConstantResistance",
-    "BatteryParsed",
     "ClampingBase",
     "ClampingCurrentDuty",
     "ClampingDCMotor",
@@ -60,8 +57,12 @@ __all__ = [
     "InputProcessorEncoder",
     "JointSpaceResponse",
     "MotorDC",
+    "PowerSupplyBase",
+    "PowerSupplyBattery",
+    "PowerSupplyDCSource",
+    "PowerSupplyParsed",
     "SchemaNames",
     "parse_actuator_prim",
-    "parse_battery_prim",
+    "parse_power_supply_prim",
     "register_actuator_component",
 ]

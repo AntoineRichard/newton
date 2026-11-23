@@ -14,7 +14,6 @@ from newton._src.usd.utils import _resolve_asset_path, get_applied_api_schemas
 
 from ..exceptions import NewtonDeprecationWarning, NewtonWarning
 from ..utils.deprecation import RemovedAttribute, warn_deprecation
-from .batteries import BatteryBase, BatteryConstantResistance
 from .clamping import (
     ClampingBase,
     ClampingCurrentDuty,
@@ -33,6 +32,7 @@ from .drives import (
 from .input_processors import InputProcessorBase, InputProcessorEncoder
 from .input_processors.input_processor_delay import InputProcessorDelay
 from .motor_dc import MotorDC
+from .power_supplies import PowerSupplyBase, PowerSupplyDCSource
 from .utils import _ALLOW_UNSAFE_TORCH_CHECKPOINTS_DEPRECATION_MSG, _looks_like_torch_checkpoint, load_metadata
 
 _COMPONENT_KIND_DELAY_DEPRECATION_MSG = (
@@ -88,8 +88,8 @@ class ActuatorParsed:
     )
     target_path: str = ""
     """Joint target path (USD prim path of the driven joint)."""
-    battery_path: str | None = None
-    """USD prim path of the battery the actuator draws from, or ``None``."""
+    power_supply_path: str | None = None
+    """USD prim path of the power supply the actuator draws from, or ``None``."""
 
     controller_class = RemovedAttribute("drive_class", removed_in="1.8")
     controller_kwargs = RemovedAttribute("drive_kwargs", removed_in="1.8")
@@ -287,47 +287,47 @@ def register_actuator_component(
     )
 
 
-_BATTERY_REGISTRY: dict[str, type[BatteryBase]] = {
-    SchemaNames.CONSTANT_RESISTANCE_BATTERY: BatteryConstantResistance,
+_POWER_SUPPLY_REGISTRY: dict[str, type[PowerSupplyBase]] = {
+    SchemaNames.CONSTANT_RESISTANCE_BATTERY: PowerSupplyDCSource,
 }
 
 
 @dataclass
-class BatteryParsed:
-    """Result of parsing a USD battery prim."""
+class PowerSupplyParsed:
+    """Result of parsing a USD power supply prim."""
 
-    battery_class: type[BatteryBase]
-    """Battery class of the prim's type, e.g. :class:`~newton.actuators.BatteryConstantResistance`."""
-    battery_kwargs: dict[str, Any] = field(default_factory=dict)
-    """Authored battery parameters as :meth:`~newton.ModelBuilder.add_battery` keyword arguments."""
+    power_supply_class: type[PowerSupplyBase]
+    """Power supply class of the prim's type, e.g. :class:`~newton.actuators.PowerSupplyDCSource`."""
+    power_supply_kwargs: dict[str, Any] = field(default_factory=dict)
+    """Authored power supply parameters as :meth:`~newton.ModelBuilder.add_power_supply` keyword arguments."""
 
 
-def parse_battery_prim(prim) -> BatteryParsed | None:
-    """Parse a USD battery prim into a battery class and its parameters.
+def parse_power_supply_prim(prim) -> PowerSupplyParsed | None:
+    """Parse a USD power supply prim into a power supply class and its parameters.
 
-    The prim type selects the battery class, e.g. ``NewtonConstantResistanceBattery``
-    selects :class:`~newton.actuators.BatteryConstantResistance`, and the authored
+    The prim type selects the power supply class, e.g. ``NewtonConstantResistanceBattery``
+    selects :class:`~newton.actuators.PowerSupplyDCSource`, and the authored
     ``newton:`` attributes become its keyword arguments; the class fills in
-    defaults when the battery is added. The actuators that draw from the
-    battery name it in their ``newton:battery`` relationship;
-    :func:`parse_actuator_prim` reports it as :attr:`ActuatorParsed.battery_path`.
+    defaults when the power supply is added. The actuators that draw from the
+    power supply name it in their ``newton:battery`` relationship;
+    :func:`parse_actuator_prim` reports it as :attr:`ActuatorParsed.power_supply_path`.
 
     Args:
         prim: USD prim to parse.
 
     Returns:
-        The parsed battery, or ``None`` if the prim is not a battery.
+        The parsed power supply, or ``None`` if the prim is not a power supply.
 
     Raises:
         ValueError: The prim is derived from ``NewtonBattery`` but its type is
             not supported.
     """
-    battery_class = _BATTERY_REGISTRY.get(prim.GetTypeName())
-    if battery_class is None:
+    power_supply_class = _POWER_SUPPLY_REGISTRY.get(prim.GetTypeName())
+    if power_supply_class is None:
         if prim.IsA(SchemaNames.BATTERY):
-            raise ValueError(f"Battery prim '{prim.GetPath()}' has unsupported type '{prim.GetTypeName()}'")
+            raise ValueError(f"Power supply prim '{prim.GetPath()}' has unsupported type '{prim.GetTypeName()}'")
         return None
-    return BatteryParsed(battery_class, _read_schema_attrs(prim, prim.GetTypeName()))
+    return PowerSupplyParsed(power_supply_class, _read_schema_attrs(prim, prim.GetTypeName()))
 
 
 def parse_actuator_prim(prim, *, allow_unsafe_torch_checkpoints: bool = False) -> ActuatorParsed | None:
@@ -472,19 +472,19 @@ def _parse_actuator_prim(prim, allow_unsafe_torch_checkpoints: bool) -> Actuator
     if drive_class is None:
         raise ValueError(f"Actuator prim '{prim.GetPath()}' has no drive schema (detected schemas: {detected})")
 
-    batteries = _get_relationship_targets(prim, "newton:battery")
+    supply_paths = _get_relationship_targets(prim, "newton:battery")
     if not drive_schema_registered:
         claimed: set[str] = set()
         for cls, kwargs in component_specs:
             try:
-                claimed.update(cls.resolve_arguments({"supply_from_battery": bool(batteries), **kwargs}))
+                claimed.update(cls.resolve_arguments({"use_power_supply": bool(supply_paths), **kwargs}))
             except ValueError as exc:
                 raise ValueError(f"Actuator prim '{prim.GetPath()}': {exc}") from None
         drive_kwargs = {name: value for name, value in drive_kwargs.items() if name not in claimed}
 
-    if len(batteries) > 1:
+    if len(supply_paths) > 1:
         warnings.warn(
-            f"Actuator prim {prim.GetPath()} has {len(batteries)} batteries; only the first is used",
+            f"Actuator prim {prim.GetPath()} has {len(supply_paths)} power supplies; only the first is used",
             NewtonWarning,
             stacklevel=2,
         )
@@ -494,5 +494,5 @@ def _parse_actuator_prim(prim, allow_unsafe_torch_checkpoints: bool) -> Actuator
         drive_kwargs=drive_kwargs,
         component_specs=component_specs,
         target_path=target_paths[0],
-        battery_path=batteries[0] if batteries else None,
+        power_supply_path=supply_paths[0] if supply_paths else None,
     )

@@ -12,7 +12,7 @@ import warp as wp
 from newton import Axis, Mesh, Model, ModelBuilder, NewtonDeprecationWarning, NewtonWarning, Rod
 from newton._src.geometry.contact_reduction import NUM_VOXEL_DEPTH_SLOTS, compute_voxel_resolution_from_aabb
 from newton._src.sim.builder import _ARRAY_BACKED_ATTRIBUTE_DTYPES, _materialize_array_backed_list
-from newton.actuators import BatteryConstantResistance, DriveOutputSpace, DrivePD, MotorDC
+from newton.actuators import DriveOutputSpace, DrivePD, MotorDC, PowerSupplyDCSource
 from newton.tests.unittest_utils import HOST_TRANSFORMS_BIT_EXACT, add_function_test, get_test_devices
 from newton.utils import compute_world_offsets
 
@@ -1170,25 +1170,23 @@ class TestModelBuilderReplicate(unittest.TestCase):
                 scalar_dtype = getattr(warp_dtype, "_wp_scalar_type_", warp_dtype)
                 self.assertIsNotNone(wp.dtype_to_numpy(scalar_dtype))
 
-    def test_battery_after_builder_without_batteries(self):
-        """Batteries work after merging a builder whose actuators predate any battery."""
+    def test_power_supply_after_builder_without_power_supplies(self):
+        """Power supplies work after merging a builder whose actuators predate any power supply."""
 
-        def robot(with_battery: bool) -> ModelBuilder:
+        def robot(with_power_supply: bool) -> ModelBuilder:
             builder = ModelBuilder()
             link = builder.add_link()
             joint = builder.add_joint_revolute(parent=-1, child=link, axis=Axis.Z)
             builder.add_articulation([joint])
             dof = builder.joint_qd_start[joint]
-            if with_battery:
+            if with_power_supply:
                 actuator = builder.add_actuator(
                     DrivePD,
                     output_space=DriveOutputSpace.DUTY,
                     index=dof,
-                    motor=(MotorDC, {"kt": 1.0, "resistance": 1.0, "vin": 12.0, "supply_from_battery": True}),
+                    motor=(MotorDC, {"kt": 1.0, "resistance": 1.0, "vin": 12.0, "use_power_supply": True}),
                 )
-                builder.add_battery(
-                    BatteryConstantResistance, [actuator], nominal_voltage=12.0, resistance=0.5, min_voltage=9.0
-                )
+                builder.add_power_supply(PowerSupplyDCSource, [actuator], nominal_voltage=12.0, resistance=0.5)
             else:
                 builder.add_actuator(DrivePD, index=dof, kp=1.0)
             return builder
@@ -1199,10 +1197,10 @@ class TestModelBuilderReplicate(unittest.TestCase):
         builder.add_world(robot(True))
         model = builder.finalize()
 
-        (batteries,) = model.batteries
-        np.testing.assert_array_equal(batteries.actuators.numpy(), [1, 2])
-        np.testing.assert_array_equal(batteries.actuator_start.numpy(), [0, 1, 2])
-        np.testing.assert_array_equal(batteries.world.numpy(), [1, 2])
+        (supplies,) = model.power_supplies
+        np.testing.assert_array_equal(supplies.actuators.numpy(), [1, 2])
+        np.testing.assert_array_equal(supplies.actuator_start.numpy(), [0, 1, 2])
+        np.testing.assert_array_equal(supplies.world.numpy(), [1, 2])
 
 
 @wp.kernel

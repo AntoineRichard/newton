@@ -408,11 +408,11 @@ class Actuator:
                 voltage using the actual supply voltage.
             actuator_indices: Index of each actuator into per-actuator arrays,
                 i.e. arrays with one entry per actuator of the model rather
-                than per DOF. Required when the motor draws from a battery.
+                than per DOF. Required when the motor draws from a power supply.
             control_supply_voltage_attr: Attribute on sim_control for the
-                per-actuator supply voltage the motor reads from its battery.
+                per-actuator supply voltage the motor reads from its power supply.
             control_supply_current_attr: Attribute on sim_control for the
-                per-actuator current the motor draws from its battery.
+                per-actuator current the motor draws from its power supply.
         """
         if drive is None:
             raise TypeError("Actuator() missing required argument: 'drive'")
@@ -466,9 +466,9 @@ class Actuator:
                 clamp._use_motor_parameters(motor)
         self.control_supply_voltage_attr = control_supply_voltage_attr
         self.control_supply_current_attr = control_supply_current_attr
-        self._uses_battery = motor is not None and motor.uses_battery
-        if self._uses_battery and actuator_indices is None:
-            raise ValueError(f"{type(motor).__name__} draws from a battery, which requires actuator_indices")
+        self._uses_power_supply = motor is not None and motor.uses_power_supply
+        if self._uses_power_supply and actuator_indices is None:
+            raise ValueError(f"{type(motor).__name__} draws from a power supply, which requires actuator_indices")
 
         self.device = indices.device
         self.requires_grad = requires_grad
@@ -538,12 +538,12 @@ class Actuator:
         return _input_container_class("sim_control", tuple(frequencies.items()))()
 
     def register_custom_attributes(self, builder: ModelBuilder) -> None:
-        """Register drive inputs and battery arrays as custom Newton Control attributes.
+        """Register drive inputs and power supply arrays as custom Newton Control attributes.
 
         :class:`~newton.ModelBuilder` calls this method automatically while
         finalizing its actuators. Every input declared by the drive is
         registered as a ``wp.float32`` joint-DOF array on
-        :class:`~newton.Control`. When the motor draws from a battery,
+        :class:`~newton.Control`. When the motor draws from a power supply,
         :attr:`control_supply_voltage_attr` and
         :attr:`control_supply_current_attr` are registered as per-actuator
         arrays (:attr:`~newton.Model.AttributeFrequency.ACTUATOR` frequency).
@@ -561,7 +561,7 @@ class Actuator:
         from ..sim.model import Model  # noqa: PLC0415
 
         frequencies = dict.fromkeys(self.drive.custom_inputs, Model.AttributeFrequency.JOINT_DOF)
-        if self._uses_battery:
+        if self._uses_power_supply:
             frequencies[self.control_supply_voltage_attr] = Model.AttributeFrequency.ACTUATOR
             frequencies[self.control_supply_current_attr] = Model.AttributeFrequency.ACTUATOR
         for name, frequency in frequencies.items():
@@ -700,17 +700,17 @@ class Actuator:
     def _required_attributes(self) -> dict[str, dict[str, Model.AttributeFrequency | str]]:
         """Attributes this actuator reads with their frequencies, keyed by ``sim_state`` or ``sim_control``.
 
-        Covers the standard arrays, the drive's custom inputs and the battery arrays of the motor.
+        Covers the standard arrays, the drive's custom inputs and the power supply arrays of the motor.
         """
         from ..sim.model import Model  # noqa: PLC0415
 
         frequency = Model.AttributeFrequency
-        battery_attrs = (
+        power_supply_attrs = (
             [
                 (self.control_supply_voltage_attr, frequency.ACTUATOR),
                 (self.control_supply_current_attr, frequency.ACTUATOR),
             ]
-            if self._uses_battery
+            if self._uses_power_supply
             else []
         )
         state_attrs = [(self.state_pos_attr, frequency.JOINT_COORD), (self.state_vel_attr, frequency.JOINT_DOF)]
@@ -721,7 +721,7 @@ class Actuator:
             (self.control_output_attr, frequency.JOINT_DOF),
             (self.control_computed_output_attr, frequency.JOINT_DOF),
             *((name, frequency.JOINT_DOF) for name in self.drive.custom_inputs),
-            *battery_attrs,
+            *power_supply_attrs,
         ]
         required = {"sim_state": state_attrs, "sim_control": [(a, f) for a, f in control_attrs if a is not None]}
         return {source: dict(attrs) for source, attrs in required.items() if attrs}
@@ -742,7 +742,7 @@ class Actuator:
            in list order (e.g. read delayed targets from ``current_state``),
            and write each processor's ``next_state`` (e.g. push the current
            targets into the delay buffer).
-        2. **Supply voltage** — the motor selects fixed or battery voltage
+        2. **Supply voltage** — the motor selects fixed or power-supply voltage
            for duty clamping and conversion to motor voltage.
         3. **Drive** — raw effort into ``_computed_forces`` (explicit control
            law, or the implicit end-of-step solve). With a motor, the drive
@@ -751,7 +751,7 @@ class Actuator:
            clamps after the drive law; implicit enforces them inside the
            solve.
         5. **Motor** — convert duty to motor voltage, then compute effort. A motor that
-           draws from a battery writes the current it draws.
+           draws from a power supply writes the current it draws.
         6. **Scatter-add** — *accumulate* applied (and optionally computed)
            effort into the output array.  The caller must zero the output
            (e.g. ``control.joint_f.zero_()``) before looping over actuators.
@@ -762,7 +762,7 @@ class Actuator:
                 :attr:`state_pos_attr` and :attr:`state_vel_attr`. Build one
                 with :meth:`sim_state`.
             sim_control: Object or mapping carrying the target and output
-                arrays, plus the drive's custom inputs and the battery arrays
+                arrays, plus the drive's custom inputs and the power supply arrays
                 of the motor. Build one
                 with :meth:`sim_control`.
             current_act_state: Current composed state (None if stateless).
@@ -844,13 +844,13 @@ class Actuator:
             inputs = processed
 
         # --- 2. Supply voltage from the motor ---
-        battery_voltage = supply_current = None
-        if self._uses_battery:
-            battery_voltage = _require_array(sim_control, self.control_supply_voltage_attr)
+        power_supply_voltage = supply_current = None
+        if self._uses_power_supply:
+            power_supply_voltage = _require_array(sim_control, self.control_supply_voltage_attr)
             supply_current = _require_array(sim_control, self.control_supply_current_attr)
         if self.motor is not None:
             self.motor.compute_supply_voltage(
-                battery_voltage, self.actuator_indices, supply_voltage, device=self.device
+                power_supply_voltage, self.actuator_indices, supply_voltage, device=self.device
             )
 
         # --- 3-5. Effort mode: drive, clamps, optional motor ---
