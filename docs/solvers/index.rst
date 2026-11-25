@@ -129,6 +129,15 @@ Supported Features
      - ✅
      - 🟨 basic :sup:`2`
      - ✅
+   * - :class:`~newton.solvers.SolverSmoke`
+     - Semi-Lagrangian, pressure projection
+     - ❌
+     - ❌
+     - 🟨 passive smoke tracers
+     - ❌
+     - ❌
+     - ❌
+     - ❌
    * - :class:`~newton.solvers.SolverSteel`
      - Semi-implicit, implicit drives
      - ✅
