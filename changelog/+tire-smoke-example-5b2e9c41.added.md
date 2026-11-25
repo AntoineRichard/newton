@@ -1,1 +1,1 @@
-Add a ``basic_tire_smoke`` example with a grid-based smoke solver driven by wheel slip.
+Add experimental ``SolverSmoke``: grid-based smoke driven by emitters and pushed by colliders, with tracer particles and render grains, plus a ``basic_tire_smoke`` example.

@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from .kamino import SolverKamino
     from .mujoco.solver_mujoco import SolverMuJoCo
     from .semi_implicit import SolverSemiImplicit
+    from .smoke import SolverSmoke
     from .solver import SolverBase
     from .steel import SolverSteel
     from .style3d.solver_style3d import SolverStyle3D
@@ -24,6 +25,7 @@ __all__ = [
     "SolverKamino",
     "SolverMuJoCo",
     "SolverSemiImplicit",
+    "SolverSmoke",
     "SolverSteel",
     "SolverStyle3D",
     "SolverVBD",
@@ -43,6 +45,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str | None]] = {
     "SolverKamino": (".kamino", "SolverKamino"),
     "SolverMuJoCo": (".mujoco.solver_mujoco", "SolverMuJoCo"),
     "SolverSemiImplicit": (".semi_implicit", "SolverSemiImplicit"),
+    "SolverSmoke": (".smoke", "SolverSmoke"),
     "SolverSteel": (".steel", "SolverSteel"),
     "SolverStyle3D": (".style3d.solver_style3d", "SolverStyle3D"),
     "SolverVBD": (".vbd", "SolverVBD"),
