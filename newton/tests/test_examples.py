@@ -541,6 +541,13 @@ add_basic_example_test(
 )
 
 add_basic_example_test(
+    name="basic.example_basic_tire_smoke",
+    devices=test_devices,
+    test_options={"num-frames": 60},
+    use_viewer=True,
+)
+
+add_basic_example_test(
     name="basic.example_recording",
     devices=test_devices,
     use_viewer=True,
