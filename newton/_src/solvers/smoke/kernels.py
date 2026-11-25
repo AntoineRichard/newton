@@ -3,9 +3,26 @@
 
 """Warp kernels for :class:`~newton.solvers.SolverSmoke`.
 
-The grid is a dense, axis-aligned, staggered (MAC) grid. Cell ``(i, j, k)``
-covers ``lower + h * [i, i+1] x [j, j+1] x [k, k+1]``. Velocity components
-live on the faces normal to their axis; scalars live at cell centers.
+Sparse layout
+-------------
+Space is cut into cubic cells of edge ``h``. Cells are grouped into bricks
+(tiles) of ``TILE^3`` cells, and only active tiles store data. A rebuildable
+NanoVDB *index* volume whose voxels are tiles maps a tile coordinate to its
+slot; ``neighbor[slot, 27]`` caches the slots of the 26 surrounding tiles so
+stencils avoid tree lookups.
+
+Every world has its own grid: world ``w`` is shifted by ``w * WORLD_TILE_STRIDE``
+tiles along x in index space, so worlds never share a tile.
+
+Scalars live at cell centers in ``(slot, TILE, TILE, TILE)`` arrays. Velocity is
+staggered (MAC): a tile stores the low face of each of its cells along each
+axis, plus an extra layer for its high faces, e.g. ``u`` has shape
+``(slot, TILE + 1, TILE, TILE)``. The extra layer is only used when the
+neighbor tile on that side is inactive; otherwise that face belongs to the
+neighbor's first layer.
+
+Outside the active tiles the air is still and clean with zero pressure (an
+open boundary). Below the ground plane (cell z < 0) everything is solid.
 """
 
 import warp as wp
@@ -13,7 +30,10 @@ import warp as wp
 from ...geometry.kernels import sdf_box, sdf_capsule, sdf_cone, sdf_cylinder, sdf_ellipsoid, sdf_sphere
 from ...geometry.types import Axis, GeoType
 
-# Sample offsets (in cells) of each staggered field from the grid lower corner.
+TILE = wp.constant(8)
+WORLD_TILE_STRIDE = wp.constant(1 << 17)
+INVALID_TILE = wp.constant(wp.vec3i(-(1 << 30), -(1 << 30), -(1 << 30)))
+
 OFFSET_U = wp.constant(wp.vec3(0.0, 0.5, 0.5))
 OFFSET_V = wp.constant(wp.vec3(0.5, 0.0, 0.5))
 OFFSET_W = wp.constant(wp.vec3(0.5, 0.5, 0.0))
@@ -22,54 +42,59 @@ OFFSET_C = wp.constant(wp.vec3(0.5, 0.5, 0.5))
 AXIS_Z = wp.constant(int(Axis.Z))
 
 
+@wp.struct
+class SparseGrid:
+    volume: wp.uint64
+    """Index volume whose active voxels are tiles."""
+    tile_coord: wp.array[wp.vec3i]
+    """Tile coordinate of each slot (world offset included); ``INVALID_TILE`` past the active count."""
+    neighbor: wp.array2d[wp.int32]
+    """Slots of the 27 tiles around each slot (``-1`` if inactive)."""
+    origin: wp.vec3
+    """World position of cell (0, 0, 0)'s lower corner [m]; its z is the ground height."""
+    h: float
+    """Cell edge length [m]."""
+
+
 # ---------------------------------------------------------------------------
-# Grid helpers
+# Index helpers
 # ---------------------------------------------------------------------------
 
 
 @wp.func
-def sample_grid(f: wp.array3d[float], g: wp.vec3) -> float:
-    """Trilinearly sample ``f`` at index-space coordinate ``g``, clamped to the array."""
-    nx = f.shape[0]
-    ny = f.shape[1]
-    nz = f.shape[2]
-    x = wp.clamp(g[0], 0.0, float(nx - 1))
-    y = wp.clamp(g[1], 0.0, float(ny - 1))
-    z = wp.clamp(g[2], 0.0, float(nz - 1))
-    i = wp.min(int(x), nx - 2)
-    j = wp.min(int(y), ny - 2)
-    k = wp.min(int(z), nz - 2)
-    fx = x - float(i)
-    fy = y - float(j)
-    fz = z - float(k)
-    c00 = wp.lerp(f[i, j, k], f[i + 1, j, k], fx)
-    c10 = wp.lerp(f[i, j + 1, k], f[i + 1, j + 1, k], fx)
-    c01 = wp.lerp(f[i, j, k + 1], f[i + 1, j, k + 1], fx)
-    c11 = wp.lerp(f[i, j + 1, k + 1], f[i + 1, j + 1, k + 1], fx)
-    return wp.lerp(wp.lerp(c00, c10, fy), wp.lerp(c01, c11, fy), fz)
+def floor_div(a: int, b: int) -> int:
+    return a // b  # Warp's // floors; / truncates toward zero
 
 
 @wp.func
-def sample_velocity(
-    u: wp.array3d[float],
-    v: wp.array3d[float],
-    w: wp.array3d[float],
-    lower: wp.vec3,
-    inv_h: float,
-    p: wp.vec3,
-) -> wp.vec3:
-    """Sample the staggered velocity field at world position ``p``."""
-    q = (p - lower) * inv_h
-    return wp.vec3(sample_grid(u, q - OFFSET_U), sample_grid(v, q - OFFSET_V), sample_grid(w, q - OFFSET_W))
+def tile_of(g: wp.vec3i) -> wp.vec3i:
+    return wp.vec3i(floor_div(g[0], TILE), floor_div(g[1], TILE), floor_div(g[2], TILE))
 
 
 @wp.func
-def axis_offset(axis: int) -> wp.vec3:
-    if axis == 0:
-        return OFFSET_U
-    if axis == 1:
-        return OFFSET_V
-    return OFFSET_W
+def world_offset(world: int) -> wp.vec3i:
+    """Index-space cell offset of a world's grid."""
+    return wp.vec3i(world * WORLD_TILE_STRIDE * TILE, 0, 0)
+
+
+@wp.func
+def tile_world(t: wp.vec3i) -> int:
+    return floor_div(t[0] + WORLD_TILE_STRIDE / 2, WORLD_TILE_STRIDE)
+
+
+@wp.func
+def slot_valid(grid: SparseGrid, slot: int) -> bool:
+    """Whether ``slot`` holds an active tile; slots past the active count are unused."""
+    return grid.tile_coord[slot][0] != INVALID_TILE[0]
+
+
+@wp.func
+def find_slot(grid: SparseGrid, ctx_slot: int, ctx_tile: wp.vec3i, t: wp.vec3i) -> int:
+    """Slot of tile ``t``, using ``ctx_slot``'s neighbor table when ``t`` is adjacent to ``ctx_tile``."""
+    d = t - ctx_tile
+    if ctx_slot >= 0 and wp.abs(d[0]) <= 1 and wp.abs(d[1]) <= 1 and wp.abs(d[2]) <= 1:
+        return grid.neighbor[ctx_slot, (d[0] + 1) * 9 + (d[1] + 1) * 3 + (d[2] + 1)]
+    return wp.volume_lookup_index(grid.volume, t[0], t[1], t[2])
 
 
 @wp.func
@@ -82,26 +107,362 @@ def axis_step(axis: int) -> wp.vec3i:
 
 
 @wp.func
-def in_grid(shape: wp.vec3i, i: int, j: int, k: int) -> bool:
-    return i >= 0 and j >= 0 and k >= 0 and i < shape[0] and j < shape[1] and k < shape[2]
+def axis_offset(axis: int) -> wp.vec3:
+    if axis == 0:
+        return OFFSET_U
+    if axis == 1:
+        return OFFSET_V
+    return OFFSET_W
 
 
 @wp.func
-def is_solid(solid: wp.array3d[wp.int32], i: int, j: int, k: int) -> bool:
-    """Below the grid is ground (solid); the sides and the top of the grid are open air."""
-    if k < 0:
-        return True
-    if not in_grid(wp.vec3i(solid.shape[0], solid.shape[1], solid.shape[2]), i, j, k):
+def cell_position(grid: SparseGrid, g: wp.vec3i, world: int, offset: wp.vec3) -> wp.vec3:
+    """World position [m] of a sample at ``offset`` (in cells) from cell ``g``'s lower corner."""
+    local = g - world_offset(world)
+    return grid.origin + (wp.vec3(float(local[0]), float(local[1]), float(local[2])) + offset) * grid.h
+
+
+@wp.func
+def thread_cell(grid: SparseGrid, slot: int, i: int, j: int, k: int) -> wp.vec3i:
+    return grid.tile_coord[slot] * TILE + wp.vec3i(i, j, k)
+
+
+# ---------------------------------------------------------------------------
+# Field access
+# ---------------------------------------------------------------------------
+
+
+@wp.func
+def read_cell(
+    grid: SparseGrid, f: wp.array4d[float], g: wp.vec3i, ctx_slot: int, ctx_tile: wp.vec3i, outside: float
+) -> float:
+    t = tile_of(g)
+    s = find_slot(grid, ctx_slot, ctx_tile, t)
+    if s < 0:
+        return outside
+    l = g - t * TILE
+    return f[s, l[0], l[1], l[2]]
+
+
+@wp.func
+def read_face(
+    grid: SparseGrid, f: wp.array4d[float], axis: int, g: wp.vec3i, ctx_slot: int, ctx_tile: wp.vec3i
+) -> float:
+    """Velocity on the low face of cell ``g`` along ``axis`` (zero outside the active tiles)."""
+    t = tile_of(g)
+    l = g - t * TILE
+    s = find_slot(grid, ctx_slot, ctx_tile, t)
+    if s >= 0:
+        return f[s, l[0], l[1], l[2]]
+    if l[axis] == 0:
+        # The face may be the high boundary face of the tile below.
+        e = axis_step(axis)
+        s = find_slot(grid, ctx_slot, ctx_tile, t - e)
+        if s >= 0:
+            l = l + e * TILE
+            return f[s, l[0], l[1], l[2]]
+    return 0.0
+
+
+@wp.func
+def is_solid(grid: SparseGrid, solid: wp.array4d[wp.int32], g: wp.vec3i, ctx_slot: int, ctx_tile: wp.vec3i) -> bool:
+    if g[2] < 0:
+        return True  # ground
+    t = tile_of(g)
+    s = find_slot(grid, ctx_slot, ctx_tile, t)
+    if s < 0:
         return False
-    return solid[i, j, k] != 0
+    l = g - t * TILE
+    return solid[s, l[0], l[1], l[2]] != 0
 
 
 @wp.func
-def pressure_at(p: wp.array3d[float], i: int, j: int, k: int) -> float:
-    """Pressure outside the grid is zero (open boundary)."""
-    if not in_grid(wp.vec3i(p.shape[0], p.shape[1], p.shape[2]), i, j, k):
-        return 0.0
-    return p[i, j, k]
+def floor_index(q: wp.vec3) -> wp.vec3i:
+    return wp.vec3i(int(wp.floor(q[0])), int(wp.floor(q[1])), int(wp.floor(q[2])))
+
+
+@wp.func
+def sample_scalar(
+    grid: SparseGrid,
+    f: wp.array4d[float],
+    world: int,
+    q: wp.vec3,
+    ctx_slot: int,
+    ctx_tile: wp.vec3i,
+) -> float:
+    """Trilinear sample at local index-space position ``q`` (cell-center samples at integer ``q``)."""
+    base = floor_index(q)
+    fr = q - wp.vec3(float(base[0]), float(base[1]), float(base[2]))
+    g = base + world_offset(world)
+    c000 = read_cell(grid, f, g, ctx_slot, ctx_tile, 0.0)
+    c100 = read_cell(grid, f, g + wp.vec3i(1, 0, 0), ctx_slot, ctx_tile, 0.0)
+    c010 = read_cell(grid, f, g + wp.vec3i(0, 1, 0), ctx_slot, ctx_tile, 0.0)
+    c110 = read_cell(grid, f, g + wp.vec3i(1, 1, 0), ctx_slot, ctx_tile, 0.0)
+    c001 = read_cell(grid, f, g + wp.vec3i(0, 0, 1), ctx_slot, ctx_tile, 0.0)
+    c101 = read_cell(grid, f, g + wp.vec3i(1, 0, 1), ctx_slot, ctx_tile, 0.0)
+    c011 = read_cell(grid, f, g + wp.vec3i(0, 1, 1), ctx_slot, ctx_tile, 0.0)
+    c111 = read_cell(grid, f, g + wp.vec3i(1, 1, 1), ctx_slot, ctx_tile, 0.0)
+    c00 = wp.lerp(c000, c100, fr[0])
+    c10 = wp.lerp(c010, c110, fr[0])
+    c01 = wp.lerp(c001, c101, fr[0])
+    c11 = wp.lerp(c011, c111, fr[0])
+    return wp.lerp(wp.lerp(c00, c10, fr[1]), wp.lerp(c01, c11, fr[1]), fr[2])
+
+
+@wp.func
+def sample_face(
+    grid: SparseGrid,
+    f: wp.array4d[float],
+    axis: int,
+    world: int,
+    q: wp.vec3,
+    ctx_slot: int,
+    ctx_tile: wp.vec3i,
+) -> float:
+    base = floor_index(q)
+    fr = q - wp.vec3(float(base[0]), float(base[1]), float(base[2]))
+    g = base + world_offset(world)
+    c000 = read_face(grid, f, axis, g, ctx_slot, ctx_tile)
+    c100 = read_face(grid, f, axis, g + wp.vec3i(1, 0, 0), ctx_slot, ctx_tile)
+    c010 = read_face(grid, f, axis, g + wp.vec3i(0, 1, 0), ctx_slot, ctx_tile)
+    c110 = read_face(grid, f, axis, g + wp.vec3i(1, 1, 0), ctx_slot, ctx_tile)
+    c001 = read_face(grid, f, axis, g + wp.vec3i(0, 0, 1), ctx_slot, ctx_tile)
+    c101 = read_face(grid, f, axis, g + wp.vec3i(1, 0, 1), ctx_slot, ctx_tile)
+    c011 = read_face(grid, f, axis, g + wp.vec3i(0, 1, 1), ctx_slot, ctx_tile)
+    c111 = read_face(grid, f, axis, g + wp.vec3i(1, 1, 1), ctx_slot, ctx_tile)
+    c00 = wp.lerp(c000, c100, fr[0])
+    c10 = wp.lerp(c010, c110, fr[0])
+    c01 = wp.lerp(c001, c101, fr[0])
+    c11 = wp.lerp(c011, c111, fr[0])
+    return wp.lerp(wp.lerp(c00, c10, fr[1]), wp.lerp(c01, c11, fr[1]), fr[2])
+
+
+@wp.func
+def local_index(grid: SparseGrid, p: wp.vec3) -> wp.vec3:
+    """Local (per-world) index-space position of world point ``p``."""
+    return (p - grid.origin) / grid.h
+
+
+@wp.func
+def sample_velocity(
+    grid: SparseGrid,
+    u: wp.array4d[float],
+    v: wp.array4d[float],
+    w: wp.array4d[float],
+    world: int,
+    p: wp.vec3,
+    ctx_slot: int,
+    ctx_tile: wp.vec3i,
+) -> wp.vec3:
+    q = local_index(grid, p)
+    return wp.vec3(
+        sample_face(grid, u, 0, world, q - OFFSET_U, ctx_slot, ctx_tile),
+        sample_face(grid, v, 1, world, q - OFFSET_V, ctx_slot, ctx_tile),
+        sample_face(grid, w, 2, world, q - OFFSET_W, ctx_slot, ctx_tile),
+    )
+
+
+@wp.func
+def point_tile(grid: SparseGrid, world: int, p: wp.vec3) -> wp.vec3i:
+    return tile_of(floor_index(local_index(grid, p)) + world_offset(world))
+
+
+@wp.func
+def face_owned(grid: SparseGrid, slot: int, axis: int, fi: int, fj: int, fk: int) -> bool:
+    """Whether this tile stores face ``(fi, fj, fk)``; the extra layer is owned only at the active-region boundary."""
+    f = wp.vec3i(fi, fj, fk)
+    if f[axis] < TILE:
+        return True
+    d = axis_step(axis)
+    return grid.neighbor[slot, (d[0] + 1) * 9 + (d[1] + 1) * 3 + (d[2] + 1)] < 0
+
+
+# ---------------------------------------------------------------------------
+# Topology: activation, rebuild bookkeeping, remap
+# ---------------------------------------------------------------------------
+
+
+@wp.func
+def write_activation(points: wp.array[wp.vec3i], mask: wp.array[wp.int32], index: int, t: wp.vec3i, active: bool):
+    points[index] = t
+    # Tiles fully below ground hold only solid cells and are never stored.
+    mask[index] = wp.where(active and t[2] >= 0 and tile_world(t) >= 0, 1, 0)
+
+
+@wp.kernel
+def activate_boxes_kernel(
+    grid: SparseGrid,
+    centers: wp.array[wp.vec3],
+    radii: wp.array[float],
+    worlds: wp.array[wp.int32],
+    active: wp.array[wp.int32],
+    padding: float,
+    offset: int,
+    points: wp.array[wp.vec3i],
+    mask: wp.array[wp.int32],
+):
+    """Activate the bricks (up to 3 per axis) under a padded box around each point."""
+    n, c = wp.tid()
+    r = radii[n] + padding
+    world = wp.max(worlds[n], 0)
+    lo = point_tile(grid, world, centers[n] - wp.vec3(r))
+    hi = point_tile(grid, world, centers[n] + wp.vec3(r))
+    t = lo + wp.vec3i(c // 9, (c // 3) % 3, c % 3)
+    in_box = t[0] <= hi[0] and t[1] <= hi[1] and t[2] <= hi[2]
+    write_activation(points, mask, offset + n * 27 + c, t, active[n] != 0 and in_box)
+
+
+@wp.kernel
+def tracer_activation_inputs_kernel(
+    particle_age: wp.array[float],
+    lifetime: float,
+    active: wp.array[wp.int32],
+):
+    tid = wp.tid()
+    active[tid] = wp.where(particle_age[tid] < lifetime, 1, 0)
+
+
+@wp.kernel
+def emitter_activation_inputs_kernel(
+    emitter_rate: wp.array[float],
+    emitter_heat_rate: wp.array[float],
+    active: wp.array[wp.int32],
+):
+    tid = wp.tid()
+    active[tid] = wp.where(emitter_rate[tid] > 0.0 or emitter_heat_rate[tid] > 0.0, 1, 0)
+
+
+@wp.kernel
+def activate_colliders_kernel(
+    grid: SparseGrid,
+    shapes: wp.array[wp.int32],
+    shape_body: wp.array[wp.int32],
+    shape_transform: wp.array[wp.transform],
+    shape_radius: wp.array[float],
+    shape_world: wp.array[wp.int32],
+    body_q: wp.array[wp.transform],
+    padding: float,
+    offset: int,
+    points: wp.array[wp.vec3i],
+    mask: wp.array[wp.int32],
+):
+    """Activate up to 4x4x4 tiles around each moving collider so the air it pushes is simulated."""
+    n, a, b, c = wp.tid()
+    s = shapes[n]
+    body = shape_body[s]
+    index = offset + ((n * 4 + a) * 4 + b) * 4 + c
+    if body < 0:
+        write_activation(points, mask, index, wp.vec3i(0), False)
+        return
+    X = wp.transform_multiply(body_q[body], shape_transform[s])
+    center = wp.transform_get_translation(X)
+    world = wp.max(shape_world[s], 0)
+    r = shape_radius[s] + padding
+    lo = point_tile(grid, world, center - wp.vec3(r))
+    hi = point_tile(grid, world, center + wp.vec3(r))
+    t = lo + wp.vec3i(a, b, c)
+    in_range = t[0] <= hi[0] and t[1] <= hi[1] and t[2] <= hi[2]
+    write_activation(points, mask, index, t, in_range)
+
+
+@wp.kernel
+def mark_content_kernel(
+    grid: SparseGrid,
+    density: wp.array4d[float],
+    temperature: wp.array4d[float],
+    u: wp.array4d[float],
+    v: wp.array4d[float],
+    w: wp.array4d[float],
+    smoke_threshold: float,
+    speed_threshold: float,
+    content: wp.array[wp.int32],
+):
+    """Flag tiles holding smoke or heat (2) or only moving air (1)."""
+    slot, i, j, k = wp.tid()
+    if not slot_valid(grid, slot):
+        return
+    if density[slot, i, j, k] > smoke_threshold or wp.abs(temperature[slot, i, j, k]) > smoke_threshold:
+        wp.atomic_max(content, slot, 2)
+    elif (
+        wp.abs(u[slot, i, j, k]) > speed_threshold
+        or wp.abs(v[slot, i, j, k]) > speed_threshold
+        or wp.abs(w[slot, i, j, k]) > speed_threshold
+    ):
+        wp.atomic_max(content, slot, 1)
+
+
+@wp.kernel
+def activate_content_kernel(
+    grid: SparseGrid,
+    content: wp.array[wp.int32],
+    offset: int,
+    points: wp.array[wp.vec3i],
+    mask: wp.array[wp.int32],
+):
+    """Keep tiles with smoke and their 26 neighbors active, and tiles with only moving air alone.
+
+    Moving air does not grow the region: the pressure solve spreads small velocities
+    everywhere, so dilating around them would grow the region every step.
+    """
+    slot, n = wp.tid()
+    index = offset + slot * 27 + n
+    level = 0
+    if slot_valid(grid, slot):
+        level = content[slot]
+    d = wp.vec3i(n // 9 - 1, (n // 3) % 3 - 1, n % 3 - 1)
+    keep = level == 2 or (level == 1 and n == 13)
+    write_activation(points, mask, index, grid.tile_coord[slot] + d, keep)
+
+
+@wp.kernel
+def anchor_worlds_kernel(offset: int, points: wp.array[wp.vec3i], mask: wp.array[wp.int32]):
+    """Keep one tile per world active so the volume is never empty."""
+    world = wp.tid()
+    write_activation(points, mask, offset + world, wp.vec3i(world * WORLD_TILE_STRIDE, 0, 0), True)
+
+
+@wp.kernel
+def assign_tile_coords_kernel(
+    volume: wp.uint64,
+    points: wp.array[wp.vec3i],
+    mask: wp.array[wp.int32],
+    tile_coord: wp.array[wp.vec3i],
+):
+    tid = wp.tid()
+    if mask[tid] == 0:
+        return
+    t = points[tid]
+    slot = wp.volume_lookup_index(volume, t[0], t[1], t[2])
+    if slot >= 0:
+        tile_coord[slot] = t
+
+
+@wp.kernel
+def build_neighbors_kernel(grid: SparseGrid, neighbor: wp.array2d[wp.int32]):
+    slot, n = wp.tid()
+    if not slot_valid(grid, slot):
+        neighbor[slot, n] = -1
+        return
+    d = wp.vec3i(n // 9 - 1, (n // 3) % 3 - 1, n % 3 - 1)
+    t = grid.tile_coord[slot] + d
+    neighbor[slot, n] = wp.volume_lookup_index(grid.volume, t[0], t[1], t[2])
+
+
+@wp.kernel
+def remap_field_kernel(
+    volume: wp.uint64,
+    old_tile_coord: wp.array[wp.vec3i],
+    src: wp.array4d[float],
+    dst: wp.array4d[float],
+):
+    """Move each surviving tile's data from its old slot to its new slot."""
+    slot, i, j, k = wp.tid()
+    t = old_tile_coord[slot]
+    if t[0] == INVALID_TILE[0]:
+        return
+    s = wp.volume_lookup_index(volume, t[0], t[1], t[2])
+    if s >= 0:
+        dst[s, i, j, k] = src[slot, i, j, k]
 
 
 # ---------------------------------------------------------------------------
@@ -134,9 +495,9 @@ def shape_signed_distance(geo_type: int, scale: wp.vec3, mesh: wp.uint64, x: wp.
 
 @wp.kernel
 def rasterize_colliders_kernel(
-    lower: wp.vec3,
-    h: float,
-    collider_shapes: wp.array[wp.int32],
+    grid: SparseGrid,
+    world_shape_start: wp.array[wp.int32],
+    world_shapes: wp.array[wp.int32],
     shape_body: wp.array[wp.int32],
     shape_transform: wp.array[wp.transform],
     shape_type: wp.array[wp.int32],
@@ -146,91 +507,129 @@ def rasterize_colliders_kernel(
     body_q: wp.array[wp.transform],
     body_qd: wp.array[wp.spatial_vector],
     body_com: wp.array[wp.vec3],
-    solid: wp.array3d[wp.int32],
-    solid_velocity: wp.array3d[wp.vec3],
+    solid: wp.array4d[wp.int32],
+    solid_velocity: wp.array4d[wp.vec3],
 ):
-    i, j, k = wp.tid()
-    p = lower + (wp.vec3(float(i), float(j), float(k)) + OFFSET_C) * h
-    cell_reach = 0.87 * h  # half the cell diagonal
-    for c in range(collider_shapes.shape[0]):
-        s = collider_shapes[c]
+    slot, i, j, k = wp.tid()
+    if not slot_valid(grid, slot):
+        return
+    g = thread_cell(grid, slot, i, j, k)
+    world = tile_world(grid.tile_coord[slot])
+    p = cell_position(grid, g, world, OFFSET_C)
+    reach = 0.87 * grid.h  # half the cell diagonal
+    for c in range(world_shape_start[world], world_shape_start[world + 1]):
+        s = world_shapes[c]
         b = shape_body[s]
         X_wb = wp.transform_identity()
         if b >= 0:
             X_wb = body_q[b]
         X_ws = wp.transform_multiply(X_wb, shape_transform[s])
-        if wp.length(p - wp.transform_get_translation(X_ws)) > shape_radius[s] + cell_reach:
+        if wp.length(p - wp.transform_get_translation(X_ws)) > shape_radius[s] + reach:
             continue
         x_local = wp.transform_point(wp.transform_inverse(X_ws), p)
-        if shape_signed_distance(shape_type[s], shape_scale[s], shape_source_ptr[s], x_local, cell_reach) < 0.0:
+        if shape_signed_distance(shape_type[s], shape_scale[s], shape_source_ptr[s], x_local, reach) < 0.0:
             vel = wp.vec3(0.0)
             if b >= 0:
-                com = wp.transform_point(X_wb, body_com[b])
                 qd = body_qd[b]
-                vel = wp.spatial_top(qd) + wp.cross(wp.spatial_bottom(qd), p - com)
-            solid[i, j, k] = 1
-            solid_velocity[i, j, k] = vel
+                vel = wp.spatial_top(qd) + wp.cross(wp.spatial_bottom(qd), p - wp.transform_point(X_wb, body_com[b]))
+            solid[slot, i, j, k] = 1
+            solid_velocity[slot, i, j, k] = vel
             return
-    solid[i, j, k] = 0
-    solid_velocity[i, j, k] = wp.vec3(0.0)
+    solid[slot, i, j, k] = 0
+    solid_velocity[slot, i, j, k] = wp.vec3(0.0)
 
 
 @wp.kernel
 def enforce_solid_faces_kernel(
-    vel: wp.array3d[float],
+    grid: SparseGrid,
+    vel: wp.array4d[float],
     axis: int,
-    solid: wp.array3d[wp.int32],
-    solid_velocity: wp.array3d[wp.vec3],
+    solid: wp.array4d[wp.int32],
+    solid_velocity: wp.array4d[wp.vec3],
 ):
-    """Set faces touching a solid cell to the solid's velocity (no-through-flow)."""
-    i, j, k = wp.tid()
-    s = axis_step(axis)
-    i0 = i - s[0]
-    j0 = j - s[1]
-    k0 = k - s[2]
-    if axis == 2 and k == 0:
-        vel[i, j, k] = 0.0  # ground
+    """Set faces touching a solid cell to the solid's velocity (no flow through solids)."""
+    slot, fi, fj, fk = wp.tid()
+    if not slot_valid(grid, slot) or not face_owned(grid, slot, axis, fi, fj, fk):
         return
-    s1 = is_solid(solid, i, j, k)
-    s0 = is_solid(solid, i0, j0, k0)
+    tile = grid.tile_coord[slot]
+    g = tile * TILE + wp.vec3i(fi, fj, fk)
+    e = axis_step(axis)
+    if axis == 2 and g[2] == 0:
+        vel[slot, fi, fj, fk] = 0.0  # ground
+        return
+    s1 = is_solid(grid, solid, g, slot, tile)
+    s0 = is_solid(grid, solid, g - e, slot, tile)
     if not s0 and not s1:
         return
     total = wp.vec3(0.0)
     count = float(0.0)
     if s0:
-        total += solid_velocity[i0, j0, k0]
-        count += 1.0
+        t0 = tile_of(g - e)
+        l0 = g - e - t0 * TILE
+        n0 = find_slot(grid, slot, tile, t0)
+        if n0 >= 0:
+            total += solid_velocity[n0, l0[0], l0[1], l0[2]]
+            count += 1.0
     if s1:
-        total += solid_velocity[i, j, k]
-        count += 1.0
-    vel[i, j, k] = total[axis] / count
+        t1 = tile_of(g)
+        n1 = find_slot(grid, slot, tile, t1)
+        if n1 >= 0:
+            l1 = g - t1 * TILE
+            total += solid_velocity[n1, l1[0], l1[1], l1[2]]
+            count += 1.0
+    if count > 0.0:
+        vel[slot, fi, fj, fk] = total[axis] / count
 
 
 # ---------------------------------------------------------------------------
-# Advection, sources and forces
+# Advection, emitters, forces
 # ---------------------------------------------------------------------------
 
 
 @wp.kernel
-def advect_kernel(
-    src: wp.array3d[float],
-    u: wp.array3d[float],
-    v: wp.array3d[float],
-    w: wp.array3d[float],
-    lower: wp.vec3,
-    h: float,
-    offset: wp.vec3,
+def advect_face_kernel(
+    grid: SparseGrid,
+    src: wp.array4d[float],
+    axis: int,
+    u: wp.array4d[float],
+    v: wp.array4d[float],
+    w: wp.array4d[float],
     dt: float,
     decay: float,
-    dst: wp.array3d[float],
+    dst: wp.array4d[float],
 ):
-    """Semi-Lagrangian advection with an RK2 backtrace."""
-    i, j, k = wp.tid()
-    inv_h = 1.0 / h
-    p = lower + (wp.vec3(float(i), float(j), float(k)) + offset) * h
-    mid = p - 0.5 * dt * sample_velocity(u, v, w, lower, inv_h, p)
-    back = p - dt * sample_velocity(u, v, w, lower, inv_h, mid)
-    dst[i, j, k] = decay * sample_grid(src, (back - lower) * inv_h - offset)
+    slot, fi, fj, fk = wp.tid()
+    if not slot_valid(grid, slot) or not face_owned(grid, slot, axis, fi, fj, fk):
+        return
+    tile = grid.tile_coord[slot]
+    world = tile_world(tile)
+    offset = axis_offset(axis)
+    p = cell_position(grid, tile * TILE + wp.vec3i(fi, fj, fk), world, offset)
+    mid = p - 0.5 * dt * sample_velocity(grid, u, v, w, world, p, slot, tile)
+    back = p - dt * sample_velocity(grid, u, v, w, world, mid, slot, tile)
+    dst[slot, fi, fj, fk] = decay * sample_face(grid, src, axis, world, local_index(grid, back) - offset, slot, tile)
+
+
+@wp.kernel
+def advect_cell_kernel(
+    grid: SparseGrid,
+    src: wp.array4d[float],
+    u: wp.array4d[float],
+    v: wp.array4d[float],
+    w: wp.array4d[float],
+    dt: float,
+    decay: float,
+    dst: wp.array4d[float],
+):
+    slot, i, j, k = wp.tid()
+    if not slot_valid(grid, slot):
+        return
+    tile = grid.tile_coord[slot]
+    world = tile_world(tile)
+    p = cell_position(grid, tile * TILE + wp.vec3i(i, j, k), world, OFFSET_C)
+    mid = p - 0.5 * dt * sample_velocity(grid, u, v, w, world, p, slot, tile)
+    back = p - dt * sample_velocity(grid, u, v, w, world, mid, slot, tile)
+    dst[slot, i, j, k] = decay * sample_scalar(grid, src, world, local_index(grid, back) - OFFSET_C, slot, tile)
 
 
 @wp.func
@@ -240,35 +639,42 @@ def emitter_falloff(p: wp.vec3, center: wp.vec3, radius: float) -> float:
 
 @wp.kernel
 def emit_scalars_kernel(
-    lower: wp.vec3,
-    h: float,
+    grid: SparseGrid,
+    world_emitter_start: wp.array[wp.int32],
+    world_emitters: wp.array[wp.int32],
     emitter_position: wp.array[wp.vec3],
     emitter_radius: wp.array[float],
     emitter_rate: wp.array[float],
     emitter_heat_rate: wp.array[float],
     dt: float,
-    density: wp.array3d[float],
-    temperature: wp.array3d[float],
+    density: wp.array4d[float],
+    temperature: wp.array4d[float],
 ):
-    i, j, k = wp.tid()
-    p = lower + (wp.vec3(float(i), float(j), float(k)) + OFFSET_C) * h
+    slot, i, j, k = wp.tid()
+    if not slot_valid(grid, slot):
+        return
+    tile = grid.tile_coord[slot]
+    world = tile_world(tile)
+    p = cell_position(grid, tile * TILE + wp.vec3i(i, j, k), world, OFFSET_C)
     add_density = float(0.0)
     add_heat = float(0.0)
-    for e in range(emitter_position.shape[0]):
+    for c in range(world_emitter_start[world], world_emitter_start[world + 1]):
+        e = world_emitters[c]
         f = emitter_falloff(p, emitter_position[e], emitter_radius[e])
         add_density += f * emitter_rate[e]
         add_heat += f * emitter_heat_rate[e]
     if add_density != 0.0 or add_heat != 0.0:
-        density[i, j, k] = wp.max(density[i, j, k] + dt * add_density, 0.0)
-        temperature[i, j, k] = temperature[i, j, k] + dt * add_heat
+        density[slot, i, j, k] = wp.max(density[slot, i, j, k] + dt * add_density, 0.0)
+        temperature[slot, i, j, k] = temperature[slot, i, j, k] + dt * add_heat
 
 
 @wp.kernel
 def emit_velocity_kernel(
-    vel: wp.array3d[float],
+    grid: SparseGrid,
+    vel: wp.array4d[float],
     axis: int,
-    lower: wp.vec3,
-    h: float,
+    world_emitter_start: wp.array[wp.int32],
+    world_emitters: wp.array[wp.int32],
     emitter_position: wp.array[wp.vec3],
     emitter_radius: wp.array[float],
     emitter_rate: wp.array[float],
@@ -276,105 +682,150 @@ def emit_velocity_kernel(
     coupling: float,
 ):
     """Pull the air near active emitters toward the emitter velocity."""
-    i, j, k = wp.tid()
-    p = lower + (wp.vec3(float(i), float(j), float(k)) + axis_offset(axis)) * h
-    for e in range(emitter_position.shape[0]):
+    slot, fi, fj, fk = wp.tid()
+    if not slot_valid(grid, slot) or not face_owned(grid, slot, axis, fi, fj, fk):
+        return
+    tile = grid.tile_coord[slot]
+    world = tile_world(tile)
+    p = cell_position(grid, tile * TILE + wp.vec3i(fi, fj, fk), world, axis_offset(axis))
+    for c in range(world_emitter_start[world], world_emitter_start[world + 1]):
+        e = world_emitters[c]
         if emitter_rate[e] <= 0.0:
             continue
         f = emitter_falloff(p, emitter_position[e], emitter_radius[e]) * coupling
         if f > 0.0:
-            vel[i, j, k] = wp.lerp(vel[i, j, k], emitter_velocity[e][axis], wp.min(f, 1.0))
+            vel[slot, fi, fj, fk] = wp.lerp(vel[slot, fi, fj, fk], emitter_velocity[e][axis], wp.min(f, 1.0))
 
 
 @wp.kernel
 def buoyancy_kernel(
-    density: wp.array3d[float],
-    temperature: wp.array3d[float],
+    grid: SparseGrid,
+    density: wp.array4d[float],
+    temperature: wp.array4d[float],
     density_weight: float,
     temperature_lift: float,
     dt: float,
-    w: wp.array3d[float],
+    w: wp.array4d[float],
 ):
-    i, j, k = wp.tid()
-    nz = density.shape[2]
-    k0 = wp.max(k - 1, 0)
-    k1 = wp.min(k, nz - 1)
-    rho = 0.5 * (density[i, j, k0] + density[i, j, k1])
-    temp = 0.5 * (temperature[i, j, k0] + temperature[i, j, k1])
-    w[i, j, k] = w[i, j, k] + dt * (temperature_lift * temp - density_weight * rho)
+    slot, fi, fj, fk = wp.tid()
+    if not slot_valid(grid, slot) or not face_owned(grid, slot, 2, fi, fj, fk):
+        return
+    tile = grid.tile_coord[slot]
+    g = tile * TILE + wp.vec3i(fi, fj, fk)
+    below = g - wp.vec3i(0, 0, 1)
+    rho = 0.5 * (read_cell(grid, density, g, slot, tile, 0.0) + read_cell(grid, density, below, slot, tile, 0.0))
+    temp = 0.5 * (
+        read_cell(grid, temperature, g, slot, tile, 0.0) + read_cell(grid, temperature, below, slot, tile, 0.0)
+    )
+    w[slot, fi, fj, fk] = w[slot, fi, fj, fk] + dt * (temperature_lift * temp - density_weight * rho)
 
 
 @wp.kernel
 def center_velocity_kernel(
-    u: wp.array3d[float],
-    v: wp.array3d[float],
-    w: wp.array3d[float],
-    out: wp.array3d[wp.vec3],
+    grid: SparseGrid,
+    u: wp.array4d[float],
+    v: wp.array4d[float],
+    w: wp.array4d[float],
+    out: wp.array4d[wp.vec3],
 ):
-    i, j, k = wp.tid()
-    out[i, j, k] = 0.5 * wp.vec3(u[i, j, k] + u[i + 1, j, k], v[i, j, k] + v[i, j + 1, k], w[i, j, k] + w[i, j, k + 1])
+    slot, i, j, k = wp.tid()
+    if not slot_valid(grid, slot):
+        return
+    tile = grid.tile_coord[slot]
+    g = tile * TILE + wp.vec3i(i, j, k)
+    out[slot, i, j, k] = 0.5 * wp.vec3(
+        u[slot, i, j, k] + read_face(grid, u, 0, g + wp.vec3i(1, 0, 0), slot, tile),
+        v[slot, i, j, k] + read_face(grid, v, 1, g + wp.vec3i(0, 1, 0), slot, tile),
+        w[slot, i, j, k] + read_face(grid, w, 2, g + wp.vec3i(0, 0, 1), slot, tile),
+    )
 
 
 @wp.func
-def central_diff(f: wp.array3d[wp.vec3], i: int, j: int, k: int, axis: int, h: float) -> wp.vec3:
-    s = axis_step(axis)
-    lo = wp.vec3i(wp.max(i - s[0], 0), wp.max(j - s[1], 0), wp.max(k - s[2], 0))
-    hi = wp.vec3i(wp.min(i + s[0], f.shape[0] - 1), wp.min(j + s[1], f.shape[1] - 1), wp.min(k + s[2], f.shape[2] - 1))
-    span = float(hi[axis] - lo[axis]) * h
-    if span == 0.0:
+def read_vec(grid: SparseGrid, f: wp.array4d[wp.vec3], g: wp.vec3i, ctx_slot: int, ctx_tile: wp.vec3i) -> wp.vec3:
+    t = tile_of(g)
+    s = find_slot(grid, ctx_slot, ctx_tile, t)
+    if s < 0:
         return wp.vec3(0.0)
-    return (f[hi[0], hi[1], hi[2]] - f[lo[0], lo[1], lo[2]]) / span
+    l = g - t * TILE
+    return f[s, l[0], l[1], l[2]]
 
 
 @wp.kernel
-def curl_kernel(vel: wp.array3d[wp.vec3], h: float, curl: wp.array3d[wp.vec3], curl_mag: wp.array3d[float]):
-    i, j, k = wp.tid()
-    dx = central_diff(vel, i, j, k, 0, h)
-    dy = central_diff(vel, i, j, k, 1, h)
-    dz = central_diff(vel, i, j, k, 2, h)
+def curl_kernel(
+    grid: SparseGrid,
+    vel: wp.array4d[wp.vec3],
+    curl: wp.array4d[wp.vec3],
+    curl_mag: wp.array4d[float],
+):
+    slot, i, j, k = wp.tid()
+    if not slot_valid(grid, slot):
+        return
+    tile = grid.tile_coord[slot]
+    g = tile * TILE + wp.vec3i(i, j, k)
+    s = 0.5 / grid.h
+    dx = (
+        read_vec(grid, vel, g + wp.vec3i(1, 0, 0), slot, tile) - read_vec(grid, vel, g - wp.vec3i(1, 0, 0), slot, tile)
+    ) * s
+    dy = (
+        read_vec(grid, vel, g + wp.vec3i(0, 1, 0), slot, tile) - read_vec(grid, vel, g - wp.vec3i(0, 1, 0), slot, tile)
+    ) * s
+    dz = (
+        read_vec(grid, vel, g + wp.vec3i(0, 0, 1), slot, tile) - read_vec(grid, vel, g - wp.vec3i(0, 0, 1), slot, tile)
+    ) * s
     c = wp.vec3(dy[2] - dz[1], dz[0] - dx[2], dx[1] - dy[0])
-    curl[i, j, k] = c
-    curl_mag[i, j, k] = wp.length(c)
+    curl[slot, i, j, k] = c
+    curl_mag[slot, i, j, k] = wp.length(c)
 
 
 @wp.kernel
 def confinement_kernel(
-    curl: wp.array3d[wp.vec3],
-    curl_mag: wp.array3d[float],
-    density: wp.array3d[float],
-    h: float,
+    grid: SparseGrid,
+    curl: wp.array4d[wp.vec3],
+    curl_mag: wp.array4d[float],
+    density: wp.array4d[float],
     epsilon: float,
-    force: wp.array3d[wp.vec3],
+    force: wp.array4d[wp.vec3],
 ):
     """Vorticity confinement, weighted by smoke so clean air stays calm."""
-    i, j, k = wp.tid()
-    nx = curl.shape[0]
-    ny = curl.shape[1]
-    nz = curl.shape[2]
-    g = wp.vec3(
-        curl_mag[wp.min(i + 1, nx - 1), j, k] - curl_mag[wp.max(i - 1, 0), j, k],
-        curl_mag[i, wp.min(j + 1, ny - 1), k] - curl_mag[i, wp.max(j - 1, 0), k],
-        curl_mag[i, j, wp.min(k + 1, nz - 1)] - curl_mag[i, j, wp.max(k - 1, 0)],
-    )
-    g_len = wp.length(g)
-    if g_len < 1.0e-6:
-        force[i, j, k] = wp.vec3(0.0)
+    slot, i, j, k = wp.tid()
+    if not slot_valid(grid, slot):
         return
-    smoke = wp.min(density[i, j, k], 1.0)
-    force[i, j, k] = smoke * epsilon * h * wp.cross(g / g_len, curl[i, j, k])
+    tile = grid.tile_coord[slot]
+    g = tile * TILE + wp.vec3i(i, j, k)
+    m = curl_mag[slot, i, j, k]
+    gx = read_cell(grid, curl_mag, g + wp.vec3i(1, 0, 0), slot, tile, m) - read_cell(
+        grid, curl_mag, g - wp.vec3i(1, 0, 0), slot, tile, m
+    )
+    gy = read_cell(grid, curl_mag, g + wp.vec3i(0, 1, 0), slot, tile, m) - read_cell(
+        grid, curl_mag, g - wp.vec3i(0, 1, 0), slot, tile, m
+    )
+    gz = read_cell(grid, curl_mag, g + wp.vec3i(0, 0, 1), slot, tile, m) - read_cell(
+        grid, curl_mag, g - wp.vec3i(0, 0, 1), slot, tile, m
+    )
+    grad = wp.vec3(gx, gy, gz)
+    g_len = wp.length(grad)
+    if g_len < 1.0e-6:
+        force[slot, i, j, k] = wp.vec3(0.0)
+        return
+    smoke = wp.min(density[slot, i, j, k], 1.0)
+    force[slot, i, j, k] = smoke * epsilon * grid.h * wp.cross(grad / g_len, curl[slot, i, j, k])
 
 
 @wp.kernel
-def apply_cell_force_kernel(force: wp.array3d[wp.vec3], axis: int, dt: float, vel: wp.array3d[float]):
-    i, j, k = wp.tid()
-    s = axis_step(axis)
-    i0 = wp.max(i - s[0], 0)
-    j0 = wp.max(j - s[1], 0)
-    k0 = wp.max(k - s[2], 0)
-    i1 = wp.min(i, force.shape[0] - 1)
-    j1 = wp.min(j, force.shape[1] - 1)
-    k1 = wp.min(k, force.shape[2] - 1)
-    vel[i, j, k] = vel[i, j, k] + dt * 0.5 * (force[i0, j0, k0][axis] + force[i1, j1, k1][axis])
+def apply_cell_force_kernel(
+    grid: SparseGrid,
+    force: wp.array4d[wp.vec3],
+    axis: int,
+    dt: float,
+    vel: wp.array4d[float],
+):
+    slot, fi, fj, fk = wp.tid()
+    if not slot_valid(grid, slot) or not face_owned(grid, slot, axis, fi, fj, fk):
+        return
+    tile = grid.tile_coord[slot]
+    g = tile * TILE + wp.vec3i(fi, fj, fk)
+    f = read_vec(grid, force, g, slot, tile)[axis] + read_vec(grid, force, g - axis_step(axis), slot, tile)[axis]
+    vel[slot, fi, fj, fk] = vel[slot, fi, fj, fk] + dt * 0.5 * f
 
 
 # ---------------------------------------------------------------------------
@@ -384,75 +835,94 @@ def apply_cell_force_kernel(force: wp.array3d[wp.vec3], axis: int, dt: float, ve
 
 @wp.kernel
 def divergence_kernel(
-    u: wp.array3d[float],
-    v: wp.array3d[float],
-    w: wp.array3d[float],
-    solid: wp.array3d[wp.int32],
-    h: float,
-    div: wp.array3d[float],
+    grid: SparseGrid,
+    u: wp.array4d[float],
+    v: wp.array4d[float],
+    w: wp.array4d[float],
+    solid: wp.array4d[wp.int32],
+    div: wp.array4d[float],
 ):
-    i, j, k = wp.tid()
-    if solid[i, j, k] != 0:
-        div[i, j, k] = 0.0
+    slot, i, j, k = wp.tid()
+    if not slot_valid(grid, slot):
         return
-    div[i, j, k] = (u[i + 1, j, k] - u[i, j, k] + v[i, j + 1, k] - v[i, j, k] + w[i, j, k + 1] - w[i, j, k]) / h
+    if solid[slot, i, j, k] != 0:
+        div[slot, i, j, k] = 0.0
+        return
+    tile = grid.tile_coord[slot]
+    g = tile * TILE + wp.vec3i(i, j, k)
+    du = read_face(grid, u, 0, g + wp.vec3i(1, 0, 0), slot, tile) - u[slot, i, j, k]
+    dv = read_face(grid, v, 1, g + wp.vec3i(0, 1, 0), slot, tile) - v[slot, i, j, k]
+    dw = read_face(grid, w, 2, g + wp.vec3i(0, 0, 1), slot, tile) - w[slot, i, j, k]
+    div[slot, i, j, k] = (du + dv + dw) / grid.h
 
 
 @wp.func
 def accumulate_neighbor(
-    p: wp.array3d[float], solid: wp.array3d[wp.int32], i: int, j: int, k: int, acc: wp.vec2
+    grid: SparseGrid,
+    p: wp.array4d[float],
+    solid: wp.array4d[wp.int32],
+    g: wp.vec3i,
+    ctx_slot: int,
+    ctx_tile: wp.vec3i,
+    acc: wp.vec2,
 ) -> wp.vec2:
     """Accumulate (pressure sum, neighbor count); solid neighbors are Neumann and skipped."""
-    if is_solid(solid, i, j, k):
+    if is_solid(grid, solid, g, ctx_slot, ctx_tile):
         return acc
-    return acc + wp.vec2(pressure_at(p, i, j, k), 1.0)
+    return acc + wp.vec2(read_cell(grid, p, g, ctx_slot, ctx_tile, 0.0), 1.0)
 
 
 @wp.kernel
 def pressure_rbsor_kernel(
-    div: wp.array3d[float],
-    solid: wp.array3d[wp.int32],
-    h: float,
+    grid: SparseGrid,
+    div: wp.array4d[float],
+    solid: wp.array4d[wp.int32],
     omega: float,
     parity: int,
-    p: wp.array3d[float],
+    p: wp.array4d[float],
 ):
     """One red-black SOR sweep of the pressure Poisson equation."""
-    i, j, k = wp.tid()
-    if (i + j + k) % 2 != parity:
+    slot, i, j, k = wp.tid()
+    if not slot_valid(grid, slot):
         return
-    if solid[i, j, k] != 0:
-        p[i, j, k] = 0.0
+    tile = grid.tile_coord[slot]
+    g = tile * TILE + wp.vec3i(i, j, k)
+    if ((g[0] + g[1] + g[2]) & 1) != parity:
+        return
+    if solid[slot, i, j, k] != 0:
+        p[slot, i, j, k] = 0.0
         return
     acc = wp.vec2(0.0)
-    acc = accumulate_neighbor(p, solid, i - 1, j, k, acc)
-    acc = accumulate_neighbor(p, solid, i + 1, j, k, acc)
-    acc = accumulate_neighbor(p, solid, i, j - 1, k, acc)
-    acc = accumulate_neighbor(p, solid, i, j + 1, k, acc)
-    acc = accumulate_neighbor(p, solid, i, j, k - 1, acc)
-    acc = accumulate_neighbor(p, solid, i, j, k + 1, acc)
+    acc = accumulate_neighbor(grid, p, solid, g - wp.vec3i(1, 0, 0), slot, tile, acc)
+    acc = accumulate_neighbor(grid, p, solid, g + wp.vec3i(1, 0, 0), slot, tile, acc)
+    acc = accumulate_neighbor(grid, p, solid, g - wp.vec3i(0, 1, 0), slot, tile, acc)
+    acc = accumulate_neighbor(grid, p, solid, g + wp.vec3i(0, 1, 0), slot, tile, acc)
+    acc = accumulate_neighbor(grid, p, solid, g - wp.vec3i(0, 0, 1), slot, tile, acc)
+    acc = accumulate_neighbor(grid, p, solid, g + wp.vec3i(0, 0, 1), slot, tile, acc)
     if acc[1] == 0.0:
         return
-    target = (acc[0] - h * h * div[i, j, k]) / acc[1]
-    p[i, j, k] = p[i, j, k] + omega * (target - p[i, j, k])
+    target = (acc[0] - grid.h * grid.h * div[slot, i, j, k]) / acc[1]
+    p[slot, i, j, k] = p[slot, i, j, k] + omega * (target - p[slot, i, j, k])
 
 
 @wp.kernel
 def project_kernel(
-    vel: wp.array3d[float],
+    grid: SparseGrid,
+    vel: wp.array4d[float],
     axis: int,
-    p: wp.array3d[float],
-    solid: wp.array3d[wp.int32],
-    h: float,
+    p: wp.array4d[float],
+    solid: wp.array4d[wp.int32],
 ):
-    i, j, k = wp.tid()
-    s = axis_step(axis)
-    i0 = i - s[0]
-    j0 = j - s[1]
-    k0 = k - s[2]
-    if is_solid(solid, i, j, k) or is_solid(solid, i0, j0, k0):
+    slot, fi, fj, fk = wp.tid()
+    if not slot_valid(grid, slot) or not face_owned(grid, slot, axis, fi, fj, fk):
+        return
+    tile = grid.tile_coord[slot]
+    g = tile * TILE + wp.vec3i(fi, fj, fk)
+    g0 = g - axis_step(axis)
+    if is_solid(grid, solid, g, slot, tile) or is_solid(grid, solid, g0, slot, tile):
         return  # solid faces keep the collider velocity
-    vel[i, j, k] = vel[i, j, k] - (pressure_at(p, i, j, k) - pressure_at(p, i0, j0, k0)) / h
+    dp = read_cell(grid, p, g, slot, tile, 0.0) - read_cell(grid, p, g0, slot, tile, 0.0)
+    vel[slot, fi, fj, fk] = vel[slot, fi, fj, fk] - dp / grid.h
 
 
 # ---------------------------------------------------------------------------
@@ -465,6 +935,8 @@ def emit_tracers_kernel(
     emitter_position: wp.array[wp.vec3],
     emitter_radius: wp.array[float],
     emitter_rate: wp.array[float],
+    emitter_world: wp.array[wp.int32],
+    world_tracer_start: wp.array[wp.int32],
     tracer_rate_scale: float,
     slots_per_emitter: int,
     dt: float,
@@ -476,11 +948,16 @@ def emit_tracers_kernel(
 ):
     tid = wp.tid()
     e = tid // slots_per_emitter
+    world = wp.max(emitter_world[e], 0)
+    begin = world_tracer_start[world]
+    count = world_tracer_start[world + 1] - begin
+    if count == 0:
+        return
     expected = tracer_rate_scale * wp.max(emitter_rate[e], 0.0) * dt
     state = wp.rand_init(seed[0], tid)
     if wp.randf(state) * float(slots_per_emitter) >= expected:
         return
-    slot = wp.atomic_add(head, 0, 1) % particle_q.shape[0]
+    slot = begin + wp.atomic_add(head, world, 1) % count
     r = emitter_radius[e]
     jitter = wp.vec3(wp.randf(state) - 0.5, wp.randf(state) - 0.5, wp.randf(state) - 0.5)
     particle_q[slot] = emitter_position[e] + r * jitter
@@ -489,19 +966,20 @@ def emit_tracers_kernel(
 
 
 @wp.kernel
-def advance_seed_kernel(seed: wp.array[wp.int32], head: wp.array[wp.int32], particle_count: int):
-    seed[0] = seed[0] + 1
-    head[0] = head[0] % wp.max(particle_count, 1)
+def advance_seed_kernel(seed: wp.array[wp.int32], head: wp.array[wp.int32], world_tracer_start: wp.array[wp.int32]):
+    world = wp.tid()
+    if world == 0:
+        seed[0] = seed[0] + 1
+    head[world] = head[world] % wp.max(world_tracer_start[world + 1] - world_tracer_start[world], 1)
 
 
 @wp.kernel
 def advect_tracers_kernel(
-    u: wp.array3d[float],
-    v: wp.array3d[float],
-    w: wp.array3d[float],
-    lower: wp.vec3,
-    upper: wp.vec3,
-    h: float,
+    grid: SparseGrid,
+    u: wp.array4d[float],
+    v: wp.array4d[float],
+    w: wp.array4d[float],
+    particle_world: wp.array[wp.int32],
     dt: float,
     lifetime: float,
     particle_q_in: wp.array[wp.vec3],
@@ -518,16 +996,36 @@ def advect_tracers_kernel(
         particle_qd[tid] = wp.vec3(0.0)
         particle_age[tid] = age
         return
-    inv_h = 1.0 / h
-    vel = sample_velocity(u, v, w, lower, inv_h, p)
-    mid = p + 0.5 * dt * vel
-    vel = sample_velocity(u, v, w, lower, inv_h, mid)
+    world = wp.max(particle_world[tid], 0)
+    tile = point_tile(grid, world, p)
+    slot = wp.volume_lookup_index(grid.volume, tile[0], tile[1], tile[2])
+    vel = sample_velocity(grid, u, v, w, world, p, slot, tile)
+    vel = sample_velocity(grid, u, v, w, world, p + 0.5 * dt * vel, slot, tile)
     p = p + dt * vel
-    p = wp.vec3(p[0], p[1], wp.max(p[2], lower[2]))
-    outside = p[0] < lower[0] or p[1] < lower[1] or p[0] > upper[0] or p[1] > upper[1] or p[2] > upper[2]
+    p = wp.vec3(p[0], p[1], wp.max(p[2], grid.origin[2]))
     particle_q[tid] = p
     particle_qd[tid] = vel
-    particle_age[tid] = wp.where(outside, lifetime, age + dt)
+    particle_age[tid] = age + dt
+
+
+@wp.kernel
+def sample_points_kernel(
+    grid: SparseGrid,
+    u: wp.array4d[float],
+    v: wp.array4d[float],
+    w: wp.array4d[float],
+    density: wp.array4d[float],
+    world: int,
+    points: wp.array[wp.vec3],
+    velocity: wp.array[wp.vec3],
+    smoke: wp.array[float],
+):
+    tid = wp.tid()
+    p = points[tid]
+    tile = point_tile(grid, world, p)
+    slot = wp.volume_lookup_index(grid.volume, tile[0], tile[1], tile[2])
+    velocity[tid] = sample_velocity(grid, u, v, w, world, p, slot, tile)
+    smoke[tid] = sample_scalar(grid, density, world, local_index(grid, p) - OFFSET_C, slot, tile)
 
 
 # ---------------------------------------------------------------------------
@@ -558,11 +1056,11 @@ def sample_grains_kernel(
 
 @wp.kernel
 def update_grains_kernel(
-    u: wp.array3d[float],
-    v: wp.array3d[float],
-    w: wp.array3d[float],
-    lower: wp.vec3,
-    h: float,
+    grid: SparseGrid,
+    u: wp.array4d[float],
+    v: wp.array4d[float],
+    w: wp.array4d[float],
+    particle_world: wp.array[wp.int32],
     dt: float,
     lifetime: float,
     spread_rate: float,
@@ -584,10 +1082,13 @@ def update_grains_kernel(
         state = wp.rand_init(seed, pid * grains.shape[1] + g)
         x = center + 2.0 * r * wp.vec3(wp.randf(state) - 0.5, wp.randf(state) - 0.5, wp.randf(state) - 0.5)
     else:
-        x = x + dt * sample_velocity(u, v, w, lower, 1.0 / h, x)
+        world = wp.max(particle_world[pid], 0)
+        tile = point_tile(grid, world, x)
+        slot = wp.volume_lookup_index(grid.volume, tile[0], tile[1], tile[2])
+        x = x + dt * sample_velocity(grid, u, v, w, world, x, slot, tile)
     # Keep the grain inside the tracer's puff.
     d = x - center
     d_len = wp.length(d)
     if d_len > r:
         x = center + d * (r / d_len)
-    grains[pid, g] = wp.vec3(x[0], x[1], wp.max(x[2], lower[2]))
+    grains[pid, g] = wp.vec3(x[0], x[1], wp.max(x[2], grid.origin[2]))

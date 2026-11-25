@@ -10,40 +10,66 @@ import newton
 from newton.solvers import SolverSmoke
 from newton.tests.unittest_utils import add_function_test, get_test_devices
 
+H = 0.05
+CAPACITY = 128 * 512  # cells; keeps the tests cheap on CPU
 
-def _divergence(solver: SolverSmoke) -> np.ndarray:
-    u, v, w = (a.numpy() for a in solver.face_velocity)
-    h = solver.config.voxel_size
-    return (u[1:] - u[:-1] + v[:, 1:] - v[:, :-1] + w[:, :, 1:] - w[:, :, :-1]) / h
+
+def _cell_centers(lower, upper):
+    """Cell centers [m] of the cells spanning ``lower`` to ``upper`` (in cell indices)."""
+    idx = np.stack(
+        np.meshgrid(*(np.arange(lo, hi) for lo, hi in zip(lower, upper, strict=True)), indexing="ij"), axis=-1
+    )
+    return (idx.reshape(-1, 3) + 0.5) * H
+
+
+def _divergence(solver, centers, device, world=0):
+    """Divergence [1/s] at cell centers, from face velocities sampled exactly at face centers."""
+    div = np.zeros(len(centers))
+    for axis in range(3):
+        offset = np.zeros(3)
+        offset[axis] = 0.5 * H
+        faces = wp.array(np.concatenate([centers + offset, centers - offset]), dtype=wp.vec3, device=device)
+        vel = solver.sample_grid(faces, world=world)[1].numpy()[:, axis]
+        div += (vel[: len(centers)] - vel[len(centers) :]) / H
+    return div
+
+
+def _add_tracers(builder, count):
+    builder.add_particles(
+        pos=[(0.0, 0.0, 0.0)] * count,
+        vel=[(0.0, 0.0, 0.0)] * count,
+        mass=[0.0] * count,
+        radius=[0.02] * count,
+    )
 
 
 def test_projection_removes_divergence(test, device):
-    """Keep still air still, and make a random velocity field divergence free."""
-    config = SolverSmoke.Config(
-        grid_lower=(0.0, 0.0, 0.0),
-        grid_upper=(0.5, 0.5, 0.5),
-        voxel_size=0.05,
-        vorticity_confinement=0.0,
-        pressure_iterations=300,
-    )
-    model = newton.ModelBuilder().finalize(device=device)
-    solver = SolverSmoke(model, config)
+    """Keep still air still, then project emitter-driven flow to a divergence-free field."""
+    builder = newton.ModelBuilder()
+    SolverSmoke.register_custom_attributes(builder)
+    builder.add_custom_values(**{"smoke:emitter_radius": 0.15})
+    model = builder.finalize(device=device)
     state = model.state()
+    control = model.control()
+    config = SolverSmoke.Config(
+        voxel_size=H, max_active_cell_count=CAPACITY, vorticity_confinement=0.0, pressure_iterations=300
+    )
+    solver = SolverSmoke(model, config)
+    centers = _cell_centers((-4, -4, 1), (4, 4, 7))
 
-    solver.step(state, state, None, None, 0.01)
-    for vel in solver.face_velocity:
-        test.assertEqual(np.abs(vel.numpy()).max(), 0.0)
+    solver.step(state, state, control, None, 0.01)
+    still = solver.sample_grid(wp.array(centers, dtype=wp.vec3, device=device))[1].numpy()
+    test.assertEqual(np.abs(still).max(), 0.0)
 
-    rng = np.random.default_rng(0)
-    for vel in solver.face_velocity:
-        vel.assign(rng.uniform(-1.0, 1.0, size=vel.shape).astype(np.float32))
-    before = np.abs(_divergence(solver)).max()
-    solver.step(state, state, None, None, 0.01)
-    after = np.abs(_divergence(solver)).max()
-    test.assertGreater(before, 10.0)
-    test.assertLess(after, 1.0e-2 * before)
-    # The ground face carries no flow.
-    test.assertEqual(np.abs(solver.face_velocity[2].numpy()[:, :, 0]).max(), 0.0)
+    control.smoke.emitter_position.assign([wp.vec3(0.0, 0.0, 0.2)])
+    control.smoke.emitter_velocity.assign([wp.vec3(2.0, 0.0, 1.0)])
+    control.smoke.emitter_rate.fill_(5.0)
+    for _ in range(3):
+        solver.step(state, state, control, None, 0.01)
+    speed = np.abs(solver.sample_grid(wp.array(centers, dtype=wp.vec3, device=device))[1].numpy()).max()
+    test.assertGreater(speed, 0.1)
+    test.assertLess(np.abs(_divergence(solver, centers, device)).max(), 1.0e-2 * speed / H)
+    solver.check_sparse_grid_rebuild_status()
 
 
 def test_moving_collider_pushes_air(test, device):
@@ -56,61 +82,60 @@ def test_moving_collider_pushes_air(test, device):
     state.body_qd.assign(np.array([[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]], dtype=np.float32))
 
     config = SolverSmoke.Config(
-        grid_lower=(0.0, 0.0, 0.0),
-        grid_upper=(0.6, 0.6, 0.6),
-        voxel_size=0.05,
-        vorticity_confinement=0.0,
-        pressure_iterations=300,
+        voxel_size=H, max_active_cell_count=CAPACITY, vorticity_confinement=0.0, pressure_iterations=300
     )
     solver = SolverSmoke(model, config)
     solver.step(state, state, None, None, 0.01)
 
-    u = solver.face_velocity[0].numpy()
-    # Cells 4..7 lie inside the box along each axis; face 6 is interior to the solid.
-    np.testing.assert_allclose(u[6, 4:8, 4:8], 1.0, atol=1.0e-6)
-    # Air just ahead of the box is pushed forward.
-    test.assertGreater(u[9, 5, 5], 0.1)
-    fluid = np.ones(solver.grid_shape, dtype=bool)
-    fluid[4:8, 4:8, 4:8] = False
-    test.assertLess(np.abs(_divergence(solver)[fluid]).max(), 0.5)
+    # Cells 4..7 lie inside the box along each axis; the face at x = 0.3 is interior to it.
+    probes = wp.array([(0.3, 0.325, 0.325), (0.45, 0.275, 0.275)], dtype=wp.vec3, device=device)
+    u = solver.sample_grid(probes)[1].numpy()[:, 0]
+    test.assertAlmostEqual(float(u[0]), 1.0, places=5)
+    test.assertGreater(float(u[1]), 0.1)
+
+    centers = _cell_centers((1, 1, 1), (11, 11, 11))
+    fluid = np.any((centers < 0.2) | (centers > 0.4), axis=1)
+    test.assertLess(np.abs(_divergence(solver, centers[fluid], device)).max(), 0.5)
 
 
-def test_warm_emitter_lifts_smoke_and_tracers(test, device):
-    """Lift smoke and tracers from a warm emitter, with render grains staying in their puffs."""
+def test_warm_emitter_lifts_smoke_in_its_world(test, device):
+    """Lift smoke and tracers from a warm emitter, only in its own world, with grains inside their puffs."""
     builder = newton.ModelBuilder()
     SolverSmoke.register_custom_attributes(builder)
-    builder.add_custom_values(**{"smoke:emitter_radius": 0.1})
-    tracer_count = 400
-    builder.add_particles(
-        pos=[(0.0, 0.0, 0.0)] * tracer_count,
-        vel=[(0.0, 0.0, 0.0)] * tracer_count,
-        mass=[0.0] * tracer_count,
-        radius=[0.02] * tracer_count,
-    )
+    for _ in range(2):
+        builder.begin_world()
+        builder.add_custom_values(**{"smoke:emitter_radius": 0.1})
+        _add_tracers(builder, 300)
+        builder.end_world()
     model = builder.finalize(device=device)
     state = model.state()
     control = model.control()
-    control.smoke.emitter_position.assign([wp.vec3(0.0, 0.0, 0.1)])
-    control.smoke.emitter_rate.fill_(20.0)
-    control.smoke.emitter_heat_rate.fill_(20.0)
+    control.smoke.emitter_position.assign([wp.vec3(0.0, 0.0, 0.1)] * 2)
+    control.smoke.emitter_rate.assign([20.0, 0.0])
+    control.smoke.emitter_heat_rate.assign([20.0, 0.0])
 
-    config = SolverSmoke.Config(grid_lower=(-0.4, -0.4, 0.0), grid_upper=(0.4, 0.4, 1.0), voxel_size=0.05)
+    config = SolverSmoke.Config(voxel_size=H, max_active_cell_count=CAPACITY)
     solver = SolverSmoke(model, config)
     grains = solver.sample_render_grains(state, 4)
     dt = 1.0 / 60.0
     for _ in range(45):
         solver.step(state, state, control, None, dt)
         solver.update_render_grains(state, state, grains, dt)
+    solver.check_sparse_grid_rebuild_status()
 
-    density = solver.density.numpy()
+    column = np.array(
+        [(x, y, z) for x in (-0.05, 0.0, 0.05) for y in (-0.05, 0.0, 0.05) for z in np.arange(0.025, 1.0, H)]
+    )
+    points = wp.array(column, dtype=wp.vec3, device=device)
+    density = solver.sample_grid(points, world=0)[0].numpy()
     test.assertTrue(np.all(np.isfinite(density)))
-    z = config.grid_lower[2] + (np.arange(solver.grid_shape[2]) + 0.5) * config.voxel_size
-    smoke_height = float((density.sum(axis=(0, 1)) * z).sum() / density.sum())
-    test.assertGreater(smoke_height, 0.2)
+    test.assertGreater(float((density * column[:, 2]).sum() / density.sum()), 0.2)
+    test.assertEqual(np.abs(solver.sample_grid(points, world=1)[0].numpy()).max(), 0.0)
 
     age = state.smoke.particle_age.numpy()
     alive = age < config.tracer_lifetime
-    test.assertGreater(np.count_nonzero(alive), 20)
+    test.assertGreater(np.count_nonzero(alive[:300]), 20)
+    test.assertEqual(np.count_nonzero(alive[300:]), 0)
     q = state.particle_q.numpy()
     test.assertGreater(q[alive, 2].mean(), 0.15)
 
@@ -130,8 +155,8 @@ add_function_test(
 add_function_test(TestSolverSmoke, "test_moving_collider_pushes_air", test_moving_collider_pushes_air, devices=devices)
 add_function_test(
     TestSolverSmoke,
-    "test_warm_emitter_lifts_smoke_and_tracers",
-    test_warm_emitter_lifts_smoke_and_tracers,
+    "test_warm_emitter_lifts_smoke_in_its_world",
+    test_warm_emitter_lifts_smoke_in_its_world,
     devices=devices,
 )
 

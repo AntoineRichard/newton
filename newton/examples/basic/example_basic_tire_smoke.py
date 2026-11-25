@@ -163,9 +163,8 @@ class Example:
 
         # Smoke model: one emitter per rear wheel and a pool of tracer particles.
         config = SolverSmoke.Config(
-            grid_lower=(-1.5, -1.5, 0.0),
-            grid_upper=(1.5, 1.5, 1.2),
             voxel_size=0.03,
+            max_active_cell_count=1 << 19,
             tracer_rate_scale=15.0,
         )
         tracer_count = 6000
@@ -174,7 +173,7 @@ class Example:
         for _ in range(2):
             smoke.add_custom_values(**{"smoke:emitter_radius": 2.5 * config.voxel_size})
         smoke.add_particles(
-            pos=[config.grid_lower] * tracer_count,
+            pos=[(0.0, 0.0, 0.0)] * tracer_count,
             vel=[(0.0, 0.0, 0.0)] * tracer_count,
             mass=[0.0] * tracer_count,
             radius=[config.voxel_size] * tracer_count,
@@ -277,11 +276,13 @@ class Example:
         self.sim_time += dt
 
     def test_final(self):
-        density = self.smoke_solver.density.numpy()
-        assert np.all(np.isfinite(density)), "smoke density is not finite"
+        self.smoke_solver.check_sparse_grid_rebuild_status()
+        axis = np.arange(-1.0, 1.0, 0.05)
+        probes = wp.array([(x, y, z) for x in axis for y in axis for z in (0.05, 0.15, 0.3)], dtype=wp.vec3)
+        density, velocity = (a.numpy() for a in self.smoke_solver.sample_grid(probes))
+        assert np.all(np.isfinite(density)) and np.all(np.isfinite(velocity)), "smoke fields are not finite"
         assert density.sum() > 1.0, "the tires emitted no smoke"
-        for vel in self.smoke_solver.face_velocity:
-            assert np.all(np.abs(vel.numpy()) < 50.0), "air velocity blew up"
+        assert np.abs(velocity).max() < 50.0, "air velocity blew up"
         age = self.smoke_state.smoke.particle_age.numpy()
         assert np.count_nonzero(age < self.smoke_solver.config.tracer_lifetime) > 0, "no smoke tracers alive"
 
